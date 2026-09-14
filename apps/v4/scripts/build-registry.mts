@@ -183,6 +183,11 @@ for (const definition of registry.items) {
   }
 }
 
+await writeFile(
+  path.join(outputRoot, "registry.json"),
+  `${JSON.stringify(registry, null, 2)}\n`
+)
+
 await rm(sourceRoot, { recursive: true, force: true })
 
 console.log(

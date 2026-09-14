@@ -30,9 +30,18 @@ const registryJsonCache = new Map<string, Promise<unknown>>()
 function parseRegistryPath(pathSegments: string[]) {
   if (pathSegments.length === 3 && pathSegments[0] === "styles") {
     const [, style, segment] = pathSegments
+
+    if (!/^[a-z0-9-]+$/.test(style)) return null
+
+    // The shadcn CLI derives the index URL by substituting "registry" for
+    // {name}, so the catalog must also resolve under a style prefix.
+    if (segment === "registry.json") {
+      return { type: "catalog" as const }
+    }
+
     const match = /^([a-z0-9-]+)\.json$/.exec(segment)
 
-    if (!match || !/^[a-z0-9-]+$/.test(style)) return null
+    if (!match) return null
 
     return { name: match[1], style, type: "item" as const }
   }
