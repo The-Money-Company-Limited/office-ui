@@ -12,6 +12,7 @@ coverage
 .next/
 out/
 build
+apps/v4/experiments/artifact-template/dist/
 
 # misc
 .DS_Store

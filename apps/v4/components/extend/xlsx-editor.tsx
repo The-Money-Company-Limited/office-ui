@@ -1261,16 +1261,18 @@ function EditorFileActionsMenu({
         <Button
           type="button"
           variant="ghost"
-          size="icon-sm"
+          size="sm"
           aria-label="Open workbook actions"
+          className="xlsx-editor-file-action"
         >
+          File
           <IconPlaceholder
-            lucide="Ellipsis"
-            tabler="IconDots"
-            hugeicons="MoreHorizontalIcon"
-            phosphor="DotsThreeIcon"
-            remixicon="RiMoreLine"
-            className="size-4"
+            lucide="ChevronDown"
+            tabler="IconChevronDown"
+            hugeicons="ArrowDown01Icon"
+            phosphor="CaretDownIcon"
+            remixicon="RiArrowDownSLine"
+            className="size-3.5"
           />
         </Button>
       </DropdownMenuTrigger>
@@ -1306,12 +1308,14 @@ function EditorFileActionsMenu({
 }
 
 function EditorToolbar({
+  fileName,
   isDark,
   onIsDarkChange,
   onUploadClick,
   showNightRenderToggle,
   workbookIdentity,
 }: {
+  fileName?: string
   isDark: boolean
   onIsDarkChange: (checked: boolean) => void
   onUploadClick: () => void
@@ -1786,9 +1790,27 @@ function EditorToolbar({
   )
 
   return (
-    <div className="border-b bg-background">
-      <div className="flex min-h-11 items-center justify-between gap-3 border-b px-3">
-        <div className="min-w-0 flex-1" />
+    <div className="xlsx-editor-toolbar border-b bg-background">
+      <div className="xlsx-editor-header flex min-h-11 items-center justify-between gap-3 border-b px-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {fileName ? (
+            <>
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                <IconPlaceholder
+                  lucide="FileSpreadsheet"
+                  tabler="IconFileSpreadsheet"
+                  hugeicons="FileSpreadsheetIcon"
+                  phosphor="FileXlsIcon"
+                  remixicon="RiFileExcel2Line"
+                  className="size-4"
+                />
+              </span>
+              <span className="truncate text-sm font-semibold" title={fileName}>
+                {fileName}
+              </span>
+            </>
+          ) : null}
+        </div>
         <TooltipProvider>
           <div className="flex shrink-0 items-center gap-1">
             {showNightRenderToggle ? (
@@ -1827,7 +1849,7 @@ function EditorToolbar({
         </TooltipProvider>
       </div>
       <TooltipProvider>
-        <div className="flex min-h-12 flex-wrap items-center gap-2 border-b bg-background px-3 py-2">
+        <div className="xlsx-editor-ribbon flex min-h-12 flex-wrap items-center gap-2 border-b bg-background px-3 py-2">
           <div className="flex shrink-0 items-center gap-1">
             <ToolbarTooltip label="Undo">
               <Button
@@ -2356,7 +2378,7 @@ function EditorToolbar({
             </ToolbarTooltip>
           </div>
         </div>
-        <div className="border-t bg-background px-2 py-1">
+        <div className="xlsx-editor-formula border-t bg-background px-2 py-1">
           <Group className="w-full">
             <Input
               className={cn(
@@ -2407,6 +2429,7 @@ function EditorToolbar({
 
 export function XlsxEditorSurface({
   className,
+  fileName,
   isDark,
   onIsDarkChange,
   onUploadClick,
@@ -2415,6 +2438,7 @@ export function XlsxEditorSurface({
   workbookIdentity,
 }: {
   className?: string
+  fileName?: string
   isDark: boolean
   onIsDarkChange: (checked: boolean) => void
   onUploadClick: () => void
@@ -2429,11 +2453,12 @@ export function XlsxEditorSurface({
   return (
     <div
       className={cn(
-        "flex h-[640px] min-h-0 flex-col overflow-hidden bg-background",
+        "xlsx-editor-surface flex h-[640px] min-h-0 flex-col overflow-hidden bg-background",
         className
       )}
     >
       <EditorToolbar
+        fileName={fileName}
         isDark={isDark}
         onIsDarkChange={onIsDarkChange}
         onUploadClick={onUploadClick}
@@ -2441,7 +2466,7 @@ export function XlsxEditorSurface({
         workbookIdentity={workbookIdentity}
       />
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 bg-muted/20">
+        <div className="xlsx-editor-canvas min-h-0 flex-1 bg-muted/20">
           <XlsxViewer
             allowResizeInReadOnly
             className="h-full min-h-0 min-w-0"
@@ -2758,6 +2783,7 @@ function XlsxWorkbookLoadedEditor({
   return (
     <XlsxViewerProvider controller={controller} isDark={isDark}>
       <XlsxEditorSurface
+        fileName={fileName}
         isDark={isDark}
         onIsDarkChange={onIsDarkChange}
         onUploadClick={onUploadClick}
