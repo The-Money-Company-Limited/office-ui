@@ -99,7 +99,7 @@ function App() {
 
   const documentProps = artifact
     ? {
-        className: "h-full min-h-0",
+        className: `artifact-${artifact.kind} h-full min-h-0`,
         fileName: artifact.file.split("/").at(-1),
         src: `./${artifact.file}`,
       }
@@ -128,7 +128,6 @@ function App() {
           ) : artifact?.kind === "xlsx" ? (
             <XlsxEditor
               {...documentProps}
-              className="artifact-workbook h-full min-h-0"
               isDark={isDark}
               onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
             />

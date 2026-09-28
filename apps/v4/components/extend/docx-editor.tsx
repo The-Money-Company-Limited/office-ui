@@ -982,9 +982,9 @@ function DocxEditorToolbar({
   )
 
   return (
-    <div className="bg-background">
+    <div className="docx-editor-toolbar bg-background">
       <TooltipProvider>
-        <div className="flex min-h-11 items-center gap-2 overflow-x-auto overflow-y-hidden border-b px-3">
+        <div className="docx-editor-header flex min-h-11 items-center gap-2 overflow-x-auto overflow-y-hidden border-b px-3">
           <ToolbarIconButton
             label="Toggle pages"
             disabled={controlsDisabled}
@@ -1110,7 +1110,7 @@ function DocxEditorToolbar({
           </ToolbarIconButton>
         </div>
 
-        <div className="flex min-h-12 flex-wrap items-center gap-2 border-b px-3 py-2">
+        <div className="docx-editor-ribbon flex min-h-12 flex-wrap items-center gap-2 border-b px-3 py-2">
           <div className="flex shrink-0 items-center gap-1">
             <ToolbarIconButton
               label="Undo"

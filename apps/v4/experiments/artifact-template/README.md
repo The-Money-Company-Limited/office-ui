@@ -5,11 +5,11 @@ contains the viewer/editor bundle, one document, `artifact.json`, and
 `cool.json`. It runs in the browser without a computer VM or a RuntimeVM
 code change.
 
-The document fills the viewport edge to edge. Its editor controls use a copy
-of RuntimeVM's current light and dark appearance tokens, with the spreadsheet
-toolbar styled in place. The workbook's own appearance button persists the
-choice under RuntimeVM's `cool-computers-theme` key. There is no artifact
-header, logo, wallpaper, or outer padding.
+The document fills a framed editor with a small gap from the viewport edges.
+Its controls use a copy of RuntimeVM's light and dark appearance tokens, with
+glass surfaces on the XLSX, DOCX, and PDF toolbars. The workbook's own
+appearance button persists the choice under RuntimeVM's
+`cool-computers-theme` key. There is no artifact header, logo, or wallpaper.
 
 | File | UI in this fork                                                               | Save path              |
 | ---- | ----------------------------------------------------------------------------- | ---------------------- |
