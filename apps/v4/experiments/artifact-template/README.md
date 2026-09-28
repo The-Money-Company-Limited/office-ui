@@ -62,21 +62,6 @@ cool publish /absolute/path/to/new-release-directory --name example
 The corresponding ZIP may also be uploaded through the Cool Computers publish
 UI.
 
-## Live examples
-
-These public artifact computers were published on 28 September 2026 from
-`b232899` as release 1. They are served through Cloudflare without a VM.
-
-| Format | Example                                                            |
-| ------ | ------------------------------------------------------------------ |
-| XLSX   | [Spreadsheet and chart](https://officeuiexcelglass.cool.computer/) |
-| DOCX   | [Document editor](https://officeuidocxglass.cool.computer/)        |
-| PDF    | [PDF editor](https://officeuipdfglass.cool.computer/)              |
-| PPTX   | [Presentation viewer](https://officeuipptxglass.cool.computer/)    |
-
-The live documents are samples. Browser edits require an export and do not
-change the published release.
-
 ## RuntimeVM fit
 
 The current RuntimeVM artifact API accepts complete static file sets rather
