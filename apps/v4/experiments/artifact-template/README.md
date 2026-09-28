@@ -5,6 +5,9 @@ contains the viewer/editor bundle, one document, `artifact.json`, and
 `cool.json`. It runs in the browser without a computer VM or a RuntimeVM
 code change.
 
+For the build pipeline, Cloudflare request path, and later integration contract,
+see [ARCHITECTURE.md](./ARCHITECTURE.md).
+
 The document fills a framed editor with a small gap from the viewport edges.
 Its controls use a copy of RuntimeVM's light and dark appearance tokens, with
 glass surfaces on the XLSX, DOCX, and PDF toolbars. The workbook's own
