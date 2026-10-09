@@ -203,7 +203,7 @@ export interface ParagraphBorderSet {
 }
 
 export interface ParagraphTabStop {
-  alignment?: "left" | "center" | "right" | "decimal" | "bar";
+  alignment?: "clear" | "left" | "center" | "right" | "decimal" | "bar";
   leader?: "none" | "dot" | "hyphen" | "underscore" | "middleDot";
   positionTwips?: number;
 }

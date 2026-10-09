@@ -610,6 +610,7 @@ fn paragraph_line_rule_str(rule: ParagraphLineRule) -> &'static str {
 
 fn tab_stop_alignment_str(alignment: ParagraphTabStopAlignment) -> &'static str {
     match alignment {
+        ParagraphTabStopAlignment::Clear => "clear",
         ParagraphTabStopAlignment::Left => "left",
         ParagraphTabStopAlignment::Center => "center",
         ParagraphTabStopAlignment::Right => "right",

@@ -920,6 +920,7 @@ pub fn parse_table_border_set(xml: &str) -> Option<TableBorderSet> {
 
 pub fn normalize_tab_stop_alignment(value: Option<&str>) -> Option<ParagraphTabStopAlignment> {
     match value?.to_ascii_lowercase().as_str() {
+        "clear" => Some(ParagraphTabStopAlignment::Clear),
         "left" => Some(ParagraphTabStopAlignment::Left),
         "center" => Some(ParagraphTabStopAlignment::Center),
         "right" => Some(ParagraphTabStopAlignment::Right),

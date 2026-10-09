@@ -28,6 +28,70 @@ function paragraphHasExplicitPageBreak(paragraph: Pick<ParagraphNode, "sourceXml
   return sourceXml.length > 0 && PAGE_BREAK_XML_PATTERN.test(sourceXml);
 }
 
+function decodeXmlText(text: string): string {
+  return text.replace(
+    /&(?:#x([0-9a-f]+)|#(\d+)|(amp|lt|gt|quot|apos));/gi,
+    (entity: string, hex: string | undefined, decimal: string | undefined, named: string | undefined) => {
+      if (hex || decimal) {
+        const codePoint = Number.parseInt(hex ?? decimal ?? "", hex ? 16 : 10);
+        return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : entity;
+      }
+      const namedEntities: Record<string, string> = {
+        amp: "&", lt: "<", gt: ">", quot: '"', apos: "'"
+      };
+      return namedEntities[named?.toLowerCase() ?? ""] ?? entity;
+    }
+  );
+}
+
+export function collectParagraphExplicitPageBreakOffsets(
+  paragraph: ParagraphNode
+): number[] | undefined {
+  if (!paragraphHasExplicitPageBreak(paragraph)) {
+    return [];
+  }
+  if (paragraph.children.some((child) => child.type !== "text" || child.noteReference)) {
+    return undefined;
+  }
+
+  const offsets: number[] = [];
+  let sourceText = "";
+  const tokenPattern = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>|<a:t\b[^>]*>([\s\S]*?)<\/a:t>|<(?:w|a):tab\b[^>]*\/>|<(?:w|a):br\b[^>]*\/>|<w:cr\b[^>]*\/>/gi;
+  for (const match of (paragraph.sourceXml ?? "").matchAll(tokenPattern)) {
+    if (match[1] !== undefined || match[2] !== undefined) {
+      sourceText += decodeXmlText(match[1] ?? match[2] ?? "");
+    } else if (/^<(?:w|a):tab\b/i.test(match[0])) {
+      sourceText += "\t";
+    } else {
+      if (PAGE_BREAK_XML_PATTERN.test(match[0])) {
+        offsets.push(sourceText.length);
+      }
+      sourceText += "\n";
+    }
+  }
+
+  const paragraphText = paragraph.children
+    .map((child) => child.type === "text" ? child.text : "")
+    .join("");
+  // Retained XML can differ after an edit or contain content omitted on import.
+  // Only use its offsets when they match the current model's source positions.
+  return sourceText === paragraphText ? offsets : undefined;
+}
+
+export function paragraphHasTrailingExplicitPageBreak(paragraph: ParagraphNode): boolean {
+  const offsets = collectParagraphExplicitPageBreakOffsets(paragraph);
+  if (!offsets) {
+    return paragraphHasExplicitPageBreak(paragraph);
+  }
+  const textLength = paragraph.children.reduce(
+    (length, child) => length + (child.type === "text" ? child.text.length : 0),
+    0
+  );
+  return offsets.some((offset) => offset + 1 === textLength);
+}
+
 function paragraphHasPageBreakBefore(
   paragraph: Pick<ParagraphNode, "sourceXml" | "style">
 ): boolean {
@@ -199,7 +263,18 @@ export function collectTopLevelExplicitPageBreakStartNodeIndexes(
         breaks.add(nodeIndex);
       }
 
-      if (hasNextNode && paragraphHasExplicitPageBreak(node)) {
+      const explicitBreakOffsets = collectParagraphExplicitPageBreakOffsets(node);
+      if (
+        explicitBreakOffsets?.[0] === 0 &&
+        node.children.reduce(
+          (length, child) => length + (child.type === "text" ? child.text.length : 0),
+          0
+        ) > 1
+      ) {
+        breaks.add(nodeIndex);
+      }
+
+      if (hasNextNode && paragraphHasTrailingExplicitPageBreak(node)) {
         breaks.add(nodeIndex + 1);
       }
       continue;

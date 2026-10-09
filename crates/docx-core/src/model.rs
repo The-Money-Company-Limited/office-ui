@@ -597,6 +597,7 @@ pub struct ParagraphBorderSet {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ParagraphTabStopAlignment {
+    Clear,
     Left,
     Center,
     Right,

@@ -13,6 +13,128 @@ No original Microsoft source was recovered or copied into production. Later
 focused exports and validated contracts remain separate from those initial
 decompiler snapshots.
 
+## REA investigation on 2026-10-09
+
+REA 6.2.0 is installed and connected to Codex. Its Ghidra provider uses the
+verified official 12.1.4 distribution and a locally built arm64 decompiler.
+Both installed Word binaries still match the target hashes below. Fresh REA
+analysis of the arm64 layout-framework copy recovered focused pseudocode and
+assembly. The main executable's full default analysis timed out after fifteen
+minutes; focused extraction subsequently recovered the three host callbacks
+described below.
+
+A subsequent focused trace recovered actual host callbacks without repeating
+full executable analysis. The direct `FsCreateContext` caller at `0x1000bb420`
+copies the callback table at `0x103af28e8`. REA's `FsCreateContextCore`
+decompilation establishes the table's copy into the runtime context, and the
+Mach-O chained-pointer format resolves three corresponding host functions:
+
+| Callback | Word address | Observed scope |
+| --- | --- | --- |
+| Suppressible bottom space | `0x102be8944` | Reads the first integer through the optional line-client pointer at `+0x38`; otherwise returns zero. |
+| Allow space-after overhang | `0x102bed460` | Tests host and paragraph-context fields, permits one ordinary-line branch, and compares a converted extent on a special-line branch. |
+| Format line | `0x102bed564` | Recovered body; its many private inputs and delegated helpers remain unresolved. |
+
+Small derived analysis images preserve each function's original bytes and
+virtual address. REA/Ghidra decompiles these successfully; source and region
+hashes are retained in the
+[extraction manifest](../output/playwright/rea-word-layout-20261009/word-layout-callbacks-manifest.json),
+with separate
+[host evidence](../output/playwright/rea-word-layout-20261009/rea-word-host-callback-evidence.json)
+and
+[framework evidence](../output/playwright/rea-word-layout-20261009/rea-word-fit-path.json).
+These images omit surrounding callees and data. Their role labels are analyst
+annotations, and the ELF container does not qualify Darwin stack-argument
+inference. Register-based observations are checked against the original
+Mach-O assembly. The recovered conditions therefore guide controlled Word
+comparisons; they do not yet identify all OOXML policy inputs or justify a
+universal overhang rule.
+
+`FsCheckLineVerticalFit` at `0x2d3b4` combines maximum ascent and descent and
+consults a suppressible-bottom-space callback when the extent does not fit.
+`FscbkGetDvrSuppressibleBottomSpace` at `0x15ceb4` delegates to the host; its
+private callback parameters remain unresolved. `FsSetTableSrvRowHeight` at
+`0x14f558` passes the row total minus two inset fields into cell-height setters.
+Those fields alone do not identify border contributions. Current REA records
+are retained in the
+[framework evidence bundle](../output/playwright/rea-word-layout-20261009/rea-framework-evidence.json).
+
+Eight controlled documents were printed to PDF by the installed Word and
+compared with the browser before and after the renderer changes. All eight
+now agree on normalized text membership per page, compared with five before.
+The controls distinguish paragraph text fit from trailing spacing, keep-next
+with a splittable following paragraph, an internal explicit page break, and
+minimum versus exact table-row heights. Row dimensions still differ slightly
+because the browser and Word's print path quantize geometry differently.
+
+The implementation carries trailing paragraph spacing into the next block's
+flow budget without splitting text solely for that spacing; keeps headings
+with the widow-safe opening fragment of ordinary following paragraphs; and
+uses validated source positions for text-only internal page-break fragments.
+Table declarations retain fractional CSS pixels, and uniform collapsed single
+borders contribute to qualified minimum heights without inflating exact rows.
+Mixed objects, note references, and stale source XML retain their prior break
+handling; merged or directly overridden border configurations are excluded
+from the minimum-border correction.
+
+A further continuation check exposed a mismatch between whole-row DOM
+measurement and the positioned line plan used after splitting. Compatible
+paragraph rows now receive the planned height when they first need a slice,
+and cuts use complete-line boundaries. The row total also follows every
+fragment's vertical-alignment calculation. Declared exact rows, merges,
+vertical text, and nested content retain their existing handling. A manual
+break at the first character of the document still does not qualify creation
+of an initial blank page.
+
+The qualified slice renderer also preserves fractional viewport offsets and
+counts visual ink bleed inside its planned flow box. A public-bundle stress
+control retains all 560 normalized characters and 15 painted lines, with no
+glyphs outside row windows or physical pages. Its three row boxes match the
+planned 107.1328125, 107.1328125, and 15.3046875 CSS pixels. A following row
+recovers 22 pixels previously charged twice as bleed; the existing one-pixel
+visual bottom bleed remains. Cells with different line phases can move to a
+fresh page when no shared complete-line boundary fits; Word's independent
+per-cell continuation still requires a richer plan. See the
+[continuation verification](../output/playwright/rea-word-layout-20261009/table-continuation-control.json).
+
+These are bounded layout corrections. Matching font metrics, page origins,
+complex floating objects, notes, and painting still require qualification.
+The current
+[comparison records](../output/playwright/rea-word-layout-20261009/controls-final-comparison.json)
+and browser screenshots are local research artifacts, not package assets.
+
+The same Word/browser comparison exposed two font-selection errors. An
+inherited bidirectional language could select the wrong font for neutral
+characters in Latin text, and numbering markers bypassed the text's script
+font slots. Correcting these choices makes the short reference use Calibri
+throughout. Its heading numeral measures 22.703 CSS pixels against Word's
+22.728, and its final body baseline moves from 15.95 pixels below Word to
+2.05 pixels above. Both outputs have 43 body lines, but six lines still have
+different wrapping and two list labels differ.
+
+Explicitly cleared tab stops now survive import, style inheritance and
+serialization as clear markers. Rendering excludes those markers when
+selecting active tab positions. This restores a single footer baseline in
+the same reference, within 1.60 pixels vertically and 1.29 pixels horizontally
+of the Word print output. The WASM parser is rebuilt with this model change.
+The [qualified final capture](../output/playwright/rea-word-layout-20261009/visual-short-final-verification.json)
+pins both JavaScript and WASM hashes and records the remaining differences.
+
+A separate QA-only probe paints runs at the PDF-reported sizes: 11.04 rather
+than 11 points, 22.08 rather than 22, and 9.12 rather than 9. This removes the
+six wrapping differences in that reference. It is evidence that the print
+profile matters, not a qualified rule for nominal DOCX font sizes. No global
+font scaling was added. The active formatting, paint and presentation
+conversions must be distinguished before implementing such a rule.
+
+The verified public build renders 216 unchanged inputs over 1,815 pages with
+zero render exceptions. The existing unit suite passes 568 tests with one
+skipped, 99 Rust tests and nine Chrome checks pass, both TypeScript checks
+pass, and the WASM and ESM/CJS/declaration builds succeed. The
+[verification summary](../output/playwright/rea-word-layout-20261009/verification-summary.json)
+pins source and bundle hashes. The acceptance target remains 1:1 visual
+layout and page breaks; this stability sweep does not establish that parity.
+
 ## Reverification on 2026-10-07
 
 The installed executable and framework still match the hashes below. Fresh

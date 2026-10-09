@@ -75,9 +75,13 @@ function neutralScript(style?: TextStyle): DocxFontScript {
   if (hint === "cs" || hint === "complexscript" || hint === "bidi") {
     return "complexScript";
   }
+  const language = style?.language?.trim();
   if (
     style?.rightToLeft ||
-    COMPLEX_SCRIPT_LANGUAGE_RE.test(style?.languageBidi?.trim() ?? "")
+    COMPLEX_SCRIPT_LANGUAGE_RE.test(language ?? "") ||
+    (style?.rightToLeft !== false &&
+      !language &&
+      COMPLEX_SCRIPT_LANGUAGE_RE.test(style?.languageBidi?.trim() ?? ""))
   ) {
     return "complexScript";
   }

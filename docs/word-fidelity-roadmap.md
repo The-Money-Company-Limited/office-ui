@@ -17,6 +17,79 @@ captured controlled Word print PDFs and implemented several bounded corrections.
 There is still no general fidelity score, complete-rewrite requirement, or
 defensible completion date.
 
+The acceptance target is **1:1 visual fidelity and page breaks with Word**.
+Completion requires matching page and line membership, glyph positions and
+baselines, paragraph spacing, table geometry and continuations, headers,
+footers, drawings, and other visible content on the qualified document set.
+Page counts, native-function recovery, and regression-test success are
+intermediate checks. Each comparison must pin the Word build, original input,
+effective fonts, page geometry, and rendering scale; remaining rasterization
+differences must be measured separately from layout differences.
+
+## REA-assisted pagination corrections on 2026-10-09
+
+REA 6.2.0 is connected to the coding agent and successfully analyzes the
+installed arm64 PTLS framework through Ghidra. Focused observations support
+separating text fit from suppressible bottom space; border sizing is qualified
+with Word print controls rather than inferred from unnamed private fields.
+Fresh full analysis of the main executable timed out. A subsequent focused
+trace recovered its bottom-spacing, overhang and line-formatting callbacks
+from byte-preserving analysis images; private inputs and helper semantics
+remain partly unresolved.
+
+The renderer now accounts for trailing paragraph spacing, reserves a widow-safe
+opening fragment when keeping a heading with an ordinary splittable paragraph,
+handles validated text-only internal page breaks, and retains fractional
+declared row heights. The qualified collapsed-border contribution applies to
+minimum heights; exact-height declarations receive no extra border allowance.
+
+Compatible text-only row continuations use their positioned line-plan height,
+fractional complete-line cuts, and a bleed wrapper that does not charge ink
+padding as flow height. The public-bundle stress control retains all 560
+characters and 15 painted lines within its row and page windows. Its three
+row boxes match the planned extents. Cells with different line phases still
+require a common safe cut, which can move a row earlier than Word's independent
+per-cell continuation; that richer model remains open.
+
+All eight controlled Word comparisons agree on text membership per page,
+versus five on the unchanged build. With local Calibri faces loaded and font
+metrics refreshed, a heading-heavy document improves from 32 browser pages to
+Word's 22, and a short document agrees at one page. Without that font setup,
+the same updated documents produce 21 and two pages respectively. The long
+reference's actual text uses Times New Roman; loading Calibri is part of the
+comparison environment, not proof that its body uses Calibri. A line audit
+before the final font-slot and clear-tab changes finds six wrapping regions
+and five otherwise matching lines on different pages despite equal totals
+of 22 pages and 987 lines. Several browser line boxes also extend beyond the
+body bottom. Exact Times New Roman font bytes have not been qualified, so
+formatting scale and font identity remain separate investigation targets.
+Those disagreements keep the 1:1 gate open.
+
+The latest font-selection corrections make Latin punctuation and numbering
+markers use the proper script font slots. In the short reference, cumulative
+body baseline drift falls from about 16 pixels to about 2 pixels. Preserving
+cleared tab stops through import and inheritance also restores its footer to
+one line. Six wrapping differences, two numbering labels, and residual
+positions still differ from Word. A QA-only print-size probe removes the
+wrapping differences, but it does not qualify a general font-scaling rule.
+These remaining differences are explicit acceptance failures.
+
+Current observations, control PDFs, source ablations, font hashes, and
+before/after browser captures are retained under
+[`output/playwright/rea-word-layout-20261009/`](../output/playwright/rea-word-layout-20261009/).
+The Microsoft fonts are local QA inputs and are not included in the package.
+See the [native investigation](word-native-layout-research.md) for the exact
+scope of the recovered rules and remaining unsupported break configurations.
+
+The final stability sweep rendered 216 original documents and 1,815 pages
+without an exception; all input hashes remain unchanged. The existing unit
+suite passes 568 tests with one skipped; 99 Rust tests and nine Chrome browser
+checks pass. Both TypeScript checks and the WASM and ESM/CJS/declaration builds
+pass. These checks
+do not qualify visual parity for the full corpus. Exact source and bundle
+hashes are recorded in the
+[verification summary](../output/playwright/rea-word-layout-20261009/verification-summary.json).
+
 ## Latest renderer verification on 2026-10-07
 
 The continuation pass rendered **216 unique documents / 1,816 pages without a

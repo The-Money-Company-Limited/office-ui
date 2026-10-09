@@ -296,6 +296,56 @@ function keepNextParagraphReservePx(
   );
 }
 
+function keepNextFollowingParagraphHeightPx(
+  paragraph: ParagraphNode,
+  fullHeightPx: number,
+  beforeSpacingPx: number,
+  callbacks: PageSegmentationCallbacks,
+  metrics: PaginationSectionMetrics,
+  numberingDefinitions?: NumberingDefinitionSet
+): number {
+  const lineCount = Math.max(
+    1,
+    normalizedPositivePixelValue(
+      callbacks.paragraphLineCountWithinWidth(
+        paragraph,
+        metrics.pageContentWidthPx,
+        numberingDefinitions
+      ),
+      1
+    )
+  );
+  const widowControlEnabled = callbacks.paragraphWidowControlEnabled(paragraph);
+  if (
+    paragraph.style?.keepLines === true ||
+    paragraph.style?.keepNext === true ||
+    paragraph.children.some((child) => child.type === "image" || child.type === "form-field") ||
+    !callbacks.paragraphCanSplitAcrossPages(paragraph, lineCount) ||
+    (widowControlEnabled && lineCount <= 3)
+  ) {
+    return fullHeightPx;
+  }
+
+  const leadingLineCount = widowControlEnabled ? 2 : 1;
+  const lineHeightPx = Math.max(
+    1,
+    normalizedPositivePixelValue(
+      callbacks.estimateParagraphLineHeightPx(paragraph, metrics.docGridLinePitchPx),
+      1
+    )
+  );
+  const leadingSegmentReservePx = resolveParagraphSegmentNonFlowReservePx({
+    startLineIndex: 0,
+    endLineIndex: leadingLineCount,
+    totalLineCount: lineCount,
+    lineHeightPx
+  });
+  return Math.min(
+    fullHeightPx,
+    beforeSpacingPx + leadingLineCount * lineHeightPx + leadingSegmentReservePx
+  );
+}
+
 function normalizedMeasuredTableRowHeights(
   measuredRowHeightsPx: number[] | undefined,
   expectedRowCount: number,
@@ -565,7 +615,17 @@ export function collectDocxEstimatedOverflowBreakStartNodeIndexes(
           chainPreviousParagraphAfterPx,
           paragraphBeforeSpacingPx(nextChainNode)
         );
-        requiredHeightPx += Math.max(1, nextRawHeightPx - collapsedChainMarginPx);
+        requiredHeightPx += Math.max(
+          1,
+          keepNextFollowingParagraphHeightPx(
+            nextChainNode,
+            nextRawHeightPx,
+            paragraphBeforeSpacingPx(nextChainNode),
+            callbacks,
+            chainMetrics,
+            numberingDefinitions
+          ) - collapsedChainMarginPx
+        );
         requiredHeightPx += keepNextParagraphReservePx(
           currentChainNode,
           nextChainNode,
@@ -818,8 +878,6 @@ export function buildDocumentPageNodeSegments(
               ? Math.max(0, beforeSpacingPx - collapsedMarginPx)
               : beforeSpacingPx
             : 0;
-          const mustKeepBottomSpacing = linesRemaining <= minLinesPerSegment;
-          const bottomSpacingPx = mustKeepBottomSpacing ? afterSpacingPx : 0;
           const remainingHeightPx = Math.max(0, currentPageContentHeightPx - pageConsumedHeightPx);
           const allRemainingSegmentReservePx = resolveParagraphSegmentNonFlowReservePx({
             startLineIndex: lineCursor,
@@ -827,10 +885,10 @@ export function buildDocumentPageNodeSegments(
             totalLineCount: paragraphLineCount,
             lineHeightPx: paragraphLineHeightPx
           });
-          const allRemainingHeightPx =
-            topSpacingPx + linesRemaining * paragraphLineHeightPx + bottomSpacingPx;
+          const allRemainingTextHeightPx =
+            topSpacingPx + linesRemaining * paragraphLineHeightPx;
 
-          if (allRemainingHeightPx + allRemainingSegmentReservePx <= remainingHeightPx) {
+          if (allRemainingTextHeightPx + allRemainingSegmentReservePx <= remainingHeightPx) {
             currentPageSegments.push({
               nodeIndex,
               paragraphLineRange: {
@@ -840,7 +898,7 @@ export function buildDocumentPageNodeSegments(
                 lineHeightPx: paragraphLineHeightPx
               }
             });
-            pageConsumedHeightPx += allRemainingHeightPx;
+            pageConsumedHeightPx += allRemainingTextHeightPx + afterSpacingPx;
             previousParagraphAfterPx = afterSpacingPx;
             lineCursor = paragraphLineCount;
             break;
@@ -993,7 +1051,19 @@ export function buildDocumentPageNodeSegments(
             chainPreviousParagraphAfterPx,
             paragraphBeforeSpacingPx(nextChainNode)
           );
-          requiredHeightPx += Math.max(1, nextRawHeightPx - collapsedChainMarginPx);
+          requiredHeightPx += Math.max(
+            1,
+            (allowParagraphLineSplitting
+              ? keepNextFollowingParagraphHeightPx(
+                  nextChainNode,
+                  nextRawHeightPx,
+                  paragraphBeforeSpacingPx(nextChainNode),
+                  callbacks,
+                  chainMetrics,
+                  numberingDefinitions
+                )
+              : nextRawHeightPx) - collapsedChainMarginPx
+          );
           requiredHeightPx += keepNextParagraphReservePx(
             currentChainNode,
             nextChainNode,
