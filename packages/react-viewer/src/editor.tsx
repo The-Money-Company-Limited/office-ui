@@ -3470,10 +3470,7 @@ function estimateDocumentNoteSectionHeightPx(
       totalHeightPx += 6;
     }
 
-    const noteParagraphs =
-      note.nodes?.filter(
-        (node): node is ParagraphNode => node.type === "paragraph"
-      ) ?? [];
+    const noteParagraphs = note.nodes ?? [];
     if (noteParagraphs.length === 0) {
       totalHeightPx += Math.round(12 * 1.35);
       return;
@@ -3483,11 +3480,13 @@ function estimateDocumentNoteSectionHeightPx(
       if (paragraphIndex > 0) {
         totalHeightPx += 4;
       }
-      totalHeightPx += estimateParagraphHeightPx(
-        paragraph,
-        pageContentWidthPx,
-        numberingDefinitions, undefined, undefined, undefined, undefined, typography
-      );
+      totalHeightPx += paragraph.type === "table"
+        ? estimateTableHeightPx(paragraph, pageContentWidthPx, numberingDefinitions, undefined, pageContentWidthPx, typography)
+        : estimateParagraphHeightPx(
+          paragraph,
+          pageContentWidthPx,
+          numberingDefinitions, undefined, undefined, undefined, undefined, typography
+        );
     });
   });
 
@@ -19516,6 +19515,7 @@ interface SyntheticTextBoxSegment {
 }
 
 interface SyntheticTextBoxParagraph {
+  sourceId?: string;
   align?: ParagraphAlignment;
   lineHeightPx: number;
   segments: SyntheticTextBoxSegment[];
@@ -19865,7 +19865,21 @@ function resolveSyntheticTextBoxParagraphs(
   pageNumberFormat?: string,
   resolveStyleRefFieldValue?: (target: string) => string | undefined
 ): SyntheticTextBoxParagraph[] {
-  const baseParagraphs = image.sourceXml
+  const typedParagraphs = image.contentNodes?.filter((node): node is ParagraphNode => node.type === "paragraph");
+  const hasDynamicFields = /<w:(?:instrText|fldSimple)\b/.test(image.sourceXml ?? "");
+  const baseParagraphs: SyntheticTextBoxParagraph[] = typedParagraphs?.length && !hasDynamicFields
+    ? typedParagraphs.map(paragraph => {
+        const fontSize = paragraph.children.find(child => child.type === "text")?.style?.fontSizePt ?? 12;
+        return {
+          sourceId: paragraph.blockId,
+          align: paragraph.style?.align,
+          lineHeightPx: paragraph.style?.spacing?.lineRule === "exact" && paragraph.style.spacing.lineTwips
+            ? Math.max(1, paragraph.style.spacing.lineTwips / 15) : Math.max(14, Math.round(fontSize * 96 / 72 * 1.24)),
+          segments: paragraph.children.flatMap(child => child.type === "text" ? [{ text: child.text, style: child.style }]
+            : child.type === "form-field" ? [{ text: formFieldDisplayValue(child), style: child.style }] : []),
+        };
+      })
+    : image.sourceXml
     ? syntheticTextBoxParagraphsFromRunXml(
         image.sourceXml,
         pageNumber,
@@ -19888,6 +19902,7 @@ function resolveSyntheticTextBoxParagraphs(
     const baseParagraph = baseParagraphs[index] ?? baseParagraphs[0];
     const baseStyle = baseParagraph?.segments[0]?.style;
     return {
+      sourceId: baseParagraph?.sourceId,
       align: baseParagraph?.align,
       lineHeightPx: baseParagraph?.lineHeightPx ?? 18,
       segments: [{ text: line, style: baseStyle }],
@@ -21704,7 +21719,7 @@ function renderParagraphRuns(
         const isInternalLink = linkHref.startsWith("#");
         target.push(
           <a
-            key={key}
+            key={key} data-docx-source-id={paragraph.blockId ? `${paragraph.blockId}/child/${childIndex}` : undefined}
             {...annotationAttributes}
             href={linkHref}
             target={isInternalLink ? undefined : "_blank"}
@@ -21745,7 +21760,7 @@ function renderParagraphRuns(
       if (text === "\t" && !useTabLeaderLayout && !useAnchoredTabLayout) {
         target.push(
           <span
-            key={key}
+            key={key} data-docx-source-id={paragraph.blockId ? `${paragraph.blockId}/child/${childIndex}` : undefined}
             {...annotationAttributes}
             style={tabTextStyle(child.style, trackedStyle)}
           >
@@ -21756,7 +21771,7 @@ function renderParagraphRuns(
       }
 
       target.push(
-        <span key={key} {...annotationAttributes} style={trackedStyle}>
+        <span key={key} data-docx-source-id={paragraph.blockId ? `${paragraph.blockId}/child/${childIndex}` : undefined} {...annotationAttributes} style={trackedStyle}>
           {scriptFontTextContent(text, child.style, key, paragraphBaseFontSizePx(paragraph) * 72 / 96, typography)}
         </span>
       );
@@ -27236,8 +27251,7 @@ function findTrackedChangeAnchorElementInPage(
 ): HTMLElement | undefined {
   if (location.kind === "paragraph") {
     const paragraphElement = pageElement.querySelector(
-      `[data-docx-source-id={node.blockId}
-          data-docx-paragraph-kind="paragraph"][data-docx-paragraph-node-index="${location.nodeIndex}"]`
+      `[data-docx-paragraph-kind="paragraph"][data-docx-paragraph-node-index="${location.nodeIndex}"]`
     ) as HTMLElement | null;
     return paragraphElement ?? undefined;
   }
@@ -32861,6 +32875,13 @@ export function useDocxEditor(
         }
 
         child.textBoxText = normalizedText;
+        const previousContent = child.contentNodes;
+        child.contentNodes = normalizedText.split("\n").map((line, index) => {
+          const previous = previousContent?.[index];
+          return { type: "paragraph", blockId: previous?.blockId ?? (child.blockId ? `${child.blockId}/content/${index}` : undefined),
+            style: previous?.type === "paragraph" ? previous.style : undefined,
+            children: [{ type: "text", text: line, style: previous?.type === "paragraph" ? previous.children.find(run => run.type === "text")?.style : undefined }] };
+        });
         child.src =
           syntheticTextBoxSvg(
             {
@@ -41909,7 +41930,12 @@ export function DocxEditorViewer({
       const nodeId = (event as CustomEvent<{ nodeId: string }>).detail?.nodeId;
       if (!nodeId) return;
       const nodeIndex = editor.model.nodes.findIndex(node => node.blockId && (nodeId === node.blockId || nodeId.startsWith(`${node.blockId}/`)));
-      const pageIndex = pageNodeSegmentsByPage.findIndex(segments => segments.some(segment => segment.nodeIndex === nodeIndex));
+      const sourceNode = editor.model.nodes[nodeIndex];
+      const suffix = sourceNode?.blockId ? nodeId.slice(sourceNode.blockId.length) : "";
+      const rowIndex = sourceNode?.type === "table" ? Number(/^\/row\/(\d+)/.exec(suffix)?.[1]) : Number.NaN;
+      const pageIndex = pageNodeSegmentsByPage.findIndex(segments => segments.some(segment =>
+        segment.nodeIndex === nodeIndex && (!Number.isFinite(rowIndex) || !segment.tableRowRange ||
+          rowIndex >= segment.tableRowRange.startRowIndex && rowIndex < segment.tableRowRange.endRowIndex)));
       if (pageIndex >= 0) requestPageReveal(pageIndex);
     };
     root.addEventListener("docx-reveal-source", reveal);
@@ -44074,8 +44100,7 @@ export function DocxEditorViewer({
 
         const paragraphHosts = Array.from(
           viewerRootRef.current?.querySelectorAll<HTMLElement>(
-            `[data-docx-source-id={node.blockId}
-          data-docx-paragraph-kind="paragraph"][data-docx-paragraph-node-index="${location.nodeIndex}"]`
+            `[data-docx-paragraph-kind="paragraph"][data-docx-paragraph-node-index="${location.nodeIndex}"]`
           ) ?? []
         );
         const editableHost = paragraphHosts.find(
@@ -44147,8 +44172,7 @@ export function DocxEditorViewer({
       const trackedElement = paragraphElementsRef.current.get(paragraphIndex);
       const paragraphHosts = Array.from(
         rootElement?.querySelectorAll<HTMLElement>(
-          `[data-docx-source-id={node.blockId}
-          data-docx-paragraph-kind="paragraph"][data-docx-paragraph-node-index="${paragraphIndex}"]`
+          `[data-docx-paragraph-kind="paragraph"][data-docx-paragraph-node-index="${paragraphIndex}"]`
         ) ?? []
       );
       const candidates = [
@@ -52249,6 +52273,7 @@ export function DocxEditorViewer({
               <img
                 key={`${keyPrefix}-fragment-image-${lineIndex}-${run.key}-${overlapStart}`}
                 src={renderableImageSrc}
+                data-docx-source-id={run.image.blockId}
                 alt={run.image.alt ?? "DOCX image"}
                 draggable={false}
                 data-docx-image-location={imageLocationKey({ ...location, childIndex: Number(/^run-(\d+)/.exec(run.key)?.[1]) })}
@@ -55405,13 +55430,15 @@ export function DocxEditorViewer({
                     display: "block",
                   }}
                 >
-                  {syntheticTextBoxParagraphs &&
+                  {child.textBoxText === undefined && child.contentNodes?.some(node => node.type === "table")
+                    ? child.contentNodes.map((node, index) => renderHeaderNode(node, `${runKey}-content-${index}`, documentContentTheme, editor.model.metadata.numberingDefinitions, undefined, widthPx))
+                    : syntheticTextBoxParagraphs &&
                   syntheticTextBoxParagraphs.length > 0
                     ? syntheticTextBoxParagraphs.map(
                         (paragraph, paragraphIndex) => (
                           <div
                             key={`${runKey}-textbox-paragraph-${paragraphIndex}`}
-                            data-docx-source-id={child.contentNodes?.[paragraphIndex]?.blockId}
+                            data-docx-source-id={paragraph.sourceId ?? child.contentNodes?.[paragraphIndex]?.blockId}
                             style={{
                               minHeight: `${Math.max(
                                 1,
@@ -55828,6 +55855,7 @@ export function DocxEditorViewer({
             nodes.push(
               <span
                 key={runKey}
+                data-docx-source-id={paragraph.blockId ? `${paragraph.blockId}/child/${childIndex}` : undefined}
                 data-docx-form-field="true"
                 data-docx-form-field-child-index={childIndex}
                 data-docx-form-field-type={child.fieldType}
@@ -55905,6 +55933,7 @@ export function DocxEditorViewer({
               <span
                 key={runKey}
                 contentEditable={false}
+                data-docx-source-id={paragraph.blockId ? `${paragraph.blockId}/child/${childIndex}` : undefined}
                 data-docx-form-field="true"
                 data-docx-form-field-child-index={childIndex}
                 data-docx-form-field-type="checkbox"
@@ -55987,6 +56016,7 @@ export function DocxEditorViewer({
               <select
                 key={runKey}
                 contentEditable={false}
+                data-docx-source-id={paragraph.blockId ? `${paragraph.blockId}/child/${childIndex}` : undefined}
                 data-docx-form-field="true"
                 data-docx-form-field-child-index={childIndex}
                 data-docx-form-field-type="dropdown"
@@ -56047,7 +56077,8 @@ export function DocxEditorViewer({
                 <input
                   key={runKey}
                   contentEditable={false}
-                  data-docx-form-field="true"
+                  data-docx-source-id={paragraph.blockId ? `${paragraph.blockId}/child/${childIndex}` : undefined}
+                data-docx-form-field="true"
                   data-docx-form-field-child-index={childIndex}
                   data-docx-form-field-type="date"
                   type={compactFieldLayout ? "text" : "date"}
@@ -56090,7 +56121,8 @@ export function DocxEditorViewer({
                 <input
                   key={runKey}
                   contentEditable={false}
-                  data-docx-form-field="true"
+                  data-docx-source-id={paragraph.blockId ? `${paragraph.blockId}/child/${childIndex}` : undefined}
+                data-docx-form-field="true"
                   data-docx-form-field-child-index={childIndex}
                   data-docx-form-field-type="date"
                   type="text"
@@ -56135,6 +56167,7 @@ export function DocxEditorViewer({
               <input
                 key={runKey}
                 contentEditable={false}
+                data-docx-source-id={paragraph.blockId ? `${paragraph.blockId}/child/${childIndex}` : undefined}
                 data-docx-form-field="true"
                 data-docx-form-field-child-index={childIndex}
                 data-docx-form-field-type="text"
@@ -62615,16 +62648,17 @@ export function DocxEditorViewer({
       pageNumberValue: number,
       runRenderOptions: ParagraphRunRenderOptions
     ): React.ReactNode => {
-      const noteNodes = note.nodes?.filter(
-        (node): node is ParagraphNode => node.type === "paragraph"
-      );
+      const noteNodes = note.nodes;
       if (!noteNodes || noteNodes.length === 0) {
         return note.text;
       }
 
-      return noteNodes.map((paragraph, paragraphIndex) => (
+      return noteNodes.map((paragraph, paragraphIndex) => paragraph.type === "table"
+        ? renderHeaderNode(paragraph, `${keyPrefix}-table-${paragraphIndex}`, documentContentTheme, editor.model.metadata.numberingDefinitions)
+        : (
         <span
           key={`${keyPrefix}-paragraph-${paragraphIndex}`}
+          data-docx-source-id={paragraph.blockId}
           style={{
             display: "block",
             ...(paragraphIndex > 0 ? { marginTop: 4 } : undefined),
@@ -62733,6 +62767,7 @@ export function DocxEditorViewer({
     <div
       data-testid="docx-editor-viewer"
       data-docx-editor-root="true"
+      data-docx-document-id={editor.model.metadata.documentId}
       data-docx-zoom-level={viewerZoom.level}
       data-docx-resolved-zoom={viewerZoom.resolvedZoom}
       ref={viewerRootRef}

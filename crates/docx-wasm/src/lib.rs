@@ -26,6 +26,13 @@ pub fn extract_document_blocks_wasm(model_json: &str) -> Result<String, JsValue>
         .map_err(|error| JsValue::from_str(&error.to_string()))
 }
 
+#[wasm_bindgen]
+pub fn inspect_document_source_wasm(bytes: &[u8]) -> Result<String, JsValue> {
+    let package = parse_document_bytes(bytes).map_err(|error| JsValue::from_str(&error))?;
+    serde_json::to_string(&docx_core::document_source_graph(&package))
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
 fn value_to_doc_model(value: &JsValue) -> Result<DocModel, JsValue> {
     if let Some(json_str) = value.as_string() {
         return doc_model_from_json(&json_str);

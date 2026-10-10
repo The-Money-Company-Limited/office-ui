@@ -3,6 +3,7 @@ import wasmInit, {
   build_doc_model_from_bytes,
   build_doc_model_from_package,
   extract_document_blocks_wasm,
+  inspect_document_source_wasm,
   model_to_document_xml_from_json_wasm,
   package_to_array_buffer_wasm,
   parse_docx_wasm,
@@ -178,6 +179,11 @@ export async function wasmBuildDocModelFromPackage(pkg: WasmOoxmlPackage): Promi
   await initWasm();
   const json = build_doc_model_from_package(pkg);
   return JSON.parse(json) as unknown;
+}
+
+export async function wasmInspectDocumentSource(bytes: ArrayBuffer | Uint8Array): Promise<unknown> {
+  await initWasm();
+  return JSON.parse(inspect_document_source_wasm(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)));
 }
 
 export async function wasmExtractDocumentBlocks(model: unknown): Promise<unknown> {

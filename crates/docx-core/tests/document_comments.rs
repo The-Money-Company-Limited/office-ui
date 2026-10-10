@@ -232,6 +232,7 @@ fn serializes_a_new_comment_and_roundtrips_explicit_unresolved_state() {
     let package = create_minimal_docx_package(Some(DOCUMENT_XML));
     let mut model = build_doc_model(&package);
     model.metadata.comments = Some(vec![DocumentCommentDefinition {
+        nodes: None,
         id: 3,
         author: Some("Ada".to_string()),
         initials: Some("AL".to_string()),

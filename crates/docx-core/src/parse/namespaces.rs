@@ -63,11 +63,15 @@ pub fn normalize_xml(xml: &str) -> Result<String, String> {
                         || namespaces.values().any(|p| p == candidate)
                         || [
                             "w", "a", "r", "m", "c", "wp", "pic", "wps", "wpg", "mc", "w14", "w15",
-                            "v", "o",
+                            "v", "o", "xml", "wp14", "w10",
                         ]
                         .contains(&candidate)
                     {
-                        format!("ns{}", namespaces.len())
+                        let mut index = namespaces.len();
+                        while namespaces.values().any(|p| p == &format!("ns{index}")) {
+                            index += 1;
+                        }
+                        format!("ns{index}")
                     } else {
                         candidate.to_string()
                     }
@@ -77,10 +81,15 @@ pub fn normalize_xml(xml: &str) -> Result<String, String> {
         }
     }
     fn name(ns: Option<&str>, local: &str, namespaces: &BTreeMap<String, String>) -> String {
-        ns.and_then(|ns| namespaces.get(ns))
-            .filter(|prefix| !prefix.is_empty())
-            .map(|prefix| format!("{prefix}:{local}"))
-            .unwrap_or_else(|| local.to_string())
+        ns.and_then(|ns| {
+            namespaces
+                .get(ns)
+                .map(String::as_str)
+                .or_else(|| prefix(ns))
+        })
+        .filter(|prefix| !prefix.is_empty())
+        .map(|prefix| format!("{prefix}:{local}"))
+        .unwrap_or_else(|| local.to_string())
     }
     fn write(
         node: roxmltree::Node<'_, '_>,
@@ -108,7 +117,14 @@ pub fn normalize_xml(xml: &str) -> Result<String, String> {
         out.push('<');
         out.push_str(&tag);
         if node.parent().is_some_and(|parent| parent.is_root()) {
+            let mut declarations = BTreeMap::<&str, &str>::new();
             for (uri, prefix) in namespaces {
+                let previous = declarations.entry(prefix.as_str()).or_insert(uri.as_str());
+                if previous.starts_with("http://purl.oclc.org/") {
+                    *previous = uri;
+                }
+            }
+            for (prefix, uri) in declarations {
                 if prefix != "xml" {
                     let attr = if prefix.is_empty() {
                         "xmlns".to_string()

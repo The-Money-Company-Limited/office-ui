@@ -36,7 +36,7 @@ pub struct ParsedRunTextToken {
 pub fn parse_run_text_tokens(run_xml: &str) -> Vec<ParsedRunTextToken> {
     let normalized_run_xml = prefer_alternate_content_choice(run_xml);
     let token_pattern = re::get_unchecked(
-        r#"(?is)<w:t\b[^>]*>([\s\S]*?)</w:t>|<a:t\b[^>]*>([\s\S]*?)</a:t>|<w:footnoteReference\b[^>]*w:id="(-?\d+)"[^>]*/>|<w:endnoteReference\b[^>]*w:id="(-?\d+)"[^>]*/>|<w:tab\b[^>]*/>|<a:tab\b[^>]*/>|<w:br\b[^>]*/>|<w:cr\b[^>]*/>|<a:br\b[^>]*/>|<w:noBreakHyphen\b[^>]*/>|<w:softHyphen\b[^>]*/>|<w:sym\b[^>]*/>|</w:p>"#,
+        r#"(?is)<w:t\b(?:[^>]*[^/>])?>([\s\S]*?)</w:t>|<a:t\b(?:[^>]*[^/>])?>([\s\S]*?)</a:t>|<w:footnoteReference\b[^>]*w:id="(-?\d+)"[^>]*/>|<w:endnoteReference\b[^>]*w:id="(-?\d+)"[^>]*/>|<w:tab\b[^>]*/>|<a:tab\b[^>]*/>|<w:br\b[^>]*/>|<w:cr\b[^>]*/>|<a:br\b[^>]*/>|<w:noBreakHyphen\b[^>]*/>|<w:softHyphen\b[^>]*/>|<w:sym\b[^>]*/>|</w:p>"#,
     );
     let mut parts = Vec::new();
     for caps in token_pattern.captures_iter(&normalized_run_xml) {
@@ -214,7 +214,7 @@ pub fn parse_paragraph_runs(paragraph_xml: &str, context: &ParseContext<'_>) -> 
         field_depth += begin_count;
 
         if field_depth > 0 && active_field_link.is_none() {
-            let instr_re = re::get_unchecked(r"(?is)<w:instrText\b[^>]*>([\s\S]*?)</w:instrText>");
+            let instr_re = re::get_unchecked(r"(?is)<w:instrText\b(?:[^>]*[^/>])?>([\s\S]*?)</w:instrText>");
             for caps in instr_re.captures_iter(run_xml) {
                 if let Some(m) = caps.get(1) {
                     instruction_parts.push(m.as_str().to_string());
@@ -681,7 +681,7 @@ fn parse_legacy_paragraph_form_field_tokens(
         Option<String>,
     )> = Vec::new();
     let inline_token_pattern = re::get_unchecked(
-        r#"(?is)<w:fldChar\b[^>]*\bw:fldCharType="(begin|separate|end)"[^>]*>([\s\S]*?)</w:fldChar>|<w:fldChar\b[^>]*\bw:fldCharType="(begin|separate|end)"[^>]*/>|<w:instrText\b[^>]*>([\s\S]*?)</w:instrText>"#,);
+        r#"(?is)<w:fldChar\b[^>]*\bw:fldCharType="(begin|separate|end)"[^>]*>([\s\S]*?)</w:fldChar>|<w:fldChar\b[^>]*\bw:fldCharType="(begin|separate|end)"[^>]*/>|<w:instrText\b(?:[^>]*[^/>])?>([\s\S]*?)</w:instrText>"#,);
 
     for (run_index, run) in runs.iter().enumerate() {
         for caps in inline_token_pattern.captures_iter(&run.xml) {

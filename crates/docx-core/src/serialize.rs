@@ -4554,7 +4554,8 @@ fn merge_comments_extended_xml(
 }
 
 fn ensure_document_relationship(pkg: &mut OoxmlPackage, relationship_type: &str, target: &str) {
-    let part_name = "word/_rels/document.xml.rels";
+    let resolved_part_name = relationship_part_name_for_word_part(&crate::package::main_document_part_name(pkg));
+    let part_name = resolved_part_name.as_str();
     let existing = pkg
         .parts
         .get(part_name)
@@ -4562,7 +4563,7 @@ fn ensure_document_relationship(pkg: &mut OoxmlPackage, relationship_type: &str,
         .unwrap_or_else(|| EMPTY_RELATIONSHIPS_XML.to_string());
     let relationships = parse_relationships_xml(&existing);
     if relationships.iter().any(|relationship| {
-        relationship.r#type == relationship_type && relationship.target == target
+        relationship.r#type == relationship_type && crate::parse::resolve_part_path(&crate::package::main_document_part_name(pkg), &relationship.target) == crate::parse::resolve_part_path(&crate::package::main_document_part_name(pkg), target)
     }) {
         return;
     }
@@ -4612,6 +4613,7 @@ fn ensure_document_relationship(pkg: &mut OoxmlPackage, relationship_type: &str,
 }
 
 fn serialize_comment_parts(model: &DocModel, pkg: &mut OoxmlPackage) {
+    let source_part_name = crate::package::related_document_part_name(pkg, "comments");
     let Some(comments) = model.metadata.comments.as_ref().filter(|comments| !comments.is_empty()) else {
         return;
     };
@@ -4642,13 +4644,13 @@ fn serialize_comment_parts(model: &DocModel, pkg: &mut OoxmlPackage) {
         .collect::<HashMap<_, _>>();
 
     let comments_xml = merge_comments_xml(
-        pkg.parts.get("word/comments.xml").map(|part| part.content.as_str()),
+        pkg.parts.get(&source_part_name).map(|part| part.content.as_str()),
         &rendered_by_id,
     );
     pkg.parts.insert(
-        "word/comments.xml".to_string(),
+        source_part_name.clone(),
         OoxmlPart {
-            name: "word/comments.xml".to_string(),
+            name: source_part_name.clone(),
             content: comments_xml,
         },
     );
@@ -4688,8 +4690,8 @@ fn serialize_comment_parts(model: &DocModel, pkg: &mut OoxmlPackage) {
         );
     }
 
-    ensure_content_type_override(pkg, "word/comments.xml", COMMENTS_CONTENT_TYPE);
-    ensure_document_relationship(pkg, REL_TYPE_COMMENTS, "comments.xml");
+    ensure_content_type_override(pkg, &source_part_name, COMMENTS_CONTENT_TYPE);
+    ensure_document_relationship(pkg, REL_TYPE_COMMENTS, &format!("/{source_part_name}"));
     if pkg.parts.contains_key("word/commentsExtended.xml") {
         ensure_content_type_override(
             pkg,
@@ -4850,6 +4852,7 @@ const COMPAT_PROPERTIES_ORDER: &[&str] = &[
 ];
 
 fn serialize_document_settings(model: &DocModel, pkg: &mut OoxmlPackage) {
+    let source_part_name = crate::package::related_document_part_name(pkg, "settings");
     let original_compatibility = crate::parse::parse_document_compatibility_settings(pkg);
     let original_tab_stop = crate::parse::parse_document_default_tab_stop_twips(pkg);
     let compatibility = model.metadata.compatibility.as_ref();
@@ -4938,7 +4941,7 @@ fn serialize_document_settings(model: &DocModel, pkg: &mut OoxmlPackage) {
         return;
     }
 
-    let mut settings_xml = pkg.parts.get("word/settings.xml")
+    let mut settings_xml = pkg.parts.get(&source_part_name)
         .map(|part| part.content.clone())
         .unwrap_or_else(|| format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="{WORD_MAIN_NS}"/>"#,
@@ -5063,14 +5066,14 @@ fn serialize_document_settings(model: &DocModel, pkg: &mut OoxmlPackage) {
         }
     }
     pkg.parts.insert(
-        "word/settings.xml".to_string(),
+        source_part_name.clone(),
         OoxmlPart {
-            name: "word/settings.xml".to_string(),
+            name: source_part_name.clone(),
             content: settings_xml,
         },
     );
-    ensure_content_type_override(pkg, "word/settings.xml", SETTINGS_CONTENT_TYPE);
-    ensure_document_relationship(pkg, REL_TYPE_SETTINGS, "settings.xml");
+    ensure_content_type_override(pkg, &source_part_name, SETTINGS_CONTENT_TYPE);
+    ensure_document_relationship(pkg, REL_TYPE_SETTINGS, &format!("/{source_part_name}"));
 }
 
 fn ensure_document_open_tag(model: &DocModel) -> String {
@@ -5090,7 +5093,8 @@ fn ensure_document_open_tag(model: &DocModel) -> String {
 }
 
 fn model_to_document_xml_with_pkg(model: &DocModel, pkg: &mut OoxmlPackage) -> String {
-    let document_part_name = "word/document.xml";
+    let resolved_document_part = crate::package::main_document_part_name(pkg);
+    let document_part_name = resolved_document_part.as_str();
     let (body_xml, relationships) = {
         let mut state = create_image_serialization_state(pkg, document_part_name);
         let mut run_id_ref = 1i64;
@@ -5142,11 +5146,12 @@ pub fn serialize_doc_model(model: &DocModel, base_package: Option<&OoxmlPackage>
     let mut seed = base_package
         .cloned()
         .unwrap_or_else(|| create_minimal_docx_package(None));
+    let document_part_name = crate::package::main_document_part_name(&seed);
     let document_xml = model_to_document_xml_with_pkg(model, &mut seed);
     let with_document = with_part(
         &seed,
         OoxmlPart {
-            name: "word/document.xml".to_string(),
+            name: document_part_name,
             content: document_xml,
         },
     );

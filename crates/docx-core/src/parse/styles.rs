@@ -1970,9 +1970,7 @@ fn read_typeface(xml: &str, tag_name: &str) -> Option<String> {
 
 /// Mirrors TypeScript `parseThemeFonts`.
 pub fn parse_theme_fonts(pkg: &OoxmlPackage) -> ThemeFontMap {
-    let Some(theme_xml) = pkg
-        .parts
-        .get("word/theme/theme1.xml")
+    let Some(theme_xml) = crate::package::related_document_part(pkg, "theme")
         .map(|part| part.content.as_str())
     else {
         return ThemeFontMap::default();
@@ -2012,9 +2010,7 @@ fn parse_theme_color_from_tag(color_xml: &str) -> Option<String> {
 
 /// Mirrors TypeScript `parseThemeColors`.
 pub fn parse_theme_colors(pkg: &OoxmlPackage) -> ThemeColorMap {
-    let Some(theme_xml) = pkg
-        .parts
-        .get("word/theme/theme1.xml")
+    let Some(theme_xml) = crate::package::related_document_part(pkg, "theme")
         .map(|part| part.content.as_str())
     else {
         return ThemeColorMap::new();
@@ -2067,7 +2063,7 @@ pub fn parse_theme_colors(pkg: &OoxmlPackage) -> ThemeColorMap {
 
 /// Mirrors TypeScript `parseStyleSheet`.
 pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
-    let Some(styles_xml) = pkg.parts.get("word/styles.xml").map(|part| part.content.as_str()) else {
+    let Some(styles_xml) = crate::package::related_document_part(pkg, "styles").map(|part| part.content.as_str()) else {
         return empty_style_sheet();
     };
 

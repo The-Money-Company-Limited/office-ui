@@ -44,6 +44,60 @@ pub struct DocumentSourceGraph {
     pub parts: Vec<SourcePart>,
     pub assets: Vec<SourcePart>,
     pub warnings: Vec<String>,
+    pub preserved_features: Vec<PreservedFeature>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreservedFeature {
+    pub part_name: String,
+    pub feature: String,
+    pub occurrences: usize,
+    pub support: String,
+}
+
+pub fn preserved_features(package: &OoxmlPackage) -> Vec<PreservedFeature> {
+    let mut features = std::collections::BTreeMap::<(String, String, String), usize>::new();
+    for part in package.parts.values() {
+        let Ok(doc) = roxmltree::Document::parse(&part.content) else {
+            continue;
+        };
+        for node in doc.descendants().filter(|n| n.is_element()) {
+            let ns = node.tag_name().namespace().unwrap_or("");
+            let local = node.tag_name().name();
+            let word =
+                ns.ends_with("wordprocessingml/2006/main") || ns.ends_with("wordprocessingml/main");
+            let feature = if word
+                && matches!(
+                    local,
+                    "altChunk" | "subDoc" | "object" | "control" | "movie" | "sound"
+                ) {
+                Some((local, "preserved_only"))
+            } else if ns.contains("drawingml") && ns.contains("diagram") && local == "dataModel" {
+                Some(("diagram", "preserved_only"))
+            } else if ns.ends_with("/math") && local == "oMath" {
+                Some(("equation", "approximate_rendering"))
+            } else {
+                None
+            };
+            if let Some((feature, support)) = feature {
+                *features
+                    .entry((part.name.clone(), feature.into(), support.into()))
+                    .or_default() += 1;
+            }
+        }
+    }
+    features
+        .into_iter()
+        .map(
+            |((part_name, feature, support), occurrences)| PreservedFeature {
+                part_name,
+                feature,
+                support,
+                occurrences,
+            },
+        )
+        .collect()
 }
 
 pub fn document_source_graph(package: &OoxmlPackage) -> DocumentSourceGraph {
@@ -51,7 +105,9 @@ pub fn document_source_graph(package: &OoxmlPackage) -> DocumentSourceGraph {
         let range = node.range();
         SourceElement {
             id: id.clone(),
-            kind: if node.is_element() {
+            kind: if node.is_root() {
+                "document"
+            } else if node.is_element() {
                 "element"
             } else if node.is_text() {
                 "text"
@@ -62,11 +118,15 @@ pub fn document_source_graph(package: &OoxmlPackage) -> DocumentSourceGraph {
             }
             .into(),
             namespace: node.tag_name().namespace().map(str::to_string),
-            name: node
-                .is_element()
-                .then(|| node.tag_name().name().to_string()),
-            text: if node.is_element() {
+            name: if node.is_element() {
+                Some(node.tag_name().name().to_string())
+            } else {
+                node.pi().map(|pi| pi.target.to_string())
+            },
+            text: if node.is_element() || node.is_root() {
                 None
+            } else if let Some(pi) = node.pi() {
+                pi.value.map(str::to_string)
             } else {
                 node.text().map(str::to_string)
             },
@@ -96,9 +156,10 @@ pub fn document_source_graph(package: &OoxmlPackage) -> DocumentSourceGraph {
             SourcePart {
                 name: part.name.clone(),
                 byte_length: part.content.len(),
-                root: parsed.as_ref().ok().map(|doc| {
-                    element(doc.root_element(), format!("{document_id}/{}/0", part.name))
-                }),
+                root: parsed
+                    .as_ref()
+                    .ok()
+                    .map(|doc| element(doc.root(), format!("{document_id}/{}/0", part.name))),
                 error: parsed.err().map(|e| e.to_string()),
             }
         })
@@ -121,5 +182,6 @@ pub fn document_source_graph(package: &OoxmlPackage) -> DocumentSourceGraph {
         parts,
         assets,
         warnings: package.warnings.clone(),
+        preserved_features: preserved_features(package),
     }
 }

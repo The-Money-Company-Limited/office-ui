@@ -623,6 +623,7 @@ export interface DocModel {
   nodes: DocNode[];
   metadata: {
     documentId?: string;
+    sourcePartNames?: Record<string, string>;
     sourceParts: number;
     warnings: string[];
     documentPageCount?: number;

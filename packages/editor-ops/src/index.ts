@@ -16,6 +16,7 @@ import {
   cloneDocModel,
   cloneParagraphMarkFormatting,
   cloneParagraphNode,
+  cloneTableNode,
 } from "@extend-ai/react-docx-doc-model";
 
 export {
@@ -189,6 +190,10 @@ function cloneFormFieldRun(run: FormFieldRunNode): FormFieldRunNode {
 function cloneImageRun(run: ImageRunNode): ImageRunNode {
   return {
     type: "image",
+    blockId: run.blockId,
+    semanticKind: run.semanticKind,
+    mathMl: run.mathMl,
+    contentNodes: run.contentNodes?.map(node => node.type === "paragraph" ? cloneParagraphNode(node) : cloneTableNode(node)),
     src: run.src,
     alt: run.alt,
     widthPx: run.widthPx,

@@ -1,4 +1,5 @@
 import { defineConfig } from "tsup";
+import { copyFile } from "node:fs/promises";
 
 const bundledWorkspacePackages = [
   "@extend-ai/react-docx-doc-model",
@@ -26,5 +27,9 @@ export default defineConfig({
   },
   // Ship the wasm binary next to the bundles; the loader references it as
   // new URL("./docx_wasm_bg.wasm", import.meta.url).
-  onSuccess: "cp ../wasm/src/docx_wasm_bg.wasm dist/docx_wasm_bg.wasm && cp src/pretext-license.txt dist/pretext-license.txt"
+  onSuccess: async () => {
+    await copyFile("../wasm/src/docx_wasm_bg.wasm", "dist/docx_wasm_bg.wasm");
+    await copyFile("src/pretext-license.txt", "dist/pretext-license.txt");
+    await copyFile("../../crates/docx-core/third-party/dingbat-to-unicode-LICENSE", "dist/dingbat-to-unicode-LICENSE");
+  }
 });

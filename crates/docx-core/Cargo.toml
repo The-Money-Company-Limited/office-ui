@@ -3,6 +3,10 @@ name = "docx-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Shared native Rust and WebAssembly parsing for DOCX and legacy Word documents"
+repository = "https://github.com/extend-hq/react-docx"
+readme = "README.md"
+include = ["src/**", "examples/parse_blocks.rs", "README.md", "third-party/**", "LICENSE", "Cargo.toml"]
 
 [dependencies]
 serde.workspace = true

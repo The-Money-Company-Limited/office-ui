@@ -26,9 +26,14 @@ pub fn build_doc_model(pkg: &OoxmlPackage) -> DocModel {
     let normalized = super::namespaces::normalized_package(pkg);
     let pkg = &normalized;
     let mut warnings = pkg.warnings.clone();
+    warnings.extend(crate::source_graph::preserved_features(pkg).into_iter().map(|feature| {
+        format!("{}: {} occurrence(s) of {} have support level {}", feature.part_name, feature.occurrences, feature.feature, feature.support)
+    }));
+    let main_part = crate::package::main_document_part_name(pkg);
+    let source_part_names = ["footnotes", "endnotes", "comments"].into_iter().map(|kind| (kind.to_string(), crate::package::related_document_part_name(pkg, kind))).chain(std::iter::once(("document".into(), main_part.clone()))).collect();
     let document_xml = pkg
         .parts
-        .get("word/document.xml")
+        .get(&main_part)
         .map(|part| part.content.as_str());
     if document_xml.is_none() {
         warnings.push("Missing word/document.xml".to_string());
@@ -44,7 +49,7 @@ pub fn build_doc_model(pkg: &OoxmlPackage) -> DocModel {
     let content_types = parse_content_types(pkg);
     let style_sheet = parse_style_sheet(pkg);
     let numbering_definitions = parse_numbering_definitions(pkg, &content_types);
-    let document_relationships = parse_part_relationships(pkg, "word/document.xml");
+    let document_relationships = parse_part_relationships(pkg, &main_part);
 
     let context = ParseContext {
         relationships: document_relationships.clone(),
@@ -81,7 +86,7 @@ pub fn build_doc_model(pkg: &OoxmlPackage) -> DocModel {
     );
     let footnotes = parse_document_notes_from_part(
         pkg,
-        "word/footnotes.xml",
+        &crate::package::related_document_part_name(pkg, "footnotes"),
         "w:footnote",
         &content_types,
         &style_sheet,
@@ -89,7 +94,7 @@ pub fn build_doc_model(pkg: &OoxmlPackage) -> DocModel {
     );
     let endnotes = parse_document_notes_from_part(
         pkg,
-        "word/endnotes.xml",
+        &crate::package::related_document_part_name(pkg, "endnotes"),
         "w:endnote",
         &content_types,
         &style_sheet,
@@ -104,6 +109,7 @@ pub fn build_doc_model(pkg: &OoxmlPackage) -> DocModel {
         nodes,
         metadata: DocModelMetadata {
             document_id: None,
+            source_part_names: Some(source_part_names),
             source_parts: pkg.parts.len() as i64,
             warnings,
             document_page_count,
@@ -120,8 +126,8 @@ pub fn build_doc_model(pkg: &OoxmlPackage) -> DocModel {
                 .collect(),
             default_paragraph_style_id: style_sheet.default_paragraph_style_id.clone(),
             default_tab_stop_twips,
-            document_settings_imported: pkg.parts.contains_key("word/settings.xml").then_some(true),
-            line_spacing_compatibility_imported: pkg.parts.contains_key("word/settings.xml").then_some(true),
+            document_settings_imported: crate::package::related_document_part(pkg, "settings").is_some().then_some(true),
+            line_spacing_compatibility_imported: crate::package::related_document_part(pkg, "settings").is_some().then_some(true),
             numbering_definitions: numbering_definitions
                 .as_ref()
                 .map(clone_numbering_definitions),

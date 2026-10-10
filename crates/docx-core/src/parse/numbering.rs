@@ -78,7 +78,7 @@ pub fn parse_numbering_picture_bullet_definitions(
     content_types: &ContentTypeLookup,
 ) -> HashMap<i64, NumberingPictureBulletDefinition> {
     let mut picture_bullets = HashMap::new();
-    let numbering_relationships = parse_part_relationships(pkg, "word/numbering.xml");
+    let numbering_relationships = parse_part_relationships(pkg, &crate::package::related_document_part_name(pkg, "numbering"));
 
     for num_pic_bullet_xml in extract_balanced_tag_blocks(numbering_xml, "w:numPicBullet") {
         let num_pic_bullet_tag = find_tag_token(&num_pic_bullet_xml, "w:numPicBullet").unwrap_or_default();
@@ -242,7 +242,7 @@ pub fn parse_numbering_definitions(
     pkg: &OoxmlPackage,
     content_types: &ContentTypeLookup,
 ) -> Option<NumberingDefinitionSet> {
-    let numbering_xml = pkg.parts.get("word/numbering.xml")?.content.as_str();
+    let numbering_xml = crate::package::related_document_part(pkg, "numbering")?.content.as_str();
     let picture_bullets_by_id =
         parse_numbering_picture_bullet_definitions(pkg, numbering_xml, content_types);
 

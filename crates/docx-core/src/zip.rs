@@ -100,7 +100,7 @@ fn parse_central_directory(bytes: &[u8]) -> Result<Vec<ZipEntry>, String> {
     let mut cursor = central_directory_offset;
 
     for _ in 0..total_entries {
-        if read_u32_le(bytes, cursor) != ZIP_CENTRAL_DIRECTORY_SIGNATURE {
+        if cursor.checked_add(46).is_none_or(|end| end > bytes.len()) || read_u32_le(bytes, cursor) != ZIP_CENTRAL_DIRECTORY_SIGNATURE {
             return Err("Invalid DOCX ZIP: malformed central directory".to_string());
         }
 
@@ -113,6 +113,9 @@ fn parse_central_directory(bytes: &[u8]) -> Result<Vec<ZipEntry>, String> {
 
         let file_name_start = cursor + 46;
         let file_name_end = file_name_start + file_name_length;
+        if file_name_end.checked_add(extra_field_length + file_comment_length).is_none_or(|end| end > bytes.len()) {
+            return Err("Invalid DOCX ZIP: truncated directory entry".into());
+        }
         let name = String::from_utf8_lossy(&bytes[file_name_start..file_name_end]).into_owned();
 
         entries.push(ZipEntry {
@@ -137,7 +140,7 @@ fn inflate_raw(data: &[u8]) -> Result<Vec<u8>, String> {
 fn extract_entry_data(bytes: &[u8], entry: &ZipEntry) -> Result<Vec<u8>, String> {
     let local_header_offset = entry.local_header_offset as usize;
 
-    if read_u32_le(bytes, local_header_offset) != ZIP_LOCAL_FILE_HEADER_SIGNATURE {
+    if local_header_offset.checked_add(30).is_none_or(|end| end > bytes.len()) || read_u32_le(bytes, local_header_offset) != ZIP_LOCAL_FILE_HEADER_SIGNATURE {
         return Err(format!(
             "Invalid DOCX ZIP: bad local header for {}",
             entry.name
@@ -147,8 +150,8 @@ fn extract_entry_data(bytes: &[u8], entry: &ZipEntry) -> Result<Vec<u8>, String>
     let file_name_length = read_u16_le(bytes, local_header_offset + 26) as usize;
     let extra_field_length = read_u16_le(bytes, local_header_offset + 28) as usize;
     let payload_offset = local_header_offset + 30 + file_name_length + extra_field_length;
-    let payload_end = payload_offset + entry.compressed_size as usize;
-    let compressed_data = &bytes[payload_offset..payload_end];
+    let payload_end = payload_offset.checked_add(entry.compressed_size as usize).ok_or("Invalid DOCX ZIP: entry size overflow")?;
+    let compressed_data = bytes.get(payload_offset..payload_end).ok_or("Invalid DOCX ZIP: truncated entry")?;
 
     if entry.compression_method == STORE_COMPRESSION {
         return Ok(compressed_data.to_vec());
@@ -187,7 +190,9 @@ fn decode_xml_part(bytes: &[u8]) -> Result<String, String> {
         let body = &bytes[skip..];
         if body.len() % 2 != 0 { return Err("Invalid UTF-16 XML byte length".into()); }
         let units = body.chunks_exact(2).map(|pair| if big_endian { u16::from_be_bytes([pair[0], pair[1]]) } else { u16::from_le_bytes([pair[0], pair[1]]) }).collect::<Vec<_>>();
-        return String::from_utf16(&units).map_err(|error| format!("Invalid UTF-16 XML: {error}"));
+        let xml = String::from_utf16(&units).map_err(|error| format!("Invalid UTF-16 XML: {error}"))?;
+        let encoding = regex_lite::Regex::new(r#"(?i)encoding\s*=\s*["']UTF-16(?:LE|BE)?["']"#).unwrap();
+        return Ok(encoding.replace(&xml, "encoding=\"UTF-8\"").into_owned());
     }
     String::from_utf8(bytes.to_vec()).map_err(|error| format!("Invalid or unsupported XML encoding: {error}"))
 }
@@ -222,15 +227,12 @@ pub fn parse_docx(bytes: &[u8]) -> Result<OoxmlPackage, String> {
         binary_assets.insert(entry.name, file_bytes);
     }
 
-    if !parts.contains_key("word/document.xml") {
-        return Err("Invalid DOCX: missing word/document.xml".to_string());
+    let package = OoxmlPackage { parts, binary_assets, warnings: Vec::new() };
+    let main_part = crate::package::main_document_part_name(&package);
+    if !package.parts.contains_key(&main_part) {
+        return Err(format!("Invalid DOCX: missing {main_part}"));
     }
-
-    Ok(OoxmlPackage {
-        parts,
-        binary_assets,
-        warnings: Vec::new(),
-    })
+    Ok(package)
 }
 
 fn create_crc32_table() -> [u32; 256] {

@@ -61,3 +61,27 @@ pub fn with_part(pkg: &OoxmlPackage, part: OoxmlPart) -> OoxmlPackage {
         warnings: pkg.warnings.clone(),
     }
 }
+
+pub fn relationship_target(pkg: &OoxmlPackage, source: &str, kind: &str) -> Option<String> {
+    let rel_name = if source.is_empty() { "_rels/.rels".to_string() } else { crate::parse::relationship_part_name_for_part(source) };
+    let part = pkg.parts.get(&rel_name)?;
+    let xml = roxmltree::Document::parse(&part.content).ok()?;
+    let rel = xml.descendants().find(|node| node.is_element() && node.tag_name().name() == "Relationship"
+        && node.attribute("Type").is_some_and(|value| value.rsplit('/').next() == Some(kind))
+        && node.attribute("TargetMode") != Some("External"))?;
+    Some(crate::parse::resolve_part_path(source, rel.attribute("Target")?))
+}
+
+pub fn main_document_part_name(pkg: &OoxmlPackage) -> String {
+    relationship_target(pkg, "", "officeDocument").unwrap_or_else(|| "word/document.xml".into())
+}
+
+pub fn related_document_part_name(pkg: &OoxmlPackage, kind: &str) -> String {
+    relationship_target(pkg, &main_document_part_name(pkg), kind).unwrap_or_else(|| {
+        if kind == "theme" { "word/theme/theme1.xml".into() } else { format!("word/{kind}.xml") }
+    })
+}
+
+pub fn related_document_part<'a>(pkg: &'a OoxmlPackage, kind: &str) -> Option<&'a OoxmlPart> {
+    pkg.parts.get(&related_document_part_name(pkg, kind))
+}

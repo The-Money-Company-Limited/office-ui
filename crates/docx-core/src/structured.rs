@@ -59,6 +59,7 @@ pub struct DocumentBlock {
 #[serde(rename_all = "camelCase")]
 pub struct StructuredDocument {
     pub schema_version: u32,
+    pub parser_version: String,
     pub document_id: String,
     pub blocks: Vec<DocumentBlock>,
     pub warnings: Vec<String>,
@@ -84,6 +85,16 @@ pub fn package_identity(package: &OoxmlPackage) -> String {
         hash.update(bytes);
     }
     format!("{:x}", hash.finalize())
+}
+
+fn source_part(model: &DocModel, kind: &str) -> String {
+    model
+        .metadata
+        .source_part_names
+        .as_ref()
+        .and_then(|names| names.get(kind))
+        .cloned()
+        .unwrap_or_else(|| format!("word/{kind}.xml"))
 }
 
 pub fn assign_source_ids(model: &mut DocModel, document_id: &str) {
@@ -124,7 +135,11 @@ pub fn assign_source_ids(model: &mut DocModel, document_id: &str) {
     }
     model.metadata.document_id = Some(document_id.to_string());
     let root = format!("docx:{document_id}");
-    nodes(&mut model.nodes, &format!("{root}/word/document.xml/body"));
+    let main_part = source_part(model, "document");
+    let footnote_part = source_part(model, "footnotes");
+    let endnote_part = source_part(model, "endnotes");
+    let comment_part = source_part(model, "comments");
+    nodes(&mut model.nodes, &format!("{root}/{main_part}/body"));
     for header in &mut model.metadata.header_sections {
         nodes(&mut header.nodes, &format!("{root}/{}", header.part_name));
     }
@@ -139,16 +154,13 @@ pub fn assign_source_ids(model: &mut DocModel, document_id: &str) {
             nodes(&mut footer.nodes, &format!("{root}/{}", footer.part_name));
         }
     }
-    for (kind, notes) in [
-        ("footnote", &mut model.metadata.footnotes),
-        ("endnote", &mut model.metadata.endnotes),
+    for (kind, part, notes) in [
+        ("footnote", footnote_part, &mut model.metadata.footnotes),
+        ("endnote", endnote_part, &mut model.metadata.endnotes),
     ] {
         for note in notes.iter_mut().flatten() {
             if let Some(content) = &mut note.nodes {
-                nodes(
-                    content,
-                    &format!("{root}/word/{kind}s.xml/{kind}/{}", note.id),
-                );
+                nodes(content, &format!("{root}/{part}/{kind}/{}", note.id));
             }
         }
     }
@@ -156,7 +168,7 @@ pub fn assign_source_ids(model: &mut DocModel, document_id: &str) {
         if let Some(content) = &mut comment.nodes {
             nodes(
                 content,
-                &format!("{root}/word/comments.xml/comment/{}", comment.id),
+                &format!("{root}/{comment_part}/comment/{}", comment.id),
             );
         }
     }
@@ -196,6 +208,23 @@ impl Extractor {
             parent_block_id: parent.map(str::to_string),
             children,
         }
+    }
+
+    fn story_block(&self, nodes: &[DocNode], kind: BlockType) -> DocumentBlock {
+        let id = format!("docx:{}/{}/story", self.document_id, self.part_name);
+        let children = self.nodes(nodes, Some(&id));
+        let content = children
+            .iter()
+            .map(|b| b.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let refs = children
+            .iter()
+            .flat_map(|b| b.source_refs.clone())
+            .collect();
+        let mut block = self.block(id, kind, content, json!({"kind":"story"}), children, None);
+        block.source_refs = refs;
+        block
     }
 
     fn nodes(&self, nodes: &[DocNode], parent: Option<&str>) -> Vec<DocumentBlock> {
@@ -270,12 +299,14 @@ impl Extractor {
                             .map(|checked| if checked { "☒" } else { "☐" }.to_string())
                             .unwrap_or_default()
                     });
+                    let start = content.encode_utf16().count();
                     content.push_str(&value);
+                    inline.push(json!({"type":"form_field", "blockId":child_id, "start":start, "end":content.encode_utf16().count(), "text":value}));
                     children.push(self.block(
                         child_id,
                         BlockType::KeyValue,
                         value,
-                        json!({"kind":"form_field", "field":field}),
+                        json!({"type":"key_value_details", "kind":"form_field", "field":field}),
                         Vec::new(),
                         Some(id),
                     ));
@@ -288,6 +319,7 @@ impl Extractor {
                         _ => BlockType::Figure,
                     };
                     let image_id = image.block_id.as_deref().unwrap_or(&child_id);
+                    inline.push(json!({"type":"block", "blockId":image_id, "offset":content.encode_utf16().count()}));
                     let nested = image
                         .content_nodes
                         .as_ref()
@@ -306,17 +338,18 @@ impl Extractor {
                             .collect::<Vec<_>>()
                             .join("\n")
                     };
-                    children.push(self.block(image_id.to_string(), kind, text, json!({"kind":image.semantic_kind.as_deref().unwrap_or(if image.synthetic_text_box == Some(true) {"text_box"} else {"image"}), "asset":image.part_name, "alt":image.alt, "contentType":image.content_type, "width":image.width_px, "height":image.height_px, "floating":image.floating}), nested, Some(id)));
+                    children.push(self.block(image_id.to_string(), kind, text, json!({"kind":image.semantic_kind.as_deref().unwrap_or(if image.synthetic_text_box == Some(true) {"text_box"} else {"image"}), "mathMl":image.math_ml, "asset":image.part_name, "alt":image.alt, "contentType":image.content_type, "width":image.width_px, "height":image.height_px, "floating":image.floating}), nested, Some(id)));
                 }
             }
         }
-        self.block(id.to_string(), kind, content, json!({"kind":"paragraph", "styleId":style_id, "headingLevel":style.and_then(|s|s.heading_level), "numbering":style.and_then(|s|s.numbering.as_ref()), "inlines":inline, "fieldInstructions":field_instructions}), children, parent)
+        self.block(id.to_string(), kind, content, json!({"type":"text_details", "kind":"paragraph", "style":p.style, "styleId":style_id, "headingLevel":style.and_then(|s|s.heading_level), "numbering":style.and_then(|s|s.numbering.as_ref()), "inlines":inline, "fieldInstructions":field_instructions}), children, parent)
     }
 
     fn table(&self, table: &TableNode, fallback: &str, parent: Option<&str>) -> DocumentBlock {
         let id = table.block_id.as_deref().unwrap_or(fallback);
         let mut children = Vec::new();
         let mut row_text = Vec::new();
+        let mut column_count = 0;
         for (ri, row) in table.rows.iter().enumerate() {
             let row_id = format!("{id}/row/{ri}");
             let is_header = row
@@ -326,6 +359,7 @@ impl Extractor {
                 .unwrap_or(false);
             let mut cells = Vec::new();
             let mut cell_text = Vec::new();
+            let mut column_index = row.style.as_ref().and_then(|s| s.grid_before).unwrap_or(0);
             for (ci, cell) in row.cells.iter().enumerate() {
                 let cell_id = format!("{row_id}/cell/{ci}");
                 let content = cell
@@ -347,8 +381,15 @@ impl Extractor {
                     .collect::<Vec<_>>()
                     .join("\n");
                 cell_text.push(text.clone());
-                cells.push(self.block(cell_id, BlockType::TableCell, text, json!({"rowIndex":ri, "columnIndex":ci, "isHeader":is_header, "style":cell.style}), content, Some(if is_header { &row_id } else { id })));
+                cells.push(self.block(cell_id, BlockType::TableCell, text, json!({"type":"table_cell_details", "rowIndex":ri, "columnIndex":column_index, "cellIndex":ci, "columnSpan":cell.style.as_ref().and_then(|s|s.grid_span).unwrap_or(1), "rowSpan":cell.style.as_ref().and_then(|s|s.row_span).unwrap_or(1), "isHeader":is_header, "style":cell.style}), content, Some(if is_header { &row_id } else { id })));
+                column_index += cell
+                    .style
+                    .as_ref()
+                    .and_then(|s| s.grid_span)
+                    .unwrap_or(1)
+                    .max(1);
             }
+            column_count = column_count.max(column_index);
             let text = cell_text.join("\t");
             row_text.push(text.clone());
             if is_header {
@@ -368,11 +409,44 @@ impl Extractor {
             id.to_string(),
             BlockType::Table,
             row_text.join("\n"),
-            json!({"rowCount":table.rows.len()}),
+            json!({"type":"table_details", "rowCount":table.rows.len(), "columnCount":column_count}),
             children,
             parent,
         )
     }
+}
+
+fn without_empty_blocks(blocks: Vec<DocumentBlock>, parent: Option<&str>) -> Vec<DocumentBlock> {
+    blocks
+        .into_iter()
+        .flat_map(|mut block| {
+            block.children = without_empty_blocks(block.children, Some(&block.id));
+            block.parent_block_id = parent.map(str::to_string);
+            let has_text = block.content.chars().any(|c| {
+                !c.is_whitespace() && !matches!(c, '\u{200b}' | '\u{feff}' | '\u{00ad}')
+            });
+            let has_object = matches!(
+                block.r#type,
+                BlockType::Figure
+                    | BlockType::Formula
+                    | BlockType::Barcode
+                    | BlockType::Watermark
+                    | BlockType::KeyValue
+            );
+            if !has_text && !has_object {
+                if matches!(block.r#type, BlockType::Text) {
+                    for child in &mut block.children {
+                        child.parent_block_id = parent.map(str::to_string);
+                    }
+                    return block.children;
+                }
+                if block.children.is_empty() {
+                    return Vec::new();
+                }
+            }
+            vec![block]
+        })
+        .collect()
 }
 
 pub fn extract_document_blocks(model: &DocModel) -> StructuredDocument {
@@ -383,7 +457,7 @@ pub fn extract_document_blocks(model: &DocModel) -> StructuredDocument {
         .unwrap_or_else(|| "unsaved".into());
     let mut extractor = Extractor {
         document_id: document_id.clone(),
-        part_name: "word/document.xml".into(),
+        part_name: source_part(model, "document"),
         story: "body".into(),
     };
     let mut blocks = extractor.nodes(&model.nodes, None);
@@ -402,16 +476,7 @@ pub fn extract_document_blocks(model: &DocModel) -> StructuredDocument {
         }
         extractor.part_name = header.part_name.clone();
         extractor.story = "header".into();
-        blocks.extend(
-            extractor
-                .nodes(&header.nodes, None)
-                .into_iter()
-                .map(|mut b| {
-                    b.details["contentType"] = json!(b.r#type);
-                    b.r#type = BlockType::Header;
-                    b
-                }),
-        );
+        blocks.push(extractor.story_block(&header.nodes, BlockType::Header));
     }
     let footers = model.metadata.footer_sections.iter().chain(
         model
@@ -427,22 +492,13 @@ pub fn extract_document_blocks(model: &DocModel) -> StructuredDocument {
         }
         extractor.part_name = footer.part_name.clone();
         extractor.story = "footer".into();
-        blocks.extend(
-            extractor
-                .nodes(&footer.nodes, None)
-                .into_iter()
-                .map(|mut b| {
-                    b.details["contentType"] = json!(b.r#type);
-                    b.r#type = BlockType::Footer;
-                    b
-                }),
-        );
+        blocks.push(extractor.story_block(&footer.nodes, BlockType::Footer));
     }
     for (kind, notes) in [
         ("footnote", &model.metadata.footnotes),
         ("endnote", &model.metadata.endnotes),
     ] {
-        extractor.part_name = format!("word/{kind}s.xml");
+        extractor.part_name = source_part(model, &format!("{kind}s"));
         extractor.story = kind.into();
         for note in notes.iter().flatten() {
             if let Some(nodes) = &note.nodes {
@@ -450,7 +506,7 @@ pub fn extract_document_blocks(model: &DocModel) -> StructuredDocument {
             }
         }
     }
-    extractor.part_name = "word/comments.xml".into();
+    extractor.part_name = source_part(model, "comments");
     extractor.story = "comment".into();
     for comment in model.metadata.comments.iter().flatten() {
         if let Some(nodes) = &comment.nodes {
@@ -459,8 +515,9 @@ pub fn extract_document_blocks(model: &DocModel) -> StructuredDocument {
     }
     StructuredDocument {
         schema_version: 1,
+        parser_version: env!("CARGO_PKG_VERSION").into(),
         document_id,
-        blocks,
+        blocks: without_empty_blocks(blocks, None),
         warnings: model.metadata.warnings.clone(),
         geometry_status: "requires_layout".into(),
     }

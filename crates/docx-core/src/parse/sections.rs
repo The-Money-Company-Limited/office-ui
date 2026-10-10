@@ -333,16 +333,14 @@ pub fn parse_document_comments(
     content_types: &ContentTypeLookup,
     style_sheet: &ParsedStyleSheet,
 ) -> Vec<DocumentCommentDefinition> {
-    let Some(comments_xml) = pkg
-        .parts
-        .get("word/comments.xml")
+    let Some(comments_xml) = crate::package::related_document_part(pkg, "comments")
         .map(|part| part.content.as_str())
     else {
         return Vec::new();
     };
 
     let context = ParseContext {
-        relationships: parse_part_relationships(pkg, "word/comments.xml"),
+        relationships: parse_part_relationships(pkg, &crate::package::related_document_part_name(pkg, "comments")),
         content_types: content_types.clone(),
         parts: &pkg.parts,
         binary_assets: &pkg.binary_assets,

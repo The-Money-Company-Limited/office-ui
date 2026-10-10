@@ -94,6 +94,10 @@ export function normalizeDocModel(model: DocModel): DocModel {
         ...note,
         nodes: note.nodes?.map(normalizeDocNode)
       })),
+      comments: model.metadata.comments?.map((comment) => ({
+        ...comment,
+        nodes: comment.nodes?.map(normalizeDocNode)
+      })),
       endnotes: model.metadata.endnotes?.map((note) => ({
         ...note,
         nodes: note.nodes?.map(normalizeDocNode)

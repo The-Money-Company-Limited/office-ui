@@ -1469,6 +1469,8 @@ pub struct DocumentCompatibilitySettings {
 pub struct DocModelMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_part_names: Option<std::collections::BTreeMap<String, String>>,
     pub source_parts: i64,
     pub warnings: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

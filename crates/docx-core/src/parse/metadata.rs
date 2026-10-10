@@ -4,7 +4,7 @@ use super::colors::normalize_hex_color;
 use crate::xml::{extract_balanced_tag_blocks, get_attribute, parse_integer_attribute, parse_on_off_attribute};
 
 pub fn parse_document_default_tab_stop_twips(pkg: &OoxmlPackage) -> Option<i64> {
-    let settings_xml = pkg.parts.get("word/settings.xml")?.content.as_str();
+    let settings_xml = crate::package::related_document_part(pkg, "settings")?.content.as_str();
     let tab_stop_tag = super::scan::find_tag_token(settings_xml, "w:defaultTabStop")?;
     parse_integer_attribute(&tab_stop_tag, "w:val").filter(|value| *value >= 0)
 }
@@ -77,9 +77,7 @@ fn parse_first_on_off_setting(settings_xml: &str, tag_names: &[&str]) -> Option<
 pub fn parse_document_compatibility_settings(
     pkg: &OoxmlPackage,
 ) -> Option<DocumentCompatibilitySettings> {
-    let settings_xml = pkg
-        .parts
-        .get("word/settings.xml")
+    let settings_xml = crate::package::related_document_part(pkg, "settings")
         .map(|part| part.content.as_str())
         .unwrap_or("");
 
