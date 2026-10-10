@@ -156,8 +156,8 @@ describe("PITC0008189 ToC pagination debug", () => {
 
     expect(pages.length).toBeGreaterThan(0);
 
-    // The fallback estimate includes trailing spacing in its flow budget.
-    expect(pages.length).toBe(24);
+    // The fallback flow budget includes trailing spacing and suppresses before-spacing at page tops.
+    expect(pages.length).toBe(23);
     const tocEntryNodeIndexes = model.nodes
       .map((node, nodeIndex) => ({ node, nodeIndex }))
       .filter(

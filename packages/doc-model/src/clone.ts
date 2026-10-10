@@ -245,6 +245,10 @@ function cloneParagraph(paragraph: ParagraphNode): ParagraphNode {
 
       return {
         type: "image" as const,
+        blockId: child.blockId,
+        semanticKind: child.semanticKind,
+        mathMl: child.mathMl,
+        contentNodes: child.contentNodes?.map(cloneDocNode),
         src: child.src,
         alt: child.alt,
         widthPx: child.widthPx,
@@ -460,6 +464,7 @@ export function cloneDocModel(model: DocModel): DocModel {
   return {
     nodes: model.nodes.map(cloneDocNode),
     metadata: {
+      documentId: model.metadata.documentId,
       sourceParts: model.metadata.sourceParts,
       warnings: [...model.metadata.warnings],
       documentPageCount: model.metadata.documentPageCount,
@@ -516,7 +521,7 @@ export function cloneDocModel(model: DocModel): DocModel {
         ...note,
         nodes: note.nodes?.map(cloneDocNode),
       })),
-      comments: model.metadata.comments?.map((comment) => ({ ...comment })),
+      comments: model.metadata.comments?.map((comment) => ({ ...comment, nodes: comment.nodes?.map(cloneDocNode) })),
     },
   };
 }

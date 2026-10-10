@@ -1133,6 +1133,10 @@ pub fn parse_run_image_block(run_xml: &str, context: &ParseContext<'_>) -> Optio
             ));
             return Some(ImageRunNode {
                 r#type: ImageRunNodeType::Image,
+                block_id: None,
+                content_nodes: None,
+                semantic_kind: None,
+                math_ml: None,
                 src: Some(text_box_src),
                 alt: Some(alt.unwrap_or_else(|| "Text box".to_string())),
                 width_px,
@@ -1156,6 +1160,10 @@ pub fn parse_run_image_block(run_xml: &str, context: &ParseContext<'_>) -> Optio
     {
         return Some(ImageRunNode {
             r#type: ImageRunNodeType::Image,
+                block_id: None,
+                content_nodes: None,
+                semantic_kind: None,
+                math_ml: None,
             src: Some(svg_data_uri(standalone_shape_svg.as_deref().unwrap_or_default())),
             alt: Some(
                 alt.unwrap_or_else(|| {
@@ -1201,6 +1209,10 @@ pub fn parse_run_image_block(run_xml: &str, context: &ParseContext<'_>) -> Optio
         }) {
             return Some(ImageRunNode {
                 r#type: ImageRunNodeType::Image,
+                block_id: None,
+                content_nodes: None,
+                semantic_kind: None,
+                math_ml: None,
                 src: Some(chart_src),
                 alt: Some(alt.unwrap_or_else(|| "Chart".to_string())),
                 width_px,
@@ -1233,6 +1245,10 @@ pub fn parse_run_image_block(run_xml: &str, context: &ParseContext<'_>) -> Optio
         ));
         return Some(ImageRunNode {
             r#type: ImageRunNodeType::Image,
+                block_id: None,
+                content_nodes: None,
+                semantic_kind: None,
+                math_ml: None,
             src: Some(text_box_src),
             alt: Some(alt.unwrap_or_else(|| "Text box".to_string())),
             width_px,
@@ -1284,6 +1300,10 @@ pub fn parse_run_image_block(run_xml: &str, context: &ParseContext<'_>) -> Optio
 
     Some(ImageRunNode {
         r#type: ImageRunNodeType::Image,
+                block_id: None,
+                content_nodes: None,
+                semantic_kind: None,
+                math_ml: None,
         src,
         alt,
         width_px,

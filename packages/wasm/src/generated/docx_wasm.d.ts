@@ -5,6 +5,8 @@ export function build_doc_model_from_bytes(bytes: Uint8Array): any;
 
 export function build_doc_model_from_package(_package: any): string;
 
+export function extract_document_blocks_wasm(model_json: string): string;
+
 export function model_to_document_xml_from_json_wasm(model_json: string, base_package?: any | null): string;
 
 export function model_to_document_xml_wasm(model: any, base_package?: any | null): string;
@@ -23,6 +25,7 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly build_doc_model_from_bytes: (a: number, b: number, c: number) => void;
     readonly build_doc_model_from_package: (a: number, b: number) => void;
+    readonly extract_document_blocks_wasm: (a: number, b: number, c: number) => void;
     readonly model_to_document_xml_from_json_wasm: (a: number, b: number, c: number, d: number) => void;
     readonly model_to_document_xml_wasm: (a: number, b: number, c: number) => void;
     readonly package_to_array_buffer_wasm: (a: number, b: number) => void;

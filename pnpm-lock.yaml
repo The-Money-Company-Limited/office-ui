@@ -9,6 +9,11 @@ overrides:
   picomatch@>=4.0.0 <4.0.4: 4.0.4
   vite: 6.4.2
 
+patchedDependencies:
+  '@chenglou/pretext@0.0.8':
+    hash: 4bpai3ljegzxf3kheyn3xjnikm
+    path: patches/@chenglou__pretext@0.0.8.patch
+
 importers:
 
   .:
@@ -211,7 +216,7 @@ importers:
     dependencies:
       '@chenglou/pretext':
         specifier: ^0.0.8
-        version: 0.0.8
+        version: 0.0.8(patch_hash=4bpai3ljegzxf3kheyn3xjnikm)
       '@tanstack/react-virtual':
         specifier: ^3.13.12
         version: 3.13.19(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -4422,7 +4427,7 @@ snapshots:
       human-id: 4.1.3
       prettier: 2.8.8
 
-  '@chenglou/pretext@0.0.8': {}
+  '@chenglou/pretext@0.0.8(patch_hash=4bpai3ljegzxf3kheyn3xjnikm)': {}
 
   '@date-fns/tz@1.4.1': {}
 

@@ -157,6 +157,9 @@ pub fn merge_text_styles(styles: &[Option<TextStyle>]) -> Option<TextStyle> {
         right_to_left: None,
         complex_script: None,
         character_spacing_twips: None,
+        kerning_min_font_size_pt: None,
+        ligatures: None,
+        contextual_alternates: None,
         vertical_align: None,
         run_border: None,
     };
@@ -254,6 +257,15 @@ pub fn merge_text_styles(styles: &[Option<TextStyle>]) -> Option<TextStyle> {
         }
         if style.character_spacing_twips.is_some() {
             merged.character_spacing_twips = style.character_spacing_twips;
+        }
+        if style.kerning_min_font_size_pt.is_some() {
+            merged.kerning_min_font_size_pt = style.kerning_min_font_size_pt;
+        }
+        if style.ligatures.is_some() {
+            merged.ligatures = style.ligatures;
+        }
+        if style.contextual_alternates.is_some() {
+            merged.contextual_alternates = style.contextual_alternates;
         }
         if style.vertical_align.is_some() {
             merged.vertical_align = style.vertical_align;

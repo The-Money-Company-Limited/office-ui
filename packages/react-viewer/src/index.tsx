@@ -1090,6 +1090,7 @@ export {
 
 export * from "@extend-ai/react-docx-ooxml-core";
 export * from "@extend-ai/react-docx-doc-model";
+export * from "./block-geometry";
 export * from "@extend-ai/react-docx-editor-ops";
 export * from "@extend-ai/react-docx-layout-engine";
 export * from "@extend-ai/react-docx-layout-core";

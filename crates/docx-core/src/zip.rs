@@ -179,6 +179,19 @@ pub fn is_text_part(part_name: &str) -> bool {
     }
 }
 
+fn decode_xml_part(bytes: &[u8]) -> Result<String, String> {
+    let big_endian = bytes.starts_with(&[0xfe, 0xff]) || bytes.starts_with(&[0, b'<', 0, b'?']);
+    let little_endian = bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[b'<', 0, b'?', 0]);
+    if big_endian || little_endian {
+        let skip = if bytes.starts_with(&[0xfe, 0xff]) || bytes.starts_with(&[0xff, 0xfe]) { 2 } else { 0 };
+        let body = &bytes[skip..];
+        if body.len() % 2 != 0 { return Err("Invalid UTF-16 XML byte length".into()); }
+        let units = body.chunks_exact(2).map(|pair| if big_endian { u16::from_be_bytes([pair[0], pair[1]]) } else { u16::from_le_bytes([pair[0], pair[1]]) }).collect::<Vec<_>>();
+        return String::from_utf16(&units).map_err(|error| format!("Invalid UTF-16 XML: {error}"));
+    }
+    String::from_utf8(bytes.to_vec()).map_err(|error| format!("Invalid or unsupported XML encoding: {error}"))
+}
+
 pub fn parse_docx(bytes: &[u8]) -> Result<OoxmlPackage, String> {
     if bytes.is_empty() {
         return Err("DOCX input cannot be empty".to_string());
@@ -200,7 +213,7 @@ pub fn parse_docx(bytes: &[u8]) -> Result<OoxmlPackage, String> {
                 entry.name.clone(),
                 OoxmlPart {
                     name: entry.name,
-                    content: String::from_utf8_lossy(&file_bytes).into_owned(),
+                    content: decode_xml_part(&file_bytes)?,
                 },
             );
             continue;

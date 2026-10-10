@@ -576,6 +576,9 @@ pub fn parse_table(
                 if let Some(text_alignment) = condition.paragraph_text_alignment {
                     apply_text_alignment_to_table_cell_content(&mut cell.nodes, text_alignment, context);
                 }
+                if let Some(snap_to_grid) = condition.paragraph_snap_to_grid {
+                    apply_snap_to_grid_to_table_cell_content(&mut cell.nodes, snap_to_grid, context);
+                }
                 if let Some(paragraph_align) = condition.paragraph_align {
                     apply_paragraph_alignment_to_table_cell_content(&mut cell.nodes, paragraph_align);
                 }
@@ -614,6 +617,7 @@ pub fn parse_table(
         || resolved_table_borders.is_some();
     TableNode {
         r#type: TableNodeType::Table,
+                block_id: None,
         rows,
         style: if has_table_style {
             Some(TableStyle {
@@ -1046,6 +1050,8 @@ fn merge_table_conditional_style(
             .or(inherited.and_then(|i| i.paragraph_align)),
         paragraph_text_alignment: direct.and_then(|value| value.paragraph_text_alignment)
             .or_else(|| inherited.and_then(|value| value.paragraph_text_alignment)),
+        paragraph_snap_to_grid: direct.and_then(|value| value.paragraph_snap_to_grid)
+            .or_else(|| inherited.and_then(|value| value.paragraph_snap_to_grid)),
         run_style: merge_text_styles(&[
             inherited.and_then(|i| i.run_style.clone()),
             direct.and_then(|d| d.run_style.clone()),
@@ -1066,6 +1072,7 @@ fn merge_table_conditional_style(
         && merged.cell_preferred_width.is_none()
         && merged.paragraph_align.is_none()
         && merged.paragraph_text_alignment.is_none()
+        && merged.paragraph_snap_to_grid.is_none()
         && merged.run_style.is_none()
         && merged.table_borders.is_none()
         && merged.cell_borders.is_none()
@@ -1073,6 +1080,35 @@ fn merge_table_conditional_style(
         return None;
     }
     Some(merged)
+}
+
+fn apply_snap_to_grid_to_table_cell_content(
+    nodes: &mut [TableCellContentNode],
+    table_snap_to_grid: bool,
+    context: &crate::parse::context::ParseContext<'_>,
+) {
+    for node in nodes {
+        let TableCellContentNode::Paragraph(paragraph) = node else {
+            continue;
+        };
+        let properties = paragraph.source_xml.as_deref()
+            .and_then(|xml| direct_table_property(xml, "w:pPr"))
+            .unwrap_or_default();
+        let direct_property = direct_table_property(properties, "w:snapToGrid");
+        let direct = direct_property.and_then(|tag| crate::xml::parse_on_off_attribute(tag, "snapToGrid"));
+        let explicit_style = direct_table_property(properties, "w:pStyle")
+            .and_then(|tag| get_attribute(tag, "w:val"))
+            .and_then(|id| context.style_sheet.paragraph_style_by_id.get(&id))
+            .filter(|style| style.source_has_snap_to_grid != Some(false))
+            .and_then(|style| style.snap_to_grid);
+        let inherited = explicit_style.or(Some(table_snap_to_grid));
+        let style = paragraph.style.get_or_insert_with(Default::default);
+        style.snap_to_grid = direct.or(inherited);
+        style.source_snap_to_grid = style.snap_to_grid;
+        style.source_has_snap_to_grid = Some(direct_property.is_some());
+        style.source_inherited_snap_to_grid = inherited;
+        style.source_table_snap_to_grid = Some(table_snap_to_grid);
+    }
 }
 
 fn apply_text_alignment_to_table_cell_content(
@@ -1098,6 +1134,11 @@ fn apply_text_alignment_to_table_cell_content(
         let inherited = explicit_style.or(Some(table_alignment));
         let style = paragraph.style.get_or_insert(crate::model::ParagraphStyle {
             align: None,
+            snap_to_grid: None,
+            source_snap_to_grid: None,
+            source_has_snap_to_grid: None,
+            source_inherited_snap_to_grid: None,
+            source_table_snap_to_grid: None,
             text_alignment: None,
             source_text_alignment: None,
             source_has_text_alignment: None,
@@ -1152,6 +1193,11 @@ fn apply_paragraph_alignment_to_table_cell_content(
                 }
                 let style = paragraph.style.get_or_insert(crate::model::ParagraphStyle {
                     align: None,
+                    snap_to_grid: None,
+                    source_snap_to_grid: None,
+                    source_has_snap_to_grid: None,
+                    source_inherited_snap_to_grid: None,
+                    source_table_snap_to_grid: None,
                     text_alignment: None,
                     source_text_alignment: None,
                     source_has_text_alignment: None,

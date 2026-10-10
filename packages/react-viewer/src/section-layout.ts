@@ -283,7 +283,7 @@ export function parseSectionLayout(sectionPropertiesXml?: string): DocumentLayou
     docGridType === "lines" ||
     docGridType === "linesandchars" ||
     docGridType === "snaptochars"
-      ? twipsToPixels(readTwipsAttribute(docGridTag, "w:linePitch")) ??
+      ? sectionTwipsToPixels(readTwipsAttribute(docGridTag, "w:linePitch")) ??
         DEFAULT_DOCUMENT_LAYOUT.docGridLinePitchPx
       : DEFAULT_DOCUMENT_LAYOUT.docGridLinePitchPx;
 

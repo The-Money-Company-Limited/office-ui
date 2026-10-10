@@ -23,13 +23,14 @@ function normalizeParagraphChild(child: ParagraphChildNode): ParagraphChildNode 
 
   const image = child as ImageRunNode;
   const data = normalizeUint8Array(image.data);
-  if (data === image.data) {
+  if (data === image.data && !image.contentNodes) {
     return child;
   }
 
   return {
     ...image,
-    data
+    data,
+    contentNodes: image.contentNodes?.map(normalizeDocNode)
   };
 }
 

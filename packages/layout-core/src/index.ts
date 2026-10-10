@@ -14,6 +14,7 @@ import {
 } from "@extend-ai/react-docx-layout-engine";
 export * from "./pagination";
 export * from "./page-segmentation";
+export * from "./section-pagination";
 
 const DEFAULT_LAYOUT_OPTIONS: Required<LayoutOptions> = {
   pageWidth: 816,

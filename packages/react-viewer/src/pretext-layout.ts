@@ -9,6 +9,8 @@ import {
 } from "@chenglou/pretext";
 import { registerFontMetricCache } from "./font-metrics";
 import { canvasFontAdvanceScale } from "./font-advances";
+import type { FontKerningMode } from "./font-kerning";
+import { createDocxTextMeasurementContext, setCanvasFontFeatureSettings } from "./font-features";
 import {
   aggregateLineMetrics,
   type LineElementMetrics,
@@ -51,6 +53,8 @@ export interface PretextLayoutItem {
   break?: "normal" | "never";
   wordBreak?: PretextWordBreak;
   letterSpacingPx?: number;
+  fontKerning?: FontKerningMode;
+  fontFeatureSettings?: string;
   lineHeightPx?: number;
   strutFont?: string;
   verticalAlign?: "super" | "sub";
@@ -95,6 +99,8 @@ export interface PretextLineFragment {
   font?: string;
   strutFont?: string;
   letterSpacingPx?: number;
+  fontKerning?: FontKerningMode;
+  fontFeatureSettings?: string;
   lineHeightPx?: number;
   verticalAlign?: "super" | "sub";
   hasCustomVerticalMetrics?: boolean;
@@ -108,6 +114,43 @@ export interface PretextLineLayout {
   height?: number;
   ascent?: number;
   descent?: number;
+}
+
+/** Repositions baselines without changing line bands or fragment metrics. */
+export function withFixedLineBaseline(
+  layout: PretextVariableWidthLayout,
+  fallbackLineHeightPx: number,
+  baselineFraction: number
+): PretextVariableWidthLayout {
+  if (!Number.isFinite(baselineFraction) || baselineFraction < 0 || baselineFraction > 1) {
+    return layout;
+  }
+  const transformed = new WeakMap<PretextVariableWidthLayout, PretextVariableWidthLayout>();
+  const active = new WeakSet<PretextVariableWidthLayout>();
+  const transform = (source: PretextVariableWidthLayout): PretextVariableWidthLayout => {
+    const cached = transformed.get(source);
+    if (cached) return cached;
+    const result: PretextVariableWidthLayout = {
+      ...source,
+      lines: source.lines.map((line) => {
+        const heightPx = Number.isFinite(line.height)
+          ? line.height as number
+          : fallbackLineHeightPx;
+        if (!Number.isFinite(heightPx) || heightPx <= 0) return line;
+        const ascent = heightPx * baselineFraction;
+        return { ...line, ascent, descent: heightPx - ascent };
+      }),
+    };
+    transformed.set(source, result);
+    active.add(source);
+    if (source.unslicedLayout) {
+      if (active.has(source.unslicedLayout)) delete result.unslicedLayout;
+      else result.unslicedLayout = transform(source.unslicedLayout);
+    }
+    active.delete(source);
+    return result;
+  };
+  return transform(layout);
 }
 
 export type PretextCaretAffinity = "upstream" | "downstream";
@@ -140,7 +183,6 @@ export interface PretextSelectionRect {
   height: number;
 }
 
-let measureCanvas: OffscreenCanvas | HTMLCanvasElement | undefined;
 let measureCanvasContext:
   | OffscreenCanvasRenderingContext2D
   | CanvasRenderingContext2D
@@ -200,33 +242,19 @@ function getMeasureContext():
   | OffscreenCanvasRenderingContext2D
   | CanvasRenderingContext2D
   | undefined {
-  if (!canUsePretext()) {
-    return undefined;
+  if (!canUsePretext()) return undefined;
+  if (!measureCanvasContext) {
+    measureCanvasContext = createDocxTextMeasurementContext();
   }
-
-  if (measureCanvasContext) {
-    return measureCanvasContext ?? undefined;
-  }
-
-  if (typeof OffscreenCanvas !== "undefined") {
-    measureCanvas = new OffscreenCanvas(1, 1);
-    measureCanvasContext = measureCanvas.getContext("2d");
-    return measureCanvasContext ?? undefined;
-  }
-
-  if (typeof document !== "undefined") {
-    measureCanvas = document.createElement("canvas");
-    measureCanvasContext = measureCanvas.getContext("2d");
-    return measureCanvasContext ?? undefined;
-  }
-
-  return undefined;
+  return measureCanvasContext ?? undefined;
 }
 
 function measureTextWidthPx(
   font: string,
   text: string,
-  letterSpacingPx = 0
+  letterSpacingPx = 0,
+  fontKerning: FontKerningMode = "auto",
+  fontFeatureSettings?: string
 ): number {
   if (!text) {
     return 0;
@@ -237,7 +265,9 @@ function measureTextWidthPx(
     return 0;
   }
 
+  setCanvasFontFeatureSettings(context, fontFeatureSettings);
   context.font = font;
+  if ("fontKerning" in context) context.fontKerning = fontKerning;
   const advanceScale = canvasFontAdvanceScale(context, font);
   const spacingAdvance =
     Math.max(0, graphemeCodeUnitOffsets(text).length - 1) * letterSpacingPx;
@@ -361,6 +391,7 @@ function fontLineMetrics(
   const context = getMeasureContext();
   let metrics: LineElementMetrics = { ascent: lineHeightPx, descent: 0 };
   if (context) {
+    setCanvasFontFeatureSettings(context);
     context.font = font;
     const measured = context.measureText(" ");
     const ascent = measured.fontBoundingBoxAscent;
@@ -392,6 +423,7 @@ export function measureFontNaturalLineHeightPx(font: string): number | undefined
   if (!metrics) {
     const context = getMeasureContext();
     if (context) {
+      setCanvasFontFeatureSettings(context);
       context.font = font;
       const measured = context.measureText(" ");
       if (
@@ -652,7 +684,9 @@ function measureOffsetWidthPx(
   font: string,
   text: string,
   offset: number,
-  letterSpacingPx = 0
+  letterSpacingPx = 0,
+  fontKerning: FontKerningMode = "auto",
+  fontFeatureSettings?: string
 ): number {
   if (offset <= 0 || !text) {
     return 0;
@@ -661,7 +695,9 @@ function measureOffsetWidthPx(
   return measureTextWidthPx(
     font,
     text.slice(0, Math.max(0, Math.min(offset, text.length))),
-    letterSpacingPx
+    letterSpacingPx,
+    fontKerning,
+    fontFeatureSettings
   );
 }
 
@@ -826,7 +862,9 @@ function cachedFragmentOffsetAdvances(
           fragment.font ?? defaultFont,
           fragment.text,
           localOffset,
-          fragment.letterSpacingPx
+          fragment.letterSpacingPx,
+          fragment.fontKerning,
+          fragment.fontFeatureSettings
         );
   }
   advances[fragment.text.length] = fragment.width;
@@ -893,13 +931,15 @@ function prepareCached(
   text: string,
   font: string,
   wordBreak: PretextWordBreak = "normal",
-  letterSpacingPx = 0
+  letterSpacingPx = 0,
+  fontKerning: FontKerningMode = "auto",
+  fontFeatureSettings?: string
 ): PreparedTextWithSegments | undefined {
   if (!canUsePretext()) {
     return undefined;
   }
 
-  const cacheKey = `${font}\u0000${wordBreak}\u0000${letterSpacingPx}\u0000${text}`;
+  const cacheKey = `${font}\u0000${fontKerning}\u0000${fontFeatureSettings ?? ""}\u0000${wordBreak}\u0000${letterSpacingPx}\u0000${text}`;
   const cached = getCachedValue(preparedTextByKey, cacheKey);
   if (cached) {
     return cached;
@@ -907,11 +947,15 @@ function prepareCached(
 
   try {
     const context = getMeasureContext();
+    if (context) setCanvasFontFeatureSettings(context, fontFeatureSettings);
+    if (context && "fontKerning" in context) context.fontKerning = fontKerning;
     const advanceScale = context ? canvasFontAdvanceScale(context, font) : 1;
     const prepared = prepareWithSegments(text, font, {
       whiteSpace: "pre-wrap",
       wordBreak,
       letterSpacing: letterSpacingPx / advanceScale,
+      fontKerning,
+      fontFeatureSettings,
     });
     let sourceOffset = 0;
     const sourceOffsets = prepared.segments.map((segment, index) => {
@@ -967,6 +1011,8 @@ export function measurePretextPlainTextLineCount(
   options?: {
     wordBreak?: PretextWordBreak;
     letterSpacingPx?: number;
+    fontKerning?: FontKerningMode;
+    fontFeatureSettings?: string;
   }
 ): number | undefined {
   if (!text) {
@@ -975,16 +1021,18 @@ export function measurePretextPlainTextLineCount(
 
   const wordBreak = options?.wordBreak ?? "normal";
   const letterSpacingPx = options?.letterSpacingPx ?? 0;
+  const fontKerning = options?.fontKerning ?? "auto";
+  const fontFeatureSettings = options?.fontFeatureSettings;
   const safeWidth = Math.max(1, containerWidthPx);
   const cacheKey =
-    `line-count\u0000${font}\u0000${wordBreak}\u0000${letterSpacingPx}` +
+    `line-count\u0000${font}\u0000${wordBreak}\u0000${letterSpacingPx}\u0000${fontKerning}\u0000${fontFeatureSettings ?? ""}` +
     `\u0000${safeWidth}\u0000${text}`;
   const cached = getCachedValue(lineCountByKey, cacheKey);
   if (cached !== undefined) {
     return cached;
   }
 
-  const prepared = prepareCached(text, font, wordBreak, letterSpacingPx);
+  const prepared = prepareCached(text, font, wordBreak, letterSpacingPx, fontKerning, fontFeatureSettings);
   if (!prepared) {
     return undefined;
   }
@@ -1059,7 +1107,7 @@ function richTextLexicalSpans(
   items: PretextLayoutItem[]
 ): PretextLexicalSpan[] {
   if (items.length < 2 || !items[0]) return [];
-  const prepared = prepareCached(text, items[0].font, items[0].wordBreak);
+  const prepared = prepareCached(text, items[0].font, items[0].wordBreak, 0, items[0].fontKerning, items[0].fontFeatureSettings);
   if (!prepared) return [];
   const sourceOffsets = sourceOffsetsByPreparedText.get(prepared);
   if (!sourceOffsets && prepared.segments.join("") !== text) return [];
@@ -1196,7 +1244,7 @@ function rollbackRichLineToLegalBreak(
       ...fragment,
       text,
       end: trimmedEnd,
-      width: measureTextWidthPx(item.font, text, item.letterSpacingPx),
+      width: measureTextWidthPx(item.font, text, item.letterSpacingPx, item.fontKerning, item.fontFeatureSettings),
     });
     end = { itemIndex: fragment.itemIndex, ...trimmedEnd };
     break;
@@ -1527,6 +1575,44 @@ function joinSplitCarriageReturns(items: PretextLayoutItem[]): PretextLayoutItem
   return result;
 }
 
+
+function joinContiguousShapingItems(items: PretextLayoutItem[]): PretextLayoutItem[] {
+  const joined: PretextLayoutItem[] = [];
+  let changed = false;
+  for (const item of items) {
+    const previous = joined[joined.length - 1];
+    if (
+      previous &&
+      previous.text.length > 0 && item.text.length > 0 &&
+      previous.endOffset === item.startOffset &&
+      previous.endOffset - previous.startOffset === previous.text.length &&
+      item.endOffset - item.startOffset === item.text.length &&
+      previous.break !== "never" && item.break !== "never" &&
+      previous.widthPx === undefined && item.widthPx === undefined &&
+      previous.font === item.font &&
+      previous.wordBreak === item.wordBreak &&
+      previous.letterSpacingPx === item.letterSpacingPx &&
+      previous.fontKerning === item.fontKerning &&
+      previous.fontFeatureSettings === item.fontFeatureSettings &&
+      previous.lineHeightPx === item.lineHeightPx &&
+      previous.strutFont === item.strutFont &&
+      previous.verticalAlign === item.verticalAlign &&
+      previous.verticalMetrics?.ascent === item.verticalMetrics?.ascent &&
+      previous.verticalMetrics?.descent === item.verticalMetrics?.descent
+    ) {
+      joined[joined.length - 1] = {
+        ...previous,
+        text: previous.text + item.text,
+        endOffset: item.endOffset,
+      };
+      changed = true;
+    } else {
+      joined.push(item);
+    }
+  }
+  return changed ? joined : items;
+}
+
 function cursorSplitsLeadingBreakableSegment(
   prepared: PreparedTextWithSegments,
   start: LayoutCursor,
@@ -1643,6 +1729,24 @@ function rowWidthsAtY(
   return intervals.filter((interval) => interval.width > 0.5);
 }
 
+export function resolveNextUnblockedFullWidthLineTopPx(
+  rowTopPx: number,
+  lineHeightPx: number,
+  containerWidthPx: number,
+  exclusions: PretextExclusionRect[]
+): number {
+  let topPx = rowTopPx;
+  while (rowWidthsAtY(containerWidthPx, lineHeightPx, topPx, exclusions).length === 0) {
+    const nextEdgePx = Math.min(
+      ...exclusions.flatMap((exclusion) => [exclusion.top, exclusion.bottom])
+        .filter((edgePx) => Number.isFinite(edgePx) && edgePx > topPx)
+    );
+    if (!Number.isFinite(nextEdgePx)) break;
+    topPx = nextEdgePx;
+  }
+  return topPx;
+}
+
 export function layoutTextWithPretextAroundExclusions(
   text: string,
   font: string,
@@ -1652,6 +1756,8 @@ export function layoutTextWithPretextAroundExclusions(
   options?: PretextParagraphLineOptions & {
     wordBreak?: PretextWordBreak;
     letterSpacingPx?: number;
+    fontKerning?: FontKerningMode;
+    fontFeatureSettings?: string;
   }
 ): PretextVariableWidthLayout | undefined {
   if (!text) {
@@ -1685,7 +1791,9 @@ export function layoutTextWithPretextAroundExclusions(
 
   const wordBreak = options?.wordBreak ?? "normal";
   const letterSpacingPx = options?.letterSpacingPx ?? 0;
-  const prepared = prepareCached(text, font, wordBreak, letterSpacingPx);
+  const fontKerning = options?.fontKerning ?? "auto";
+  const fontFeatureSettings = options?.fontFeatureSettings;
+  const prepared = prepareCached(text, font, wordBreak, letterSpacingPx, fontKerning, fontFeatureSettings);
   if (!prepared) {
     return undefined;
   }
@@ -1699,7 +1807,7 @@ export function layoutTextWithPretextAroundExclusions(
     bottom: exclusion.bottom,
   }));
   const cacheKey = layoutCacheKey(
-    `plain\u0000${font}\u0000${wordBreak}\u0000${letterSpacingPx}\u0000${options?.exactLineHeight === true}\u0000${endingMarkCacheKey(options?.endingMark)}\u0000${text}`,
+    `plain\u0000${font}\u0000${fontKerning}\u0000${fontFeatureSettings ?? ""}\u0000${wordBreak}\u0000${letterSpacingPx}\u0000${options?.exactLineHeight === true}\u0000${endingMarkCacheKey(options?.endingMark)}\u0000${text}`,
     safeContainerWidthPx,
     safeLineHeightPx,
     normalizedExclusions
@@ -1771,6 +1879,8 @@ export function layoutTextWithPretextAroundExclusions(
           ),
           font,
           letterSpacingPx,
+          fontKerning,
+          fontFeatureSettings,
           lineHeightPx: safeLineHeightPx,
           ...fontLineMetrics(font, safeLineHeightPx),
         });
@@ -1869,13 +1979,15 @@ export function layoutItemsWithPretextAroundExclusions(
     return undefined;
   }
 
-  items = joinSplitCarriageReturns(items);
+  items = joinContiguousShapingItems(joinSplitCarriageReturns(items));
   const preparedItems = items.map((item) =>
     prepareCached(
       item.text,
       item.font,
       item.wordBreak ?? "normal",
-      item.letterSpacingPx
+      item.letterSpacingPx,
+      item.fontKerning,
+      item.fontFeatureSettings
     )
   );
   if (
@@ -1899,7 +2011,7 @@ export function layoutItemsWithPretextAroundExclusions(
       (item) =>
         `${item.font}\u0001${item.break ?? "normal"}\u0001${
           item.wordBreak ?? "normal"
-        }\u0001${item.letterSpacingPx ?? 0}\u0001${
+        }\u0001${item.letterSpacingPx ?? 0}\u0001${item.fontKerning ?? "auto"}\u0001${item.fontFeatureSettings ?? ""}\u0001${
           item.lineHeightPx ?? ""
         }\u0001${item.strutFont ?? ""}\u0001${item.verticalAlign ?? ""}\u0001${
           item.widthPx ?? ""
@@ -2016,6 +2128,8 @@ export function layoutItemsWithPretextAroundExclusions(
           font: lineFragment.font,
           strutFont: item.strutFont,
           letterSpacingPx: item.letterSpacingPx,
+          fontKerning: item.fontKerning,
+          fontFeatureSettings: item.fontFeatureSettings,
           lineHeightPx: item.lineHeightPx ?? safeLineHeightPx,
           verticalAlign: item.verticalAlign,
           hasCustomVerticalMetrics: item.verticalMetrics !== undefined,

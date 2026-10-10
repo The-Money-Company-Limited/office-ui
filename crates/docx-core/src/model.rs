@@ -106,6 +106,72 @@ pub enum VerticalAlign {
     Subscript,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextLigatures {
+    None,
+    Standard,
+    Contextual,
+    Historical,
+    Discretional,
+    StandardContextual,
+    StandardHistorical,
+    ContextualHistorical,
+    StandardDiscretional,
+    ContextualDiscretional,
+    HistoricalDiscretional,
+    StandardContextualHistorical,
+    StandardContextualDiscretional,
+    StandardHistoricalDiscretional,
+    ContextualHistoricalDiscretional,
+    All,
+}
+
+impl TextLigatures {
+    pub fn from_xml_value(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(Self::None),
+            "standard" => Some(Self::Standard),
+            "contextual" => Some(Self::Contextual),
+            "historical" => Some(Self::Historical),
+            "discretional" => Some(Self::Discretional),
+            "standardContextual" => Some(Self::StandardContextual),
+            "standardHistorical" => Some(Self::StandardHistorical),
+            "contextualHistorical" => Some(Self::ContextualHistorical),
+            "standardDiscretional" => Some(Self::StandardDiscretional),
+            "contextualDiscretional" => Some(Self::ContextualDiscretional),
+            "historicalDiscretional" => Some(Self::HistoricalDiscretional),
+            "standardContextualHistorical" => Some(Self::StandardContextualHistorical),
+            "standardContextualDiscretional" => Some(Self::StandardContextualDiscretional),
+            "standardHistoricalDiscretional" => Some(Self::StandardHistoricalDiscretional),
+            "contextualHistoricalDiscretional" => Some(Self::ContextualHistoricalDiscretional),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+
+    pub fn xml_value(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Standard => "standard",
+            Self::Contextual => "contextual",
+            Self::Historical => "historical",
+            Self::Discretional => "discretional",
+            Self::StandardContextual => "standardContextual",
+            Self::StandardHistorical => "standardHistorical",
+            Self::ContextualHistorical => "contextualHistorical",
+            Self::StandardDiscretional => "standardDiscretional",
+            Self::ContextualDiscretional => "contextualDiscretional",
+            Self::HistoricalDiscretional => "historicalDiscretional",
+            Self::StandardContextualHistorical => "standardContextualHistorical",
+            Self::StandardContextualDiscretional => "standardContextualDiscretional",
+            Self::StandardHistoricalDiscretional => "standardHistoricalDiscretional",
+            Self::ContextualHistoricalDiscretional => "contextualHistoricalDiscretional",
+            Self::All => "all",
+        }
+    }
+}
+
 /// Mirrors TypeScript `TextStyle`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -176,6 +242,12 @@ pub struct TextStyle {
     pub complex_script: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub character_spacing_twips: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kerning_min_font_size_pt: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ligatures: Option<TextLigatures>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contextual_alternates: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vertical_align: Option<VerticalAlign>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -325,6 +397,14 @@ pub struct ImageFloating {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageRunNode {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub math_ml: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_nodes: Option<Vec<DocNode>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_id: Option<String>,
     #[serde(default = "default_image_run_type", rename = "type")]
     pub r#type: ImageRunNodeType,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -676,11 +756,21 @@ pub enum ParagraphTextAlignment {
 }
 
 /// Mirrors TypeScript `ParagraphStyle`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParagraphStyle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub align: Option<ParagraphAlignment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snap_to_grid: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_snap_to_grid: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_has_snap_to_grid: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_inherited_snap_to_grid: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_table_snap_to_grid: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_alignment: Option<ParagraphTextAlignment>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -757,6 +847,8 @@ pub struct ParagraphMarkFormattingSource {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParagraphNode {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_id: Option<String>,
     #[serde(default = "default_paragraph_node_type", rename = "type")]
     pub r#type: ParagraphNodeType,
     pub children: Vec<ParagraphChildNode>,
@@ -1090,6 +1182,8 @@ pub struct TableSourceTextPatch {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableNode {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_id: Option<String>,
     #[serde(default = "default_table_node_type", rename = "type")]
     pub r#type: TableNodeType,
     pub rows: Vec<TableRowNode>,
@@ -1159,6 +1253,10 @@ pub struct ParagraphStyleDefinition {
     pub next_style_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub align: Option<ParagraphAlignment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snap_to_grid: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_has_snap_to_grid: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_alignment: Option<ParagraphTextAlignment>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1303,6 +1401,8 @@ pub struct DocumentNoteDefinition {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentCommentDefinition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nodes: Option<Vec<DocNode>>,
     pub id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
@@ -1332,6 +1432,8 @@ pub struct DocumentCommentDefinition {
 #[serde(rename_all = "camelCase")]
 pub struct DocumentCompatibilitySettings {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjust_line_height_in_table: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub no_leading: Option<bool>,
     #[serde(rename = "suppressTopSpacingWP", skip_serializing_if = "Option::is_none")]
     pub suppress_top_spacing_wp: Option<bool>,
@@ -1345,6 +1447,8 @@ pub struct DocumentCompatibilitySettings {
     pub suppress_bottom_spacing: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compatibility_mode: Option<i64>,
+    #[serde(rename = "enableOpenTypeFeatures", skip_serializing_if = "Option::is_none")]
+    pub enable_open_type_features: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suppress_spacing_before_after_page_break: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1363,6 +1467,8 @@ pub struct DocumentCompatibilitySettings {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocModelMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<String>,
     pub source_parts: i64,
     pub warnings: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

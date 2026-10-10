@@ -66,6 +66,7 @@ pub fn parse_document_xml(document_xml: &str, context: &ParseContext<'_>) -> Vec
     if nodes.is_empty() {
         nodes.push(DocNode::Paragraph(ParagraphNode {
             r#type: ParagraphNodeType::Paragraph,
+                block_id: None,
             children: vec![ParagraphChildNode::Text(TextRunNode {
                 r#type: TextRunNodeType::Text,
                 text: String::new(),

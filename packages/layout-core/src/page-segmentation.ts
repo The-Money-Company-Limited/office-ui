@@ -11,10 +11,13 @@ import {
   paragraphBeforeSpacingPx,
   paragraphStartsWithLastRenderedPageBreak,
   paragraphHasPageBreakBefore,
+  resolveDocumentSectionsFromMetadata,
+  sectionBreakPropertiesStartNewPage,
   resolvePaginationSectionMetricsIndexForNodeIndex,
   resolveParagraphBeforeSpacingPx,
   type PaginationSectionMetrics
 } from "./pagination";
+import { createSectionPageNumberTracker, createSectionParityBlankPage } from "./section-pagination";
 
 export const DEFAULT_PAGE_OVERFLOW_TOLERANCE_PX = 2;
 export const DEFAULT_MIN_PARAGRAPH_LINE_HEIGHT_PX = 14;
@@ -42,6 +45,22 @@ export interface DocumentPageNodeSegment {
   nodeIndex: number;
   tableRowRange?: TableRowRange;
   paragraphLineRange?: ParagraphLineRange;
+  paragraphBeforeSpacingPx?: number;
+}
+
+export type PaginationPageStartReason =
+  | "initial"
+  | "overflow"
+  | "paragraph-break"
+  | "manual-break"
+  | "section";
+
+export function suppressParagraphBeforeSpacingAtPageStart(
+  reason: PaginationPageStartReason,
+  compatibilityMode?: number
+): boolean {
+  return reason === "overflow" || reason === "paragraph-break" ||
+    (reason === "manual-break" && (compatibilityMode ?? 0) >= 15);
 }
 
 export interface LetterheadColumnSegmentGroup {
@@ -695,6 +714,7 @@ export function buildDocumentPageNodeSegments(
 
   const pages: DocumentPageNodeSegment[][] = [];
   let currentPageSegments: DocumentPageNodeSegment[] = [];
+  const sectionPageNumbers = createSectionPageNumberTracker(model.metadata);
   const hardBreakStartNodeIndexes = collectDocxHardPageBreakStartNodeIndexes(model);
   const estimatedRowHeightsByTableNodeIndex = new Map<number, number[]>();
   const allowParagraphLineSplitting = options?.allowParagraphLineSplitting ?? true;
@@ -715,13 +735,21 @@ export function buildDocumentPageNodeSegments(
     return Math.max(120, Math.round(fallbackHeightPx));
   };
 
+  const sectionStartNodeIndexes = new Set(
+    resolveDocumentSectionsFromMetadata(model.metadata).slice(1)
+      .filter((section) => section.sectionPropertiesXml && sectionBreakPropertiesStartNewPage(section.sectionPropertiesXml))
+      .map((section) => section.startNodeIndex)
+  );
+  let pageStartReason: PaginationPageStartReason = "initial";
   let currentPageIndex = 0;
-  const startNextPage = (): void => {
+  const startNextPage = (reason: PaginationPageStartReason = "overflow"): void => {
     if (currentPageSegments.length > 0) {
       pages.push(currentPageSegments);
+      sectionPageNumbers.advancePage();
+      currentPageIndex += 1;
     }
     currentPageSegments = [];
-    currentPageIndex += 1;
+    pageStartReason = reason;
   };
 
   if (!Number.isFinite(pageContentHeightPx) || pageContentHeightPx <= 0) {
@@ -750,13 +778,26 @@ export function buildDocumentPageNodeSegments(
     const nodeMetrics = metricsBySection[currentMetricsIndex] ?? fallbackMetrics;
 
     if (hardBreakStartNodeIndexes.has(nodeIndex) && currentPageSegments.length > 0) {
-      startNextPage();
+      const breakNode = model.nodes[nodeIndex];
+      startNextPage(sectionStartNodeIndexes.has(nodeIndex)
+        ? "section"
+        : breakNode.type === "paragraph" && paragraphHasPageBreakBefore(breakNode)
+        ? "paragraph-break"
+        : "manual-break");
       pageConsumedHeightPx = 0;
       previousParagraphAfterPx = 0;
       currentPageContentHeightPx = resolvePageContentHeightPx(
         currentPageIndex,
         nodeMetrics.pageContentHeightPx
       );
+    }
+
+    if (sectionPageNumbers.startSection(nodeIndex, currentPageSegments.length === 0, pages.length > 0)) {
+      pages.push(createSectionParityBlankPage<DocumentPageNodeSegment>());
+      currentPageIndex += 1;
+      pageConsumedHeightPx = 0;
+      previousParagraphAfterPx = 0;
+      currentPageContentHeightPx = resolvePageContentHeightPx(currentPageIndex, nodeMetrics.pageContentHeightPx);
     }
 
     const node = model.nodes[nodeIndex];
@@ -794,7 +835,23 @@ export function buildDocumentPageNodeSegments(
         );
       }
 
-      const rawNodeHeightPx = Math.max(
+      const directBeforeSpacingPx = paragraphBeforeSpacingPx(node);
+      const currentParagraphBeforeSpacingPx = (): number =>
+        pageConsumedHeightPx <= 0 && suppressParagraphBeforeSpacingAtPageStart(
+          pageStartReason, model.metadata.compatibility?.compatibilityMode
+        )
+          ? 0
+          : resolveParagraphBeforeSpacingPx(
+              model, nodeIndex, node, pageConsumedHeightPx, suppressSpacingBeforeAfterPageBreak
+            );
+      const paragraphBeforeSpacingOverride = (): Pick<DocumentPageNodeSegment, "paragraphBeforeSpacingPx"> => {
+        const currentBeforeSpacingPx = currentParagraphBeforeSpacingPx();
+        return pageConsumedHeightPx <= 0 && currentBeforeSpacingPx !== directBeforeSpacingPx
+          ? { paragraphBeforeSpacingPx: currentBeforeSpacingPx }
+          : {};
+      };
+      let beforeSpacingPx = currentParagraphBeforeSpacingPx();
+      let rawNodeHeightPx = Math.max(
         1,
         normalizedPositivePixelValue(
           callbacks.estimateParagraphHeightPx(
@@ -804,13 +861,13 @@ export function buildDocumentPageNodeSegments(
             nodeMetrics.docGridLinePitchPx
           ),
           1
-        )
+        ) - directBeforeSpacingPx + beforeSpacingPx
       );
-      const paragraphTooTallForSinglePage =
+      let paragraphTooTallForSinglePage =
         rawNodeHeightPx > nodeMetrics.pageContentHeightPx + pageOverflowTolerancePx;
-      const keepLinesOverflowSplit =
+      let keepLinesOverflowSplit =
         node.style?.keepLines === true && paragraphTooTallForSinglePage;
-      const keepNextOverflowSplit =
+      let keepNextOverflowSplit =
         node.style?.keepNext === true && paragraphTooTallForSinglePage;
       const forceOverflowSplit = keepLinesOverflowSplit || keepNextOverflowSplit;
       const nodeIsWithinCommittedKeepNextChain =
@@ -828,15 +885,15 @@ export function buildDocumentPageNodeSegments(
           currentPageIndex,
           nodeMetrics.pageContentHeightPx
         );
+        const pageTopBeforeSpacingPx = currentParagraphBeforeSpacingPx();
+        rawNodeHeightPx += pageTopBeforeSpacingPx - beforeSpacingPx;
+        beforeSpacingPx = pageTopBeforeSpacingPx;
+        paragraphTooTallForSinglePage = rawNodeHeightPx >
+          nodeMetrics.pageContentHeightPx + pageOverflowTolerancePx;
+        keepLinesOverflowSplit = node.style?.keepLines === true && paragraphTooTallForSinglePage;
+        keepNextOverflowSplit = node.style?.keepNext === true && paragraphTooTallForSinglePage;
       }
 
-      const beforeSpacingPx = resolveParagraphBeforeSpacingPx(
-        model,
-        nodeIndex,
-        node,
-        pageConsumedHeightPx,
-        suppressSpacingBeforeAfterPageBreak
-      );
       const afterSpacingPx = paragraphAfterSpacingPx(node);
       const collapsedMarginPx =
         pageConsumedHeightPx > 0 ? Math.min(previousParagraphAfterPx, beforeSpacingPx) : 0;
@@ -876,7 +933,7 @@ export function buildDocumentPageNodeSegments(
           const topSpacingPx = isFirstSegment
             ? pageConsumedHeightPx > 0
               ? Math.max(0, beforeSpacingPx - collapsedMarginPx)
-              : beforeSpacingPx
+              : currentParagraphBeforeSpacingPx()
             : 0;
           const remainingHeightPx = Math.max(0, currentPageContentHeightPx - pageConsumedHeightPx);
           const allRemainingSegmentReservePx = resolveParagraphSegmentNonFlowReservePx({
@@ -891,6 +948,7 @@ export function buildDocumentPageNodeSegments(
           if (allRemainingTextHeightPx + allRemainingSegmentReservePx <= remainingHeightPx) {
             currentPageSegments.push({
               nodeIndex,
+              ...paragraphBeforeSpacingOverride(),
               paragraphLineRange: {
                 startLineIndex: lineCursor,
                 endLineIndex: paragraphLineCount,
@@ -964,6 +1022,7 @@ export function buildDocumentPageNodeSegments(
           }
           currentPageSegments.push({
             nodeIndex,
+            ...paragraphBeforeSpacingOverride(),
             paragraphLineRange: {
               startLineIndex: lineCursor,
               endLineIndex: segmentEndLineIndex,
@@ -1092,9 +1151,10 @@ export function buildDocumentPageNodeSegments(
       if (pageConsumedHeightPx === 0 && keepNextChainEndNodeIndex > nodeIndex) {
         committedKeepNextChainEndNodeIndex = keepNextChainEndNodeIndex;
       }
-      currentPageSegments.push({ nodeIndex });
-      const effectiveNodeHeightPx =
-        pageConsumedHeightPx > 0 ? collapsedNodeHeightPx : rawNodeHeightPx;
+      currentPageSegments.push({ nodeIndex, ...paragraphBeforeSpacingOverride() });
+      const effectiveNodeHeightPx = pageConsumedHeightPx > 0
+        ? collapsedNodeHeightPx
+        : rawNodeHeightPx - beforeSpacingPx + currentParagraphBeforeSpacingPx();
       pageConsumedHeightPx += effectiveNodeHeightPx;
       previousParagraphAfterPx = afterSpacingPx;
       continue;

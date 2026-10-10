@@ -26,7 +26,102 @@ intermediate checks. Each comparison must pin the Word build, original input,
 effective fonts, page geometry, and rendering scale; remaining rasterization
 differences must be measured separately from layout differences.
 
-## REA-assisted pagination corrections on 2026-10-09
+## Follow-up REA investigation on 2026-10-09
+
+The follow-up traced Word's exact-spacing producer to its guarded four-fifths
+baseline branch, then qualified that behavior with clean Word controls across
+three fonts, multiple sizes and heights, alignment modes, and compatibility
+settings. The renderer now uses that baseline allocation for the qualified
+text-only case while preserving line extents and source offsets. The private
+branch guards and broader metric projection remain partly unresolved.
+
+A second trace recovered the graphics framework's optional-feature translation
+and CoreText shaping chain. Native document controls qualify Word's ligature
+and contextual-alternate defaults, inheritance, and document compatibility
+switch. These inputs now survive import and export and reach browser paint,
+measurement, and feature-sensitive caches. Contiguous equal-metric text runs
+shape together without changing document runs or offsets. The final combined
+build matches native glyph counts in all 94 shaping cases and wrapping in all
+14 narrow controls, including repeated loads with opposite document settings.
+Glyph count and wrapping agreement do not establish identical glyph positions.
+
+Automatic table rows also preserve a qualified collapsed-border center charge
+when the browser rounds the visible stroke. The correction is limited to
+uniform half-point or one-point single borders around horizontal text cells
+with zero vertical margins and automatic row heights. Mixed borders, minimum
+and exact heights, vertical merges, nested content, and sliced continuations
+retain their separate paths. Outer table flow remains an independent gap.
+
+The combined verification record and untranslated before/after comparisons are
+in the [follow-up report](../output/playwright/rea-word-parity-20261009/REPORT.md).
+The combined build retains all 987 body-line page assignments in the 22-page
+reference and renders all 228 sampled inputs without exceptions or page-count
+changes. Existing checks pass: 568 unit, 99 Rust, 46 oracle infrastructure and
+11 Chrome tests, plus TypeScript and package builds.
+Full 1:1 remains open: Word's PDF content origin, small metric quantization,
+font-specific advances, paragraph bounds, and richer table continuation still
+have measured differences or incomplete qualification. A shared offset in
+native filled paths and text narrows the origin investigation; it does not
+justify a universal translation of browser pages.
+
+## Deeper REA investigation and corpus sampling on 2026-10-09
+
+The next pass traced Word's host metric conversion through its bundled font
+factory, graphics provider, and higher metric adapter. Original ARM instructions
+and 24 isolated calls to the original library agree on independent metric
+rounding. The active document's font face, context scale, and metric-provider
+dispatch remain unresolved. These native findings do not justify a global
+font-size or baseline adjustment.
+
+Word-printed controls instead qualify specific observable policies. The viewer
+now carries the effective kerning threshold through import, measurement, paint,
+and export, with the patched text measurer bundled in the public package.
+Fifteen numbering controls cover shared abstract counters and consumed start
+overrides, and all 87 labels agree. Imported page-spanning images retain their
+explicit fractional source dimensions when no positive relative width applies.
+The ordinary split-paragraph wrapper includes ink bleed inside its declared
+flow box.
+
+The combined build matches all 987 line wraps and page assignments in the
+22-page reference. Six additional Word controls distinguish paragraph spacing
+at initial, automatic, explicit, and section page boundaries; the resulting
+correction resolves seven lines that still occupied different pages after the
+kerning fix. Calibri controls with explicit defaults corroborate the same
+kerning rule, while controls without a styles part expose application-default
+behavior. Fractional horizontal cell margins and border reservations restore a
+table's source grid width. For uniform visible collapsed borders, the renderer
+measures the browser's used stroke width and compensates the half-border charge;
+mixed and hidden-edge conflicts retain their prior behavior. The corrected
+header stays on one line in headed and headless browser captures, including
+when common ligatures are disabled. Final verification is recorded in the
+[deeper investigation report](../output/playwright/rea-word-deep-20261009/REPORT.md).
+
+The new sample contains 12 DOCXCorpus documents across ten document types and
+three languages, together with the 216 unique documents in the local testing
+folder. Rendering this corpus without exceptions is a stability check. Only
+the references and controlled cases with recorded Word print PDFs qualify
+layout comparisons. Two newly printed local inputs required Word's transient
+recovery; those references are explicitly marked as recovered interpretations.
+Original inputs remain unchanged, and local Microsoft font files remain QA-only
+assets.
+
+The final build renders all 228 inputs and 1,826 pages without an exception.
+Existing checks pass: 568 unit tests with one skipped, 99 Rust tests, 46 oracle
+infrastructure checks, and 11 Chrome browser checks, plus TypeScript and viewer
+package builds. These checks establish regression and stability coverage;
+native layout claims remain limited to the recorded Word comparisons.
+
+An exact-line control also isolates a remaining baseline rule: a 6 pt increase
+in line extent moves Word's baseline by 4.8 pt versus the browser's 3 pt. This
+is qualified only for explicitly defaulted Times New Roman 12 pt; the private
+native producer and broader rule remain unresolved. No global correction was
+applied. The remaining acceptance gaps include exact baselines and font selection,
+paragraph border/shading bounds, table row and origin geometry, and richer
+continuation behavior. The [native evidence ledger](../output/playwright/rea-word-deep-20261009/native/README.md)
+separates recovered code, original-library probes, and incomplete runtime
+observation. Full 1:1 visual fidelity is still unqualified.
+
+## Earlier REA-assisted pagination corrections on 2026-10-09
 
 REA 6.2.0 is connected to the coding agent and successfully analyzes the
 installed arm64 PTLS framework through Ghidra. Focused observations support
@@ -439,6 +534,38 @@ flowchart TD
 
 ## Next qualification milestone
 
+The 2026-10-09 corpus pass contains 1,000 fixed DOCXCorpus sources, with 992
+successful frozen-baseline and 997 successful convergence-build captures.
+The convergence pass retains three normal page-limit errors; all three complete
+under a separate larger-budget contract. These runs cover all 1,000 distinct
+sources, 10,815 page surfaces and 503,041 DOM lines. A subsequent bounded
+merged-cell clip fix preserves all 113 inspected glyph masks, without changing
+its targeted page or table geometry. A fresh full corpus pass on that build
+also renders all sources across the two capture budgets, and all 49 control
+counts and 48 eligible body-page inventories still match.
+The latest finite checkpoint covers 724 qualified native references and 7,332
+pages, with 558 matching browser counts and 166 mismatches. Four recovered
+outcomes remain excluded, one continuation awaits lifecycle qualification and
+271 sources have no native record. Further native opens await a visible check
+of the pending lifecycle-control state; the desktop lock does not establish its
+cause. The earlier sealed 132-source comparison retains 107 matching physical
+counts, up from 104 at baseline, with 28 qualified normalized main-story
+page-text matches. These partial, ordered samples are not an overall fidelity
+percentage, and page-count matches do not establish page-break or pixel matches.
+The retained 22-page reference
+still matches all 987 body lines and their physical page assignments on the
+integrated build.
+
+The completed convergence build includes the bounded header correction and
+its square-wrap 42+2 split. Fresh captures match all 49 combined control counts
+and all 48 eligible body inventories, with all 987 long-reference line texts
+and physical pages independently checked. The multi-page table prefix membership remains excluded.
+Six printed grid controls qualify compatibility and inherited opt-out gates.
+The immediate unresolved controls include broader header wrapping and grid
+arithmetic with explicit spacing multipliers and larger line metrics. Continue native capture after the pending Word state is
+resolved. For split tables, use physical PDF glyph membership rather than
+contiguous prefix-range text as the page-break oracle.
+
 The first three controlled references and initial corrections are in place.
 Continue through the existing harness: repeat captures to establish repeatability,
 record extractor precision/quantization, and pin the actual selected-font profile.
@@ -469,6 +596,23 @@ complete ordinary-text gate. That gate also needs repeatability, a declared font
 profile, source-aligned boundary sweeps, precise baseline/region agreement, and
 edit/export checks under the recorded measurement precision. Complex features
 graduate through their own independent gates.
+
+The resumed corpus pass keeps clean native counts separate from documents
+that require Word content recovery. Fresh PDF comparisons also declare whether
+Word printed tracked-change markup, since its gutter can scale the content.
+The first isolated CJK provider substitution leaves the disputed line and page
+assignments unchanged. A focused native fit trace confirms conditional end
+corrections, but runtime gates and formatting-unit conversion are still needed
+before changing a browser fit threshold.
+
+Word's punctuation classification, custom action tables and cached metric
+producer now have separately retained REA evidence. Active document gates and
+unit conversion are still unresolved. A private normal-wrapping change worsens
+the 64-source count comparison and is not promoted. Four explicit-font CJK/Latin
+controls, with and without a document grid, have verified browser captures;
+native PDF baseline advances are the next discriminator. After those short
+controls, finish the native count queue and qualify bounded page membership for
+eligible sources. Split tables continue to require a physical PDF oracle.
 
 ## Architecture and effort decisions
 

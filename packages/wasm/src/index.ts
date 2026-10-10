@@ -2,6 +2,7 @@ import type { InitInput, InitOutput } from "./generated/docx_wasm.js";
 import wasmInit, {
   build_doc_model_from_bytes,
   build_doc_model_from_package,
+  extract_document_blocks_wasm,
   model_to_document_xml_from_json_wasm,
   package_to_array_buffer_wasm,
   parse_docx_wasm,
@@ -177,6 +178,12 @@ export async function wasmBuildDocModelFromPackage(pkg: WasmOoxmlPackage): Promi
   await initWasm();
   const json = build_doc_model_from_package(pkg);
   return JSON.parse(json) as unknown;
+}
+
+export async function wasmExtractDocumentBlocks(model: unknown): Promise<unknown> {
+  await initWasm();
+  const json = JSON.stringify(model, (key, value) => key === "data" || key === "src" ? undefined : value);
+  return JSON.parse(extract_document_blocks_wasm(json));
 }
 
 export async function wasmBuildDocModelFromBytes(bytes: ArrayBuffer | Uint8Array): Promise<{

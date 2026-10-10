@@ -104,7 +104,23 @@ pub fn parse_document_compatibility_settings(
             get_attribute(&tag, "w:val")?.parse::<u32>().ok().map(i64::from)
         });
 
+    let adjust_line_height_in_table = parse_first_on_off_setting(compat_xml, &["adjustLineHeightInTable"]);
     let no_leading = parse_first_on_off_setting(compat_xml, &["noLeading"]);
+    let enable_open_type_features = super::scan::find_all_tag_tokens(&compat_xml, "w:compatSetting")
+        .into_iter()
+        .find_map(|tag| {
+            if get_attribute(&tag, "w:name").as_deref() != Some("enableOpenTypeFeatures")
+                || get_attribute(&tag, "w:uri").as_deref()
+                    != Some("http://schemas.microsoft.com/office/word")
+            {
+                return None;
+            }
+            match get_attribute(&tag, "w:val").as_deref() {
+                Some("1" | "true") => Some(true),
+                Some("0" | "false") => Some(false),
+                _ => None,
+            }
+        });
     let suppress_top_spacing_wp = parse_first_on_off_setting(compat_xml, &["suppressTopSpacingWP"]);
     let truncate_font_heights_like_wp6 = parse_first_on_off_setting(compat_xml, &["truncateFontHeightsLikeWP6"]);
     let no_extra_line_spacing = parse_first_on_off_setting(compat_xml, &["noExtraLineSpacing"]);
@@ -130,13 +146,15 @@ pub fn parse_document_compatibility_settings(
     let even_and_odd_headers =
         parse_first_on_off_setting(&settings_root, &["evenAndOddHeaders"]);
 
-    if no_leading.is_none()
+    if adjust_line_height_in_table.is_none()
+        && no_leading.is_none()
         && suppress_top_spacing_wp.is_none()
         && truncate_font_heights_like_wp6.is_none()
         && no_extra_line_spacing.is_none()
         && space_for_ul.is_none()
         && suppress_bottom_spacing.is_none()
         && compatibility_mode.is_none()
+        && enable_open_type_features.is_none()
         && suppress_spacing_before_after_page_break.is_none()
         && use_printer_metrics.is_none()
         && use_fixed_html_paragraph_spacing.is_none()
@@ -148,6 +166,7 @@ pub fn parse_document_compatibility_settings(
     }
 
     Some(DocumentCompatibilitySettings {
+        adjust_line_height_in_table,
         no_leading,
         suppress_top_spacing_wp,
         truncate_font_heights_like_wp6,
@@ -156,6 +175,7 @@ pub fn parse_document_compatibility_settings(
         suppress_bottom_spacing,
 
         compatibility_mode,
+        enable_open_type_features,
         suppress_spacing_before_after_page_break,
         use_printer_metrics,
         use_fixed_html_paragraph_spacing,

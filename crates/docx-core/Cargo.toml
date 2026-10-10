@@ -11,5 +11,7 @@ serde_bytes.workspace = true
 miniz_oxide.workspace = true
 regex-lite = "0.1"
 base64 = "0.22"
+roxmltree = "0.20"
+sha2 = "0.10"
 
 [dev-dependencies]

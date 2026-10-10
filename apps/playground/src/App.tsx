@@ -85,6 +85,8 @@ import {
 } from "@hugeicons/core-free-icons";
 import { useTheme } from "next-themes";
 
+import { BlockInspector } from "./components/block-inspector";
+
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { ButtonGroup } from "./components/ui/button-group";
@@ -1783,6 +1785,8 @@ function parseToolbarSectionColumns(
 function PlaygroundApp(): React.JSX.Element {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const editor = useDocxEditor();
+  const [showBlocks, setShowBlocks] = React.useState(false);
+  const blockViewerRootRef = React.useRef<HTMLDivElement>(null);
   const { documentTheme, setDocumentTheme } = useDocxDocumentTheme(editor);
   const { layout: pageLayout } = useDocxPageLayout(editor);
   const [thumbnailsSheetOpen, setThumbnailsSheetOpen] = React.useState(false);
@@ -3490,6 +3494,11 @@ function PlaygroundApp(): React.JSX.Element {
 
               <ButtonGroup>
                 <div className="flex items-center gap-2 px-2">
+                  <label htmlFor="show-blocks" className="text-sm text-muted-foreground">Blocks</label>
+                  <Switch id="show-blocks" aria-label="Blocks" checked={showBlocks} onCheckedChange={setShowBlocks} />
+                </div>
+                <Separator orientation="vertical" className="h-6" />
+                <div className="flex items-center gap-2 px-2">
                   <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
                     <FileDiff className="h-4 w-4" />
                     Show edits
@@ -3530,6 +3539,7 @@ function PlaygroundApp(): React.JSX.Element {
           </CardContent>
         </Card>
 
+        <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
         <div
           ref={viewerScrollRef}
           className="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-muted/40 p-4"
@@ -3551,7 +3561,7 @@ function PlaygroundApp(): React.JSX.Element {
             </div>
           ) : null}
           <div className="flex min-h-full min-w-full w-max justify-center">
-            <div>
+            <div ref={blockViewerRootRef}>
               <DocxEditorViewer
                 editor={editor}
                 zoom={zoomPercent}
@@ -3571,6 +3581,9 @@ function PlaygroundApp(): React.JSX.Element {
               />
             </div>
           </div>
+        </div>
+
+        {showBlocks ? <BlockInspector model={editor.model} rootRef={blockViewerRootRef} /> : null}
         </div>
 
         <Sheet open={thumbnailsSheetOpen} onOpenChange={setThumbnailsSheetOpen}>

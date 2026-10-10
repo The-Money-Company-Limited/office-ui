@@ -19,6 +19,13 @@ fn doc_model_from_json(json_str: &str) -> Result<DocModel, JsValue> {
         .map_err(|error| JsValue::from_str(&format!("Invalid DocModel JSON: {error}")))
 }
 
+#[wasm_bindgen]
+pub fn extract_document_blocks_wasm(model_json: &str) -> Result<String, JsValue> {
+    let model = doc_model_from_json(model_json)?;
+    serde_json::to_string(&docx_core::extract_document_blocks(&model))
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
 fn value_to_doc_model(value: &JsValue) -> Result<DocModel, JsValue> {
     if let Some(json_str) = value.as_string() {
         return doc_model_from_json(&json_str);

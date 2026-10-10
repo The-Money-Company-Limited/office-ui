@@ -22,6 +22,9 @@ use super::styles::{
 };
 
 pub fn build_doc_model(pkg: &OoxmlPackage) -> DocModel {
+    let document_id = crate::structured::package_identity(pkg);
+    let normalized = super::namespaces::normalized_package(pkg);
+    let pkg = &normalized;
     let mut warnings = pkg.warnings.clone();
     let document_xml = pkg
         .parts
@@ -94,11 +97,13 @@ pub fn build_doc_model(pkg: &OoxmlPackage) -> DocModel {
     );
     let comments = parse_document_comments(pkg, &content_types, &style_sheet);
 
+    let nodes = parse_document_xml(resolved_document_xml, &context);
     warnings.extend(context.warnings.borrow().iter().cloned());
 
-    DocModel {
-        nodes: parse_document_xml(resolved_document_xml, &context),
+    let mut model = DocModel {
+        nodes,
         metadata: DocModelMetadata {
+            document_id: None,
             source_parts: pkg.parts.len() as i64,
             warnings,
             document_page_count,
@@ -129,7 +134,9 @@ pub fn build_doc_model(pkg: &OoxmlPackage) -> DocModel {
                 Some(comments)
             },
         },
-    }
+    };
+    crate::structured::assign_source_ids(&mut model, &document_id);
+    model
 }
 
 fn clone_notes_if_non_empty(

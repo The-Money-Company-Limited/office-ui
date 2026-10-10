@@ -127,6 +127,10 @@ struct ImageSerializationState<'a> {
     paragraph_style_alignment_owners: HashMap<String, ParagraphTextAlignment>,
     table_styles: HashMap<String, crate::parse::ParsedTableStyleDefinition>,
     current_table_text_alignment: Option<ParagraphTextAlignment>,
+    paragraph_snap_to_grid_by_style_id: HashMap<String, bool>,
+    default_paragraph_snap_to_grid: Option<bool>,
+    paragraph_style_grid_owners: HashMap<String, bool>,
+    current_table_snap_to_grid: Option<bool>,
 }
 
 fn escape_xml(text: &str) -> String {
@@ -375,6 +379,15 @@ fn run_properties_xml(style: Option<&TextStyle>) -> String {
         ));
     }
 
+    if let Some(kerning_min_font_size_pt) = style.kerning_min_font_size_pt {
+        if kerning_min_font_size_pt.is_finite() && kerning_min_font_size_pt >= 0.0 {
+            fragments.push(format!(
+                r#"<w:kern w:val="{}"/>"#,
+                (kerning_min_font_size_pt * 2.0).round() as i64
+            ));
+        }
+    }
+
     if let Some(font_size_pt) = style.font_size_pt {
         if font_size_pt.is_finite() {
             fragments.push(format!(
@@ -510,6 +523,19 @@ fn run_properties_xml(style: Option<&TextStyle>) -> String {
         }
     }
 
+    if let Some(ligatures) = style.ligatures {
+        fragments.push(format!(
+            r#"<w14:ligatures w14:val="{}"/>"#,
+            ligatures.xml_value()
+        ));
+    }
+    if let Some(contextual_alternates) = style.contextual_alternates {
+        fragments.push(format!(
+            r#"<w14:cntxtAlts w14:val="{}"/>"#,
+            if contextual_alternates { "1" } else { "0" }
+        ));
+    }
+
     if fragments.is_empty() {
         String::new()
     } else {
@@ -637,7 +663,7 @@ fn on_off_element_xml(tag_name: &str, value: Option<bool>) -> String {
     }
 }
 
-fn paragraph_properties_xml(style: Option<&ParagraphStyle>, text_alignment: Option<ParagraphTextAlignment>) -> String {
+fn paragraph_properties_xml(style: Option<&ParagraphStyle>, text_alignment: Option<ParagraphTextAlignment>, snap_to_grid: Option<bool>) -> String {
     let Some(style) = style else {
         return String::new();
     };
@@ -761,6 +787,10 @@ fn paragraph_properties_xml(style: Option<&ParagraphStyle>, text_alignment: Opti
         }
     }
 
+    let snap_to_grid_xml = on_off_element_xml("snapToGrid", snap_to_grid);
+    if !snap_to_grid_xml.is_empty() {
+        fragments.push(snap_to_grid_xml);
+    }
     let mut spacing_fragments: Vec<String> = Vec::new();
     if let Some(before) = twips_to_xml_non_negative(style.spacing.as_ref().and_then(|s| s.before_twips)) {
         spacing_fragments.push(format!(r#"w:before="{before}""#));
@@ -2194,8 +2224,11 @@ const MARK_MANAGED_PROPERTIES: &[&str] = &[
     "w:rtl",
     "w:cs",
     "w:spacing",
+    "w:kern",
     "w:vertAlign",
     "w:bdr",
+    "w14:ligatures",
+    "w14:cntxtAlts",
 ];
 
 fn property_attributes(tag_name: &str) -> &'static [&'static str] {
@@ -2214,6 +2247,7 @@ fn property_attributes(tag_name: &str) -> &'static [&'static str] {
         "w:lang" => &["w:val", "w:eastAsia", "w:bidi"],
         "w:shd" => &["w:val", "w:color", "w:fill"],
         "w:bdr" => &["w:val", "w:color", "w:sz", "w:space", "w:frame", "w:shadow"],
+        "w14:ligatures" | "w14:cntxtAlts" => &["w14:val"],
         _ => &["w:val"],
     }
 }
@@ -2382,6 +2416,25 @@ fn paragraph_mark_xml(paragraph: &ParagraphNode, source: Option<&str>) -> String
         .unwrap_or(generated)
 }
 
+fn serialized_paragraph_snap_to_grid(
+    style: &ParagraphStyle,
+    state: &ImageSerializationState<'_>,
+) -> Option<bool> {
+    let effective = style.snap_to_grid.or(style.source_inherited_snap_to_grid);
+    let style_id = style.style_id.clone().or_else(|| style.heading_level
+        .map(|level| format!("Heading{}", heading_level_number(level))));
+    let inherited = style_id.as_ref()
+        .and_then(|id| state.paragraph_style_grid_owners.get(id).copied())
+        .or(state.current_table_snap_to_grid)
+        .or_else(|| style_id.as_ref()
+            .and_then(|id| state.paragraph_snap_to_grid_by_style_id.get(id).copied()))
+        .or(state.default_paragraph_snap_to_grid);
+    let inherited_only = style.snap_to_grid.is_none()
+        || (style.source_has_snap_to_grid == Some(false)
+            && style.snap_to_grid == style.source_snap_to_grid);
+    if inherited_only && inherited == effective { None } else { effective }
+}
+
 fn serialized_paragraph_text_alignment(
     style: &ParagraphStyle,
     state: &ImageSerializationState<'_>,
@@ -2521,6 +2574,20 @@ fn table_cell_text_alignment(
     .and_then(|condition| condition.paragraph_text_alignment)
 }
 
+fn table_cell_snap_to_grid(
+    context: &TableAlignmentContext,
+    row: usize,
+    column: i64,
+    span: i64,
+    state: &ImageSerializationState<'_>,
+) -> Option<bool> {
+    let style = context.style_id.as_ref().and_then(|id| state.table_styles.get(id))?;
+    crate::parse::resolve_table_condition_for_cell(
+        style, &context.look, row as i64, context.rows,
+        column, column + span - 1, context.columns,
+    ).and_then(|condition| condition.paragraph_snap_to_grid)
+}
+
 fn cell_alignment_context_changed(
     cell: &TableCellNode,
     state: &ImageSerializationState<'_>,
@@ -2528,7 +2595,10 @@ fn cell_alignment_context_changed(
     cell.nodes.iter().any(|node| match node {
         TableCellContentNode::Paragraph(paragraph) => {
             paragraph.style.as_ref().is_some_and(|style| {
-                style.source_has_text_alignment == Some(false)
+                (style.source_has_snap_to_grid == Some(false)
+                    && style.snap_to_grid == style.source_snap_to_grid
+                    && serialized_paragraph_snap_to_grid(style, state).is_some())
+                || style.source_has_text_alignment == Some(false)
                     && style.text_alignment == style.source_text_alignment
                     && serialized_paragraph_text_alignment(style, state).is_some()
             })
@@ -2559,10 +2629,24 @@ fn table_alignment_context_changed(
                 .unwrap_or(1)
                 .max(1);
             let current = table_cell_text_alignment(&context, row_index, column, span, state);
+            let current_snap = table_cell_snap_to_grid(&context, row_index, column, span, state);
             column += span;
             cell.nodes.iter().any(|node| match node {
                 TableCellContentNode::Paragraph(paragraph) => {
                     paragraph.style.as_ref().is_some_and(|style| {
+                        if style.source_has_snap_to_grid == Some(false)
+                            && style.snap_to_grid == style.source_snap_to_grid
+                        {
+                            let inherited = style.style_id.as_ref()
+                                .and_then(|id| state.paragraph_style_grid_owners.get(id).copied())
+                                .or(current_snap)
+                                .or_else(|| style.style_id.as_ref()
+                                    .and_then(|id| state.paragraph_snap_to_grid_by_style_id.get(id).copied()))
+                                .or(state.default_paragraph_snap_to_grid);
+                            if inherited != style.snap_to_grid.or(style.source_inherited_snap_to_grid) {
+                                return true;
+                            }
+                        }
                         if style.source_has_text_alignment != Some(false)
                             || style.text_alignment != style.source_text_alignment
                         {
@@ -2600,7 +2684,9 @@ fn paragraph_properties_with_mark_xml(
         .style
         .as_ref()
         .and_then(|style| serialized_paragraph_text_alignment(style, state));
-    let properties = paragraph_properties_xml(paragraph.style.as_ref(), text_alignment);
+    let snap_to_grid = paragraph.style.as_ref()
+        .and_then(|style| serialized_paragraph_snap_to_grid(style, state));
+    let properties = paragraph_properties_xml(paragraph.style.as_ref(), text_alignment, snap_to_grid);
     let mark = paragraph_mark_xml(
         paragraph,
         paragraph.source_paragraph_mark_properties_xml.as_deref(),
@@ -2730,13 +2816,58 @@ fn patch_source_paragraph_text_alignment(
     source
 }
 
+fn patch_source_paragraph_snap_to_grid(
+    paragraph: &ParagraphNode,
+    source: &str,
+    state: &ImageSerializationState<'_>,
+) -> String {
+    let Some(style) = paragraph.style.as_ref() else {
+        return source.to_string();
+    };
+    if style.snap_to_grid == style.source_snap_to_grid
+        && (style.source_has_snap_to_grid.is_none() || style.source_snap_to_grid.is_none())
+    {
+        return source.to_string();
+    }
+    let range = direct_property_children(source).into_iter()
+        .find(|(name, _)| name == "w:pPr").map(|(_, range)| range);
+    let properties = range.as_ref()
+        .map(|range| &source[range.start..range.end]).unwrap_or("<w:pPr/>");
+    let desired = serialized_paragraph_snap_to_grid(style, state);
+    let current = crate::parse::direct_table_property(properties, "w:snapToGrid")
+        .and_then(|tag| crate::xml::parse_on_off_attribute(tag, "snapToGrid"));
+    if current == desired {
+        return source.to_string();
+    }
+    let attributes = desired.map(|value| [("w:val", if value { "1" } else { "0" }.to_string())]);
+    let updated = patch_direct_table_property(
+        properties, "w:pPr", "w:snapToGrid",
+        attributes.as_ref().map(|values| values.as_slice()),
+        &[
+            "w:snapToGrid", "w:spacing", "w:ind", "w:contextualSpacing",
+            "w:mirrorIndents", "w:suppressOverlap", "w:jc", "w:textDirection",
+            "w:textAlignment", "w:textboxTightWrap", "w:outlineLvl", "w:divId",
+            "w:cnfStyle", "w:rPr", "w:sectPr", "w:pPrChange",
+        ],
+    );
+    let mut source = source.to_string();
+    if let Some(range) = range {
+        source.replace_range(range.start..range.end, &updated);
+    } else if desired.is_some() {
+        let insert_at = opening_tag_end(&source, 0).unwrap_or(0);
+        source.insert_str(insert_at, &updated);
+    }
+    source
+}
+
 fn patch_source_paragraph_properties(
     paragraph: &ParagraphNode,
     source: &str,
     state: &ImageSerializationState<'_>,
 ) -> String {
     let marked = patch_source_paragraph_mark(paragraph, source);
-    patch_source_paragraph_text_alignment(paragraph, &marked, state)
+    let aligned = patch_source_paragraph_text_alignment(paragraph, &marked, state);
+    patch_source_paragraph_snap_to_grid(paragraph, &aligned, state)
 }
 
 fn paragraph_xml(
@@ -3263,7 +3394,8 @@ fn paragraph_has_source_property_edits(paragraph: &ParagraphNode) -> bool {
         || paragraph
             .style
             .as_ref()
-            .is_some_and(|style| style.text_alignment != style.source_text_alignment)
+            .is_some_and(|style| style.text_alignment != style.source_text_alignment
+                || style.snap_to_grid != style.source_snap_to_grid)
 }
 
 fn cell_has_source_property_edits(cell: &TableCellNode) -> bool {
@@ -3302,8 +3434,10 @@ fn patch_table_source_properties(
     state: &mut ImageSerializationState<'_>,
 ) -> Option<String> {
     let previous = state.current_table_text_alignment;
+    let previous_snap = state.current_table_snap_to_grid;
     let result = patch_table_source_properties_inner(table, source_xml, state);
     state.current_table_text_alignment = previous;
+    state.current_table_snap_to_grid = previous_snap;
     result
 }
 
@@ -3412,6 +3546,8 @@ fn patch_table_source_properties_inner(
                 .max(1);
             state.current_table_text_alignment =
                 table_cell_text_alignment(&context, row_index, column, span, state);
+            state.current_table_snap_to_grid =
+                table_cell_snap_to_grid(&context, row_index, column, span, state);
             column += span;
             let cell_xml = &row_xml[cell_range.start..cell_range.end];
             let width = cell.style.as_ref().and_then(|style| {
@@ -3623,6 +3759,7 @@ fn table_xml(table: &TableNode, state: &mut ImageSerializationState<'_>, run_id_
 
     let context = resolve_table_alignment_context(table, state, None);
     let previous_table_alignment = state.current_table_text_alignment;
+    let previous_table_snap = state.current_table_snap_to_grid;
     let rows = table
         .rows
         .iter()
@@ -3696,6 +3833,7 @@ fn table_xml(table: &TableNode, state: &mut ImageSerializationState<'_>, run_id_
                 .map(|cell| {
                     let span = cell.style.as_ref().and_then(|style| style.grid_span).unwrap_or(1).max(1);
                     state.current_table_text_alignment = table_cell_text_alignment(&context, row_index, column, span, state);
+                    state.current_table_snap_to_grid = table_cell_snap_to_grid(&context, row_index, column, span, state);
                     column += span;
                     let serialized_cells =
                         table_cell_xml_content(&cell.nodes, state, run_id_ref);
@@ -3790,6 +3928,7 @@ fn table_xml(table: &TableNode, state: &mut ImageSerializationState<'_>, run_id_
         .collect::<String>();
 
     state.current_table_text_alignment = previous_table_alignment;
+    state.current_table_snap_to_grid = previous_table_snap;
     format!(
         "<w:tbl><w:tblPr>{}</w:tblPr>{table_grid_xml}{rows}</w:tbl>",
         table_props.join("")
@@ -3839,6 +3978,13 @@ fn create_image_serialization_state<'a>(
         + 1;
 
     let styles = crate::parse::parse_style_sheet(base_package);
+    let paragraph_style_grid_owners = styles.paragraph_style_by_id.iter()
+        .filter(|(_, style)| style.source_has_snap_to_grid == Some(true))
+        .filter_map(|(id, style)| style.snap_to_grid.map(|value| (id.clone(), value))).collect();
+    let paragraph_snap_to_grid_by_style_id = styles.paragraph_style_by_id.iter()
+        .filter_map(|(id, style)| style.snap_to_grid.map(|value| (id.clone(), value))).collect();
+    let default_paragraph_snap_to_grid = styles.default_paragraph_style.as_ref()
+        .and_then(|style| style.snap_to_grid);
     let paragraph_style_alignment_owners = styles.paragraph_style_by_id.iter()
         .filter(|(_, style)| style.source_has_text_alignment == Some(true))
         .filter_map(|(id, style)| style.text_alignment.map(|value| (id.clone(), value))).collect();
@@ -3848,6 +3994,10 @@ fn create_image_serialization_state<'a>(
     let default_paragraph_text_alignment = styles.default_paragraph_style.as_ref()
         .and_then(|style| style.text_alignment).or(styles.default_paragraph_text_alignment);
     ImageSerializationState {
+        paragraph_style_grid_owners,
+        paragraph_snap_to_grid_by_style_id,
+        default_paragraph_snap_to_grid,
+        current_table_snap_to_grid: None,
         paragraph_style_alignment_owners,
         table_styles,
         current_table_text_alignment: None,
@@ -4705,6 +4855,7 @@ fn serialize_document_settings(model: &DocModel, pkg: &mut OoxmlPackage) {
     let compatibility = model.metadata.compatibility.as_ref();
     let raw_compatibility_mode = compatibility.and_then(|settings| settings.compatibility_mode);
     let compatibility_mode = raw_compatibility_mode.filter(|mode| u32::try_from(*mode).is_ok());
+    let enable_open_type_features = compatibility.and_then(|settings| settings.enable_open_type_features);
     let even_and_odd_headers = compatibility.and_then(|settings| settings.even_and_odd_headers);
     let default_tab_stop = model
         .metadata
@@ -4722,11 +4873,21 @@ fn serialize_document_settings(model: &DocModel, pkg: &mut OoxmlPackage) {
             != original_compatibility
                 .as_ref()
                 .and_then(|settings| settings.even_and_odd_headers);
+    let open_type_changed = (enable_open_type_features.is_some() || imported_settings)
+        && enable_open_type_features
+            != original_compatibility
+                .as_ref()
+                .and_then(|settings| settings.enable_open_type_features);
     let tabs_changed = (default_tab_stop.is_some()
         || (imported_settings && model.metadata.default_tab_stop_twips.is_none()))
         && default_tab_stop != original_tab_stop;
     let imported_line_settings = model.metadata.line_spacing_compatibility_imported == Some(true);
     let line_settings = [
+        (
+            "w:adjustLineHeightInTable",
+            compatibility.and_then(|value| value.adjust_line_height_in_table),
+            original_compatibility.as_ref().and_then(|value| value.adjust_line_height_in_table),
+        ),
         (
             "w:noLeading",
             compatibility.and_then(|value| value.no_leading),
@@ -4773,7 +4934,7 @@ fn serialize_document_settings(model: &DocModel, pkg: &mut OoxmlPackage) {
     let line_settings_changed = line_settings.iter().any(|(_, current, original)| {
         (current.is_some() || imported_line_settings) && current != original
     });
-    if !mode_changed && !headers_changed && !tabs_changed && !line_settings_changed {
+    if !mode_changed && !open_type_changed && !headers_changed && !tabs_changed && !line_settings_changed {
         return;
     }
 
@@ -4810,7 +4971,13 @@ fn serialize_document_settings(model: &DocModel, pkg: &mut OoxmlPackage) {
             remove_settings_element(&settings_xml, "w:evenAndOddHeaders", |_| true)
         };
     }
-    if mode_changed {
+    for (changed, name, value) in [
+        (mode_changed, "compatibilityMode", compatibility_mode.map(|value| value.to_string())),
+        (open_type_changed, "enableOpenTypeFeatures", enable_open_type_features.map(|value| if value { "1" } else { "0" }.to_string())),
+    ] {
+        if !changed {
+            continue;
+        }
         let compat_range = extract_balanced_tag_ranges(&settings_xml, "w:compat")
             .into_iter()
             .next();
@@ -4818,26 +4985,25 @@ fn serialize_document_settings(model: &DocModel, pkg: &mut OoxmlPackage) {
             .as_ref()
             .map(|range| &settings_xml[range.start..range.end])
             .unwrap_or("<w:compat/>");
-        let matches_mode = |tag: &str| {
-            get_attribute(tag, "w:name").as_deref() == Some("compatibilityMode")
+        let matches_setting = |tag: &str| {
+            get_attribute(tag, "w:name").as_deref() == Some(name)
                 && get_attribute(tag, "w:uri").as_deref()
                     == Some("http://schemas.microsoft.com/office/word")
         };
-        let updated_compat = if let Some(compatibility_mode) = compatibility_mode {
-            let mode = compatibility_mode.to_string();
+        let updated_compat = if let Some(value) = value {
             upsert_settings_element(
                 compat_xml,
                 "w:compat",
                 "w:compatSetting",
                 &[
-                    ("w:name", "compatibilityMode"),
+                    ("w:name", name),
                     ("w:uri", "http://schemas.microsoft.com/office/word"),
-                    ("w:val", &mode),
+                    ("w:val", &value),
                 ],
-                matches_mode,
+                matches_setting,
             )
         } else {
-            remove_settings_element(compat_xml, "w:compatSetting", matches_mode)
+            remove_settings_element(compat_xml, "w:compatSetting", matches_setting)
         };
         if let Some(range) = compat_range {
             settings_xml.replace_range(range.start..range.end, &updated_compat);

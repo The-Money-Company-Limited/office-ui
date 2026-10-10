@@ -1,4 +1,7 @@
 mod build;
+mod namespaces;
+mod symbols;
+mod math;
 mod body;
 mod re;
 mod colors;

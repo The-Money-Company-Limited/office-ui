@@ -43,7 +43,8 @@ function borderedFooterParagraph(text: string) {
 function floatingFooterImageParagraph(
   yPx: number,
   heightPx = 24,
-  behindDocument = true
+  behindDocument = true,
+  wrapType: "none" | "square" = "none"
 ) {
   return {
     type: "paragraph" as const,
@@ -59,7 +60,7 @@ function floatingFooterImageParagraph(
           yPx,
           horizontalRelativeTo: "page" as const,
           verticalRelativeTo: "page" as const,
-          wrapType: "none" as const,
+          wrapType,
           behindDocument,
         },
       },
@@ -97,7 +98,7 @@ describe("footer pagination reserve", () => {
       startNodeIndex: 0, sectionPropertiesXml: properties,
       headerSections: [{
         partName: "header", referenceType: "first",
-        nodes: [floatingFooterImageParagraph(100, 100, false)],
+        nodes: [floatingFooterImageParagraph(100, 100, false, "square")],
       }], footerSections: [],
     };
     expect(buildPaginationSectionMetrics([section], layout)[0].pageContentHeightPx).toBe(940);
@@ -327,7 +328,7 @@ describe("footer pagination reserve", () => {
       {
         type: "default",
         partName: "footer1.xml",
-        nodes: [floatingFooterImageParagraph(900, 24, false)],
+        nodes: [floatingFooterImageParagraph(900, 24, false, "square")],
       },
     ];
 

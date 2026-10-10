@@ -1,4 +1,6 @@
 import { registerFontMetricCache } from "./font-metrics";
+import type { FontKerningMode } from "./font-kerning";
+import { setCanvasFontFeatureSettings } from "./font-features";
 
 type CanvasAdvanceContext = Pick<CanvasRenderingContext2D, "font" | "measureText"> & {
   letterSpacing?: string;
@@ -6,6 +8,7 @@ type CanvasAdvanceContext = Pick<CanvasRenderingContext2D, "font" | "measureText
   fontKerning?: string;
   direction?: string;
   textRendering?: string;
+  canvas?: HTMLCanvasElement | OffscreenCanvas;
 };
 
 const MAX_FONT_ADVANCE_SCALES = 8192;
@@ -47,7 +50,11 @@ export function canvasFontAdvanceScale(
 
   const cacheKey = `${font}\u0000${context.fontKerning ?? ""}\u0000${
     context.direction ?? ""
-  }\u0000${context.textRendering ?? ""}`;
+  }\u0000${context.textRendering ?? ""}\u0000${
+    context.canvas && "style" in context.canvas
+      ? context.canvas.style.fontFeatureSettings
+      : ""
+  }`;
   const cached = advanceScaleByFont.get(cacheKey);
   if (cached !== undefined) return cached;
 
@@ -101,9 +108,13 @@ export function canvasFontAdvanceScale(
 export function measureCanvasGlyphAdvance(
   context: CanvasAdvanceContext,
   font: string,
-  text: string
+  text: string,
+  fontKerning: FontKerningMode = "auto",
+  fontFeatureSettings?: string
 ): number {
+  setCanvasFontFeatureSettings(context, fontFeatureSettings);
   context.font = font;
+  if (typeof context.fontKerning === "string") context.fontKerning = fontKerning;
   const scale = canvasFontAdvanceScale(context, font);
   const originalLetterSpacing = context.letterSpacing;
   const originalWordSpacing = context.wordSpacing;

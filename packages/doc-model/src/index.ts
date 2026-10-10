@@ -10,6 +10,7 @@ import { normalizeDocModel } from "./normalize";
 import type { DocModel } from "./types";
 
 export * from "./types";
+export * from "./blocks";
 export { resolveTableGridSkipCount, tableGridColumnBound, tableRowGridSkipCount } from "./table-grid";
 export {
   allocateBlockId,

@@ -414,6 +414,7 @@ pub fn parse_document_comments(
         }
 
         comments.push(DocumentCommentDefinition {
+            nodes: Some(parsed_nodes),
             id: comment_id,
             author,
             initials,

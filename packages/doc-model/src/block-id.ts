@@ -15,6 +15,11 @@ function ensureNodeBlockIds(node: DocNode | TableCellContentNode): void {
   }
 
   if (node.type !== "table") {
+    node.children.forEach((child, index) => {
+      if (child.type !== "image") return;
+      child.blockId ??= `${node.blockId}/child/${index}`;
+      child.contentNodes?.forEach(ensureNodeBlockIds);
+    });
     return;
   }
 
@@ -54,6 +59,9 @@ export function ensureDocModelBlockIds(model: DocModel): DocModel {
   }
   for (const note of model.metadata.endnotes ?? []) {
     note.nodes?.forEach(ensureNodeBlockIds);
+  }
+  for (const comment of model.metadata.comments ?? []) {
+    comment.nodes?.forEach(ensureNodeBlockIds);
   }
 
   return model;

@@ -7,7 +7,8 @@ const bundledWorkspacePackages = [
   "@extend-ai/react-docx-layout-engine",
   "@extend-ai/react-docx-ooxml-core",
   "@extend-ai/react-docx-serializer",
-  "@extend-ai/react-docx-wasm"
+  "@extend-ai/react-docx-wasm",
+  "@chenglou/pretext"
 ];
 
 export default defineConfig({
@@ -25,5 +26,5 @@ export default defineConfig({
   },
   // Ship the wasm binary next to the bundles; the loader references it as
   // new URL("./docx_wasm_bg.wasm", import.meta.url).
-  onSuccess: "cp ../wasm/src/docx_wasm_bg.wasm dist/docx_wasm_bg.wasm"
+  onSuccess: "cp ../wasm/src/docx_wasm_bg.wasm dist/docx_wasm_bg.wasm && cp src/pretext-license.txt dist/pretext-license.txt"
 });

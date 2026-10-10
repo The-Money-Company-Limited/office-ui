@@ -2,6 +2,7 @@ import type {
   DocModel,
   DocumentCommentDefinition,
   ParagraphNode,
+  TextLigatures,
   TextRunNode,
   TextStyle,
 } from "@extend-ai/react-docx-doc-model";
@@ -454,6 +455,14 @@ function normalizedColor(raw?: string): string | undefined {
   return /^[0-9a-f]{6}$/i.test(value) ? `#${value.toLowerCase()}` : value;
 }
 
+const TEXT_LIGATURE_VALUES: readonly TextLigatures[] = [
+  "none", "standard", "contextual", "historical", "discretional",
+  "standardContextual", "standardHistorical", "contextualHistorical",
+  "standardDiscretional", "contextualDiscretional", "historicalDiscretional",
+  "standardContextualHistorical", "standardContextualDiscretional",
+  "standardHistoricalDiscretional", "contextualHistoricalDiscretional", "all",
+];
+
 function styleFromRunXml(runXml: string): TextStyle | undefined {
   const scan = scanBalancedXml(runXml);
   if (scan.malformed) {
@@ -492,6 +501,14 @@ function styleFromRunXml(runXml: string): TextStyle | undefined {
   const fontFamilyCs = fonts ? xmlAttribute(fonts, "w:cs") : undefined;
   const fontFamily =
     fontFamilyAscii ?? fontFamilyHAnsi ?? fontFamilyEastAsia ?? fontFamilyCs;
+  const kerning = elementsNamed(propertyScan, "w:kern")[0]?.openTag;
+  const kerningHalfPoints = Number(kerning ? xmlAttribute(kerning, "w:val") : undefined);
+  const ligatures = elementsNamed(propertyScan, "w14:ligatures")[0]?.openTag;
+  const ligaturesValue = ligatures ? xmlAttribute(ligatures, "w14:val") : undefined;
+  const contextualAlternates = elementsNamed(propertyScan, "w14:cntxtAlts")[0]?.openTag;
+  const contextualAlternatesValue = contextualAlternates
+    ? xmlAttribute(contextualAlternates, "w14:val")
+    : undefined;
   const sizeHalfPoints = Number(size ? xmlAttribute(size, "w:val") : undefined);
   const spacingTwips = Number(
     spacing ? xmlAttribute(spacing, "w:val") : undefined
@@ -536,6 +553,19 @@ function styleFromRunXml(runXml: string): TextStyle | undefined {
     languageBidi: language ? xmlAttribute(language, "w:bidi") : undefined,
     rightToLeft: booleanElementValue(propertyScan, "w:rtl"),
     complexScript: booleanElementValue(propertyScan, "w:cs"),
+    ligatures: TEXT_LIGATURE_VALUES.includes(ligaturesValue as TextLigatures)
+      ? ligaturesValue as TextLigatures
+      : undefined,
+    contextualAlternates: !contextualAlternates
+      ? undefined
+      : contextualAlternatesValue === undefined || ["true", "1"].includes(contextualAlternatesValue)
+        ? true
+        : ["false", "0"].includes(contextualAlternatesValue)
+          ? false
+          : undefined,
+    kerningMinFontSizePt: Number.isFinite(kerningHalfPoints) && kerningHalfPoints >= 0
+      ? kerningHalfPoints / 2
+      : undefined,
     characterSpacingTwips: Number.isFinite(spacingTwips)
       ? spacingTwips
       : undefined,

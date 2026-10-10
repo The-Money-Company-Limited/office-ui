@@ -36,6 +36,7 @@ struct RawStyleDefinition {
     based_on_id: Option<String>,
     next_style_id: Option<String>,
     align: Option<ParagraphAlignment>,
+    snap_to_grid: Option<bool>,
     text_alignment: Option<ParagraphTextAlignment>,
     heading_level: Option<HeadingLevel>,
     numbering: Option<ParagraphNumbering>,
@@ -941,6 +942,10 @@ pub fn parse_table_conditional_style_from_xml(
     let paragraph_text_alignment = super::style::parse_paragraph_text_alignment_from_xml(
         direct_table_property(xml, "w:pPr").unwrap_or_default(),
     );
+    let paragraph_snap_to_grid = parse_on_off_attribute(
+        direct_table_property(xml, "w:pPr").unwrap_or_default(),
+        "snapToGrid",
+    );
     let paragraph_align = map_alignment(
         super::scan::find_attribute_value_in_tag(&paragraph_properties_xml, "w:jc", "w:val")
             .as_deref(),
@@ -979,6 +984,7 @@ pub fn parse_table_conditional_style_from_xml(
         && cell_background_color.is_none()
         && cell_preferred_width.is_none()
         && paragraph_align.is_none()
+        && paragraph_snap_to_grid.is_none()
         && paragraph_text_alignment.is_none()
         && run_style.is_none()
         && table_borders.is_none()
@@ -994,6 +1000,7 @@ pub fn parse_table_conditional_style_from_xml(
         cell_background_color,
         cell_preferred_width,
         paragraph_align,
+        paragraph_snap_to_grid,
         paragraph_text_alignment,
         run_style,
         table_borders,
@@ -1026,6 +1033,8 @@ fn merge_table_conditional_style(
             .or_else(|| inherited.and_then(|value| value.paragraph_align)),
         paragraph_text_alignment: direct.and_then(|value| value.paragraph_text_alignment)
             .or_else(|| inherited.and_then(|value| value.paragraph_text_alignment)),
+        paragraph_snap_to_grid: direct.and_then(|value| value.paragraph_snap_to_grid)
+            .or_else(|| inherited.and_then(|value| value.paragraph_snap_to_grid)),
         run_style: merge_text_styles(
             inherited.and_then(|value| value.run_style.clone()),
             direct.and_then(|value| value.run_style.clone()),
@@ -1052,6 +1061,7 @@ fn merge_table_conditional_style(
         && merged.cell_background_color.is_none()
         && merged.cell_preferred_width.is_none()
         && merged.paragraph_align.is_none()
+        && merged.paragraph_snap_to_grid.is_none()
         && merged.paragraph_text_alignment.is_none()
         && merged.run_style.is_none()
         && merged.table_borders.is_none()
@@ -1101,6 +1111,9 @@ pub fn merge_text_styles(
         right_to_left: None,
         complex_script: None,
         character_spacing_twips: None,
+        kerning_min_font_size_pt: None,
+        ligatures: None,
+        contextual_alternates: None,
         vertical_align: None,
         run_border: None,
     };
@@ -1197,6 +1210,15 @@ pub fn merge_text_styles(
         if style.character_spacing_twips.is_some() {
             merged.character_spacing_twips = style.character_spacing_twips;
         }
+        if style.kerning_min_font_size_pt.is_some() {
+            merged.kerning_min_font_size_pt = style.kerning_min_font_size_pt;
+        }
+        if style.ligatures.is_some() {
+            merged.ligatures = style.ligatures;
+        }
+        if style.contextual_alternates.is_some() {
+            merged.contextual_alternates = style.contextual_alternates;
+        }
         if style.vertical_align.is_some() {
             merged.vertical_align = style.vertical_align;
         }
@@ -1235,6 +1257,9 @@ pub fn merge_text_styles(
         || merged.right_to_left.is_some()
         || merged.complex_script.is_some()
         || merged.character_spacing_twips.is_some()
+        || merged.kerning_min_font_size_pt.is_some()
+        || merged.ligatures.is_some()
+        || merged.contextual_alternates.is_some()
         || merged.vertical_align.is_some()
         || merged.run_border.is_some();
 
@@ -1579,6 +1604,7 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
     let shading_tag = super::scan::find_tag_token(xml, "w:shd");
     let character_spacing_match =
         super::scan::find_attribute_value_in_tag(xml, "w:spacing", "w:val");
+    let kerning_match = super::scan::find_attribute_value_in_tag(xml, "w:kern", "w:val");
     let size_match = super::scan::find_attribute_value_in_tag(xml, "w:sz", "w:val");
     let complex_size_match = super::scan::find_attribute_value_in_tag(xml, "w:szCs", "w:val");
     let run_fonts_tag = super::scan::find_tag_token(xml, "w:rFonts").unwrap_or_default();
@@ -1643,6 +1669,9 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
         right_to_left: None,
         complex_script: None,
         character_spacing_twips: None,
+        kerning_min_font_size_pt: None,
+        ligatures: super::style::parse_text_ligatures_from_xml(xml),
+        contextual_alternates: super::style::parse_contextual_alternates_from_xml(xml),
         vertical_align: None,
         run_border: None,
     };
@@ -1700,6 +1729,12 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
     if let Some(character_spacing) = character_spacing_match.and_then(|raw| raw.parse::<i64>().ok())
     {
         style.character_spacing_twips = Some(character_spacing);
+    }
+
+    if let Some(kerning_raw) = kerning_match.and_then(|raw| raw.parse::<f64>().ok()) {
+        if kerning_raw.is_finite() && kerning_raw >= 0.0 {
+            style.kerning_min_font_size_pt = Some(kerning_raw / 2.0);
+        }
     }
 
     if let Some(size_raw) = size_match.and_then(|raw| raw.parse::<f64>().ok()) {
@@ -2047,6 +2082,7 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
         let paragraph_defaults = resolve_style_properties_block(&doc_defaults_xml, "w:pPr");
         let default_paragraph_has_num_pr = super::scan::contains_tag(&paragraph_defaults, "w:numPr");
         let align = parse_paragraph_align_from_xml(&paragraph_defaults);
+        let snap_to_grid = parse_on_off_attribute(&paragraph_defaults, "snapToGrid");
         let text_alignment = super::style::parse_paragraph_text_alignment_from_xml(
             direct_table_property(&doc_defaults_xml, "w:pPrDefault")
                 .and_then(|xml| direct_table_property(xml, "w:pPr")).unwrap_or_default(),
@@ -2069,6 +2105,7 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
         let page_break_before = parse_on_off_attribute(&paragraph_defaults, "pageBreakBefore");
 
         if align.is_none()
+            && snap_to_grid.is_none()
             && text_alignment.is_none()
             && spacing.is_none()
             && indent.is_none()
@@ -2086,6 +2123,11 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
         } else {
             Some(ParagraphStyle {
                 align,
+                snap_to_grid,
+                source_snap_to_grid: None,
+                source_has_snap_to_grid: None,
+                source_inherited_snap_to_grid: None,
+                source_table_snap_to_grid: None,
                 text_alignment,
                 source_text_alignment: None,
                 source_has_text_alignment: None,
@@ -2156,6 +2198,7 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
                 based_on_id: get_attribute(&based_on_tag, "w:val"),
                 next_style_id: get_attribute(&next_tag, "w:val"),
                 align: parse_paragraph_align_from_xml(&paragraph_properties_xml),
+                snap_to_grid: parse_on_off_attribute(&paragraph_properties_xml, "snapToGrid"),
                 text_alignment: super::style::parse_paragraph_text_alignment_from_xml(
                     direct_table_property(&style_xml, "w:pPr").unwrap_or_default(),
                 ),
@@ -2306,6 +2349,8 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
             based_on_id: style.based_on_id.clone(),
             next_style_id: style.next_style_id.clone(),
             align: style.align.or(inherited.as_ref().and_then(|value| value.align)),
+            snap_to_grid: style.snap_to_grid.or(inherited.as_ref().and_then(|value| value.snap_to_grid)),
+            source_has_snap_to_grid: Some(style.snap_to_grid.or(inherited.as_ref().and_then(|value| value.snap_to_grid)).is_some()),
             text_alignment: style.text_alignment.or(inherited.as_ref().and_then(|value| value.text_alignment)),
             source_has_text_alignment: Some(style.text_alignment.or(inherited.as_ref().and_then(|value| value.text_alignment)).is_some()),
             heading_level: style
@@ -2388,6 +2433,7 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
         .collect();
 
     for style in &mut paragraph_styles {
+        style.snap_to_grid = style.snap_to_grid.or(default_paragraph_style.as_ref().and_then(|style| style.snap_to_grid));
         style.text_alignment = style.text_alignment.or(default_paragraph_style.as_ref().and_then(|style| style.text_alignment));
     }
 
@@ -2502,6 +2548,11 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
     let merged_default_paragraph_style = resolved_default_paragraph_style.as_ref().map(|resolved| {
         ParagraphStyle {
             align: resolved.align.or(default_paragraph_style.as_ref().and_then(|value| value.align)),
+            snap_to_grid: resolved.snap_to_grid.or(default_paragraph_style.as_ref().and_then(|value| value.snap_to_grid)),
+            source_snap_to_grid: None,
+            source_has_snap_to_grid: None,
+            source_inherited_snap_to_grid: None,
+            source_table_snap_to_grid: None,
             text_alignment: resolved.text_alignment.or(default_paragraph_style.as_ref().and_then(|value| value.text_alignment)),
             source_text_alignment: None,
             source_has_text_alignment: None,
@@ -2607,6 +2658,9 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
         run_style_by_id,
         table_style_by_id,
         table_paragraph_spacing_by_style_id,
+        doc_default_paragraph_spacing: default_paragraph_style
+            .as_ref()
+            .and_then(|style| style.spacing.clone()),
         default_paragraph_text_alignment: default_paragraph_style.as_ref().and_then(|style| style.text_alignment),
         default_paragraph_style: merged_default_paragraph_style,
         default_paragraph_style_id,

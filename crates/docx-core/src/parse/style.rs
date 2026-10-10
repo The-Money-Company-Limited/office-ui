@@ -1,5 +1,5 @@
 use crate::model::{
-    ParagraphDropCap, ParagraphDropCapType, ParagraphSpacing, ParagraphStyle, TextStyle,
+    ParagraphDropCap, ParagraphDropCapType, ParagraphSpacing, ParagraphStyle, TextLigatures, TextStyle,
     VerticalAlign, ParagraphTextAlignment,
 };
 use crate::parse::context::{ParseContext, ThemeFontMap};
@@ -72,6 +72,21 @@ pub(crate) fn parse_paragraph_text_alignment_from_xml(xml: &str) -> Option<Parag
 pub fn parse_paragraph_align_from_xml(xml: &str) -> Option<crate::model::ParagraphAlignment> {
     let alignment = regex_capture(xml, r#"(?i)<w:jc\b[^>]*w:val="([^"]+)""#);
     to_model_alignment(alignment.as_deref())
+}
+
+pub(crate) fn parse_text_ligatures_from_xml(xml: &str) -> Option<TextLigatures> {
+    super::scan::find_attribute_value_in_tag(xml, "w14:ligatures", "w14:val")
+        .as_deref()
+        .and_then(TextLigatures::from_xml_value)
+}
+
+pub(crate) fn parse_contextual_alternates_from_xml(xml: &str) -> Option<bool> {
+    let tag = super::scan::find_tag_token(xml, "w14:cntxtAlts")?;
+    match get_attribute(&tag, "w14:val").as_deref() {
+        None | Some("true" | "1") => Some(true),
+        Some("false" | "0") => Some(false),
+        _ => None,
+    }
 }
 
 pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Option<TextStyle> {
@@ -171,6 +186,9 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
         right_to_left: None,
         complex_script: None,
         character_spacing_twips: None,
+        kerning_min_font_size_pt: None,
+        ligatures: None,
+        contextual_alternates: None,
         vertical_align: None,
         run_border: None,
     };
@@ -245,6 +263,24 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
     if let Some(spacing) = character_spacing_match.and_then(|v| v.parse::<i64>().ok()) {
         style.character_spacing_twips = Some(spacing);
         has_any = true;
+    }
+
+    if let Some(ligatures) = parse_text_ligatures_from_xml(xml) {
+        style.ligatures = Some(ligatures);
+        has_any = true;
+    }
+    if let Some(contextual_alternates) = parse_contextual_alternates_from_xml(xml) {
+        style.contextual_alternates = Some(contextual_alternates);
+        has_any = true;
+    }
+
+    if let Some(kerning) = regex_capture(xml, r#"(?i)<w:kern\b[^>]*w:val="(\d+)""#)
+        .and_then(|value| value.parse::<f64>().ok())
+    {
+        if kerning.is_finite() && kerning >= 0.0 {
+            style.kerning_min_font_size_pt = Some(kerning / 2.0);
+            has_any = true;
+        }
     }
 
     if let Some(size) = size_match.and_then(|v| v.parse::<f64>().ok()) {
@@ -511,6 +547,7 @@ pub fn parse_paragraph_style_in_table(
         &paragraph_properties_xml,
         r#"(?i)<w:pStyle\b[^>]*w:val="([^"]+)""#,
     );
+    let direct_snap_to_grid = parse_on_off_attribute(&paragraph_properties_xml, "snapToGrid");
     let direct_text_alignment = parse_paragraph_text_alignment_from_xml(&paragraph_properties_xml);
     let direct_spacing = parse_paragraph_spacing_from_xml(&paragraph_properties_xml);
     let direct_indent = parse_paragraph_indent_from_xml(&paragraph_properties_xml);
@@ -544,6 +581,9 @@ pub fn parse_paragraph_style_in_table(
         .or_else(|| default_paragraph_style.and_then(|style| style.text_alignment))
         .or(context.style_sheet.default_paragraph_text_alignment);
     let text_alignment = direct_text_alignment.or(inherited_text_alignment);
+    let inherited_snap_to_grid = inherited.and_then(|style| style.snap_to_grid)
+        .or_else(|| default_paragraph_style.and_then(|style| style.snap_to_grid));
+    let snap_to_grid = direct_snap_to_grid.or(inherited_snap_to_grid);
     let heading_level = normalize_heading_level(explicit_style_id.as_deref())
         .or_else(|| inherited.and_then(|s| s.heading_level))
         .or_else(|| default_paragraph_style.and_then(|s| s.heading_level));
@@ -585,7 +625,7 @@ pub fn parse_paragraph_style_in_table(
     };
     let spacing = merge_paragraph_spacing(
         merge_paragraph_spacing(
-            default_paragraph_style.and_then(|s| s.spacing.as_ref()),
+            context.style_sheet.doc_default_paragraph_spacing.as_ref(),
             style_layer_spacing.as_ref(),
         )
         .as_ref(),
@@ -658,6 +698,7 @@ pub fn parse_paragraph_style_in_table(
     let style_name = inherited.map(|s| s.name.clone());
 
     if align.is_none()
+        && snap_to_grid.is_none()
         && text_alignment.is_none()
         && heading_level.is_none()
         && style_id.is_none()
@@ -680,6 +721,11 @@ pub fn parse_paragraph_style_in_table(
 
     Some(ParagraphStyle {
         align,
+        snap_to_grid,
+        source_snap_to_grid: snap_to_grid,
+        source_has_snap_to_grid: Some(super::styles::direct_table_property(&paragraph_properties_xml, "w:snapToGrid").is_some()),
+        source_inherited_snap_to_grid: inherited_snap_to_grid,
+        source_table_snap_to_grid: None,
         text_alignment,
         source_text_alignment: text_alignment,
         source_has_text_alignment: Some(super::styles::direct_table_property(&paragraph_properties_xml, "w:textAlignment").is_some()),

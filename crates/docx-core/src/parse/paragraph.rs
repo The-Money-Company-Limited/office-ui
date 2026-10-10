@@ -36,7 +36,7 @@ pub struct ParsedRunTextToken {
 pub fn parse_run_text_tokens(run_xml: &str) -> Vec<ParsedRunTextToken> {
     let normalized_run_xml = prefer_alternate_content_choice(run_xml);
     let token_pattern = re::get_unchecked(
-        r#"(?is)<w:t\b[^>]*>([\s\S]*?)</w:t>|<a:t\b[^>]*>([\s\S]*?)</a:t>|<w:footnoteReference\b[^>]*w:id="(-?\d+)"[^>]*/>|<w:endnoteReference\b[^>]*w:id="(-?\d+)"[^>]*/>|<w:tab\b[^>]*/>|<a:tab\b[^>]*/>|<w:br\b[^>]*/>|<w:cr\b[^>]*/>|<a:br\b[^>]*/>|</w:p>"#,
+        r#"(?is)<w:t\b[^>]*>([\s\S]*?)</w:t>|<a:t\b[^>]*>([\s\S]*?)</a:t>|<w:footnoteReference\b[^>]*w:id="(-?\d+)"[^>]*/>|<w:endnoteReference\b[^>]*w:id="(-?\d+)"[^>]*/>|<w:tab\b[^>]*/>|<a:tab\b[^>]*/>|<w:br\b[^>]*/>|<w:cr\b[^>]*/>|<a:br\b[^>]*/>|<w:noBreakHyphen\b[^>]*/>|<w:softHyphen\b[^>]*/>|<w:sym\b[^>]*/>|</w:p>"#,
     );
     let mut parts = Vec::new();
     for caps in token_pattern.captures_iter(&normalized_run_xml) {
@@ -56,7 +56,7 @@ pub fn parse_run_text_tokens(run_xml: &str) -> Vec<ParsedRunTextToken> {
         }
         if let Some(m) = caps.get(3) {
             let reference_id: i64 = m.as_str().parse().unwrap_or(0);
-            if reference_id > 0 {
+            if reference_id >= 0 {
                 parts.push(ParsedRunTextToken {
                     text: String::new(),
                     note_reference: Some(NoteReference {
@@ -69,7 +69,7 @@ pub fn parse_run_text_tokens(run_xml: &str) -> Vec<ParsedRunTextToken> {
         }
         if let Some(m) = caps.get(4) {
             let reference_id: i64 = m.as_str().parse().unwrap_or(0);
-            if reference_id > 0 {
+            if reference_id >= 0 {
                 parts.push(ParsedRunTextToken {
                     text: String::new(),
                     note_reference: Some(NoteReference {
@@ -81,7 +81,17 @@ pub fn parse_run_text_tokens(run_xml: &str) -> Vec<ParsedRunTextToken> {
             continue;
         }
         let marker = caps.get(0).map(|m| m.as_str().to_ascii_lowercase()).unwrap_or_default();
-        if marker == "</w:p>" {
+        if marker.starts_with("<w:nobreakhyphen") || marker.starts_with("<w:softhyphen") || marker.starts_with("<w:sym") {
+            let raw = caps.get(0).unwrap().as_str();
+            let text = if marker.starts_with("<w:nobreakhyphen") { "\u{2011}".to_string() }
+                else if marker.starts_with("<w:softhyphen") { "\u{00ad}".to_string() }
+                else {
+                    let code = get_attribute(raw, "w:char").and_then(|v| u32::from_str_radix(&v, 16).ok());
+                    let font = get_attribute(raw, "w:font").unwrap_or_default();
+                    code.and_then(|code| super::symbols::symbol_character(&font, code).or_else(|| char::from_u32(code))).unwrap_or('\u{fffd}').to_string()
+                };
+            parts.push(ParsedRunTextToken { text, note_reference: None });
+        } else if marker == "</w:p>" {
             parts.push(ParsedRunTextToken {
                 text: "\n".to_string(),
                 note_reference: None,
@@ -1170,6 +1180,7 @@ pub(crate) fn parse_paragraph_with_table_run_style(
     enum ContentToken<'a> {
         Run { start: usize, token: &'a ParagraphRunToken },
         FormField { start: usize, token: &'a ParagraphFormFieldToken },
+        Math { start: usize, xml: &'a str },
     }
 
     let mut content_tokens: Vec<ContentToken<'_>> = Vec::new();
@@ -1198,13 +1209,25 @@ pub(crate) fn parse_paragraph_with_table_run_style(
             token: form_field_token,
         });
     }
+    let text_box_ranges = extract_balanced_tag_ranges(paragraph_xml, "w:txbxContent");
+    for range in extract_balanced_tag_ranges(paragraph_xml, "m:oMath") {
+        if !text_box_ranges.iter().any(|story| range.start >= story.start && range.end <= story.end) {
+            content_tokens.push(ContentToken::Math { start: range.start, xml: &paragraph_xml[range.start..range.end] });
+        }
+    }
     content_tokens.sort_by_key(|token| match token {
         ContentToken::Run { start, .. } => *start,
         ContentToken::FormField { start, .. } => *start,
+        ContentToken::Math { start, .. } => *start,
     });
 
     for content_token in content_tokens {
         match content_token {
+            ContentToken::Math { xml, .. } => {
+                if let Some(math) = super::math::parse_math(xml) {
+                    children.push(ParagraphChildNode::Image(math));
+                } else { context.push_warning("Unable to interpret an equation; source markup is preserved"); }
+            }
             ContentToken::FormField { token, .. } => {
                 children.push(ParagraphChildNode::FormField(token.field.clone()));
             }
@@ -1238,7 +1261,15 @@ pub(crate) fn parse_paragraph_with_table_run_style(
                         note_reference: token.note_reference,
                     }));
                 }
-                for image in images {
+                for mut image in images {
+                    if let Some(xml) = image.source_xml.as_deref() {
+                        let active_xml = prefer_alternate_content_choice(xml);
+                        let text_boxes = extract_balanced_tag_blocks(&active_xml, "w:txbxContent");
+                        if !text_boxes.is_empty() {
+                            image.content_nodes = Some(text_boxes.iter().flat_map(|xml| super::document::parse_document_xml(xml, context)).collect());
+                            image.semantic_kind = Some("text_box".into());
+                        }
+                    }
                     children.push(ParagraphChildNode::Image(image));
                 }
             }
@@ -1273,6 +1304,7 @@ pub(crate) fn parse_paragraph_with_table_run_style(
 
     ParagraphNode {
         r#type: ParagraphNodeType::Paragraph,
+                block_id: None,
         style: paragraph_style,
         paragraph_mark_style: paragraph_mark_style.clone(),
         source_paragraph_mark_style: paragraph_mark_style,

@@ -10,6 +10,24 @@ export interface TextRunBorderStyle {
   shadow?: boolean;
 }
 
+export type TextLigatures =
+  | "none"
+  | "standard"
+  | "contextual"
+  | "historical"
+  | "discretional"
+  | "standardContextual"
+  | "standardHistorical"
+  | "contextualHistorical"
+  | "standardDiscretional"
+  | "contextualDiscretional"
+  | "historicalDiscretional"
+  | "standardContextualHistorical"
+  | "standardContextualDiscretional"
+  | "standardHistoricalDiscretional"
+  | "contextualHistoricalDiscretional"
+  | "all";
+
 export interface TextStyle {
   bold?: boolean;
   italic?: boolean;
@@ -49,6 +67,10 @@ export interface TextStyle {
   rightToLeft?: boolean;
   complexScript?: boolean;
   characterSpacingTwips?: number;
+  /** Minimum font size in points at which OOXML kerning is enabled. */
+  kerningMinFontSizePt?: number;
+  ligatures?: TextLigatures;
+  contextualAlternates?: boolean;
   verticalAlign?: "superscript" | "subscript";
   runBorder?: TextRunBorderStyle;
 }
@@ -65,6 +87,10 @@ export interface TextRunNode {
 }
 
 export interface ImageRunNode {
+  mathMl?: string;
+  blockId?: string;
+  contentNodes?: DocNode[];
+  semanticKind?: string;
   type: "image";
   src?: string;
   alt?: string;
@@ -212,6 +238,15 @@ export type ParagraphTextAlignment = "auto" | "top" | "center" | "baseline" | "b
 
 export interface ParagraphStyle {
   align?: ParagraphAlignment;
+  snapToGrid?: boolean;
+  /** @internal Imported effective document-grid snapping. */
+  sourceSnapToGrid?: boolean;
+  /** @internal Whether the imported paragraph had a direct grid property. */
+  sourceHasSnapToGrid?: boolean;
+  /** @internal Inherited grid setting exposed when a direct override is cleared. */
+  sourceInheritedSnapToGrid?: boolean;
+  /** @internal Table-style grid setting before paragraph-style overrides. */
+  sourceTableSnapToGrid?: boolean;
   textAlignment?: ParagraphTextAlignment;
   /** @internal Imported effective vertical character alignment. */
   sourceTextAlignment?: ParagraphTextAlignment;
@@ -461,6 +496,9 @@ export interface ParagraphStyleDefinition {
   basedOnId?: string;
   nextStyleId?: string;
   align?: ParagraphAlignment;
+  snapToGrid?: boolean;
+  /** @internal Whether the style chain owns grid snapping before document defaults. */
+  sourceHasSnapToGrid?: boolean;
   textAlignment?: ParagraphTextAlignment;
   /** @internal Whether the style chain owns alignment before document defaults. */
   sourceHasTextAlignment?: boolean;
@@ -540,6 +578,7 @@ export interface DocumentNoteDefinition {
 }
 
 export interface DocumentCommentDefinition {
+  nodes?: DocNode[];
   id: number;
   author?: string;
   initials?: string;
@@ -562,6 +601,7 @@ export interface DocumentCommentDefinition {
 }
 
 export interface DocumentCompatibilitySettings {
+  adjustLineHeightInTable?: boolean | null;
   noLeading?: boolean;
   suppressTopSpacingWP?: boolean;
   truncateFontHeightsLikeWP6?: boolean;
@@ -570,6 +610,7 @@ export interface DocumentCompatibilitySettings {
   suppressBottomSpacing?: boolean;
 
   compatibilityMode?: number;
+  enableOpenTypeFeatures?: boolean;
   suppressSpacingBeforeAfterPageBreak?: boolean;
   usePrinterMetrics?: boolean;
   useFixedHtmlParagraphSpacing?: boolean;
@@ -581,6 +622,7 @@ export interface DocumentCompatibilitySettings {
 export interface DocModel {
   nodes: DocNode[];
   metadata: {
+    documentId?: string;
     sourceParts: number;
     warnings: string[];
     documentPageCount?: number;
