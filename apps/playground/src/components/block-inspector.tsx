@@ -14,7 +14,7 @@ import {
 } from "@extend-ai/react-docx";
 import { Button } from "./ui/button";
 import { Switch } from "./ui/switch";
-import { BlockContent } from "./block-content";
+import { BlockContent, collectBlockImages } from "./block-content";
 
 const colors: Record<DocumentBlockType, string> = {
   text: "#3b82f6",
@@ -79,6 +79,7 @@ export function BlockInspector({
   const [contentMode, setContentMode] = React.useState<"formatted" | "markdown">("formatted");
   const [showAllHighlights, setShowAllHighlights] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
+  const images = React.useMemo(() => collectBlockImages(model), [model]);
   React.useEffect(() => {
     let cancelled = false;
     setBusy(true);
@@ -309,7 +310,7 @@ export function BlockInspector({
                         {blockDetail(block)}
                       </p>
                     ) : null}
-                    <BlockContent block={block} mode={contentMode} />
+                    <BlockContent block={block} mode={contentMode} images={images} />
                   </div>
                 );
               })}

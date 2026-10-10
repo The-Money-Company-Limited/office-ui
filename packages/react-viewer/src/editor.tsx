@@ -54011,6 +54011,7 @@ export function DocxEditorViewer({
                 return (
                   <img
                     key={`${keyPrefix}-dual-line-image-${lineIndex}-${run.key}-${overlapStart}`}
+                    data-docx-source-id={run.image.blockId}
                     src={renderableImageSrc}
                     alt={run.image.alt ?? "DOCX image"}
                     draggable={false}
@@ -54162,6 +54163,7 @@ export function DocxEditorViewer({
             <span
               key={`${keyPrefix}-manual-image-${geometry.imageIndex}`}
               contentEditable={false}
+              data-docx-source-id={manualImage.blockId}
               data-docx-image-location={manualImageKey}
               style={{
                 display: "inline-block",
@@ -54473,6 +54475,7 @@ export function DocxEditorViewer({
             <span
               key={`${keyPrefix}-manual-fixed-wrap-image-${geometry.imageIndex}`}
               contentEditable={false}
+              data-docx-source-id={manualImage.blockId}
               data-docx-image-location={manualImageKey}
               style={{
                 display: "inline-block",
@@ -54726,6 +54729,7 @@ export function DocxEditorViewer({
             <span
               key={`${keyPrefix}-manual-absolute-${childIndex}`}
               contentEditable={false}
+              data-docx-source-id={manualImage.blockId}
               ref={(element) =>
                 applyMixedAbsoluteFloatingImageOrigin(
                   element,
