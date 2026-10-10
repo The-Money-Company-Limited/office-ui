@@ -76,7 +76,11 @@ Unresolved references produce explicit statuses/issues, never a zero-size placeh
 
 ## Playground
 
-Enable **Blocks** in the toolbar. The inspector uses Extend's 15 type names and highlight colors, shows table dimensions and cell indexes/spans, and offers a type filter with counts. Turn on **Show all highlights** to outline every mounted block matching that filter, including individual table cells. Hover or focus a row to emphasize its fragments; click to reveal it and retain selection. The JSON button includes the selected block's current geometry. Download exports the filtered semantic block result without pretending browser coordinates are permanent parser data. Disable Blocks to remove the panel and overlays.
+Enable **Blocks** in the toolbar. The inspector uses Extend's 15 type names and highlight colors, shows table dimensions and cell indexes/spans, and offers a type filter with counts. Turn on **Show all highlights** to outline every mounted block matching that filter, including individual table cells. Hover or focus a row to emphasize its fragments; click to reveal it and retain selection. The JSON button includes the selected block's current geometry. Download exports the nonempty semantic block result without pretending browser coordinates are permanent parser data. Disable Blocks to remove the panel and overlays.
+
+**Formatted** shows complete block text, retained run styling (bold, italic, underline, strike, highlight, color, font, size, and subscript/superscript), links, table structure, and equations. **Markdown** shows the complete source representation, using HTML for formatting that Markdown cannot express. Neither mode truncates block text. These previews use the imported styles; they do not reproduce every Word typographic effect.
+
+Figures resolve their source IDs against the loaded model's embedded images, including assets inside tables and auxiliary stories. The formatted preview respects crop, opacity, and image filters. Alt text remains the accessibility label; unavailable image formats produce an explicit fallback. Markdown retains an image reference to the package asset path. Persist or serve the associated assets when consuming that Markdown outside the playground. Text boxes show their structured child content.
 
 ## Extend integration
 
@@ -94,9 +98,9 @@ The optional `inspectDocumentSource(bytes)` / `document_source_graph(package)` A
 
 Recognized imported HTML, subdocuments, embedded objects/controls, and diagrams are diagnosed as preserved-only. Equation rendering is diagnosed as approximate. Dynamic field evaluation, all floating/grouped drawing content, comprehensive revision views, encrypted/older DOC formats, imported HTML rendering, OCR, source-range geometry, and complete Word typography/pagination remain outside demonstrated parity. The diagnostics are not an exhaustive OOXML feature audit.
 
-The acceptance targets are independent: content retention, semantic structure, stable references across runtimes, correct geometry in our viewer, and visual/page-break parity with Word. Passing one does not establish the others. The older native Word corpus comparison remains paused.
+The acceptance targets are independent: content retention, semantic structure, stable references across runtimes, correct geometry in our viewer, and visual/page-break parity with Word. Passing one does not establish the others. Native Word automation remains paused; the latest browser sample compares against previously captured, source-bound native references.
 
-Validation artifacts for this implementation are in the ignored `output/playwright/structured-blocks/` directory. They include upstream Mammoth fixtures, focused semantic checks, the retained 1,000-document corpus comparison, native/WASM legacy DOC results, browser interaction checks, and a playground screenshot. The corpus compares parser output only; it is not a new Word layout qualification.
+Validation artifacts for this implementation are in the ignored `output/playwright/structured-blocks/` directory. They include upstream Mammoth fixtures, focused semantic checks, the retained 1,000-document parser comparison, native/WASM legacy DOC results, browser corpus/local samples, interaction checks, and playground screenshots. The parser corpus and browser layout sample are separate acceptance checks.
 
 ### Recorded verification
 
@@ -105,4 +109,8 @@ Validation artifacts for this implementation are in the ignored `output/playwrig
 - All 17 upstream Mammoth DOCX fixtures matched normalized body text. Fifteen focused checks covered rich text, UTF-16 offsets/encoding, strict namespaces, relocated parts and round trip, notes/comments, header/footer types, line breaks, and source preservation.
 - Eight legacy DOC fixtures produced identical native Rust and shipped CJS/WASM block results.
 - The selected existing suites passed 85 Rust and 39 TypeScript tests. Workspace type checking and the library/playground builds passed.
-- Browser checks covered table/cell, heading, equation and figure rectangles, zoom, later-page navigation, selection JSON, disabling highlights, a paragraph split over five pages, and header/footer/page-number/footnote fragments. These check our viewer's own geometry; no native Word pagination comparison was resumed.
+- Browser checks covered table/cell, heading, equation and figure rectangles, zoom, later-page navigation, selection JSON, disabling highlights, a paragraph split over five pages, and header/footer/page-number/footnote fragments. Formatted/Markdown checks also cover combined text styling, unstyled runs, untruncated long text, embedded images, cropping, and floating-image hover anchors.
+- The 100-document browser corpus sample rendered 807 pages and resolved 58,852 block fragments. Resolved rectangles were finite and within their pages, all had matching overlays, and the Extend projections passed coordinate/hierarchy checks. Some source blocks remain unresolved or invisible; this is not complete bounding-box coverage.
+- Page counts matched the frozen native Word reference for 69 of 100 sampled documents. Of 96 native boundaries in the text-qualified subset, 77 had unique text anchors and 36 matched the browser break. Only three of 28 qualified documents matched complete per-page normalized text. Word pagination parity remains incomplete.
+- An additional browser sample of 18 local DOCX and six local DOC files rendered 508 pages and resolved 16,060 block fragments. All resolved fragments passed the rectangle/overlay/Extend checks; 60 source blocks remained unresolved or invisible. No native Word reference was available for those local sample comparisons.
+- The figure-preview change passed the playground type check and production build, the library build, and 48 existing image-related tests. Browser checks confirmed embedded PNG previews, cropped figures, TIFF conversion in a footer, and figure hover/show-all highlights.

@@ -20102,12 +20102,21 @@ function syntheticTextBoxSvg(
   );
 }
 
-function syntheticTextBoxContainsPictureLayer(image: ImageRunNode): boolean {
+function syntheticTextBoxContainsPictureLayer(
+  image: ImageRunNode,
+  includeContentPictures = true
+): boolean {
   if (!image.syntheticTextBox || !image.sourceXml) {
     return false;
   }
 
-  if (/<pic:pic\b|<a:blip\b/i.test(image.sourceXml)) {
+  const pictureXml = includeContentPictures
+    ? image.sourceXml
+    : balancedTagXmlBlocks(image.sourceXml, "w:txbxContent").reduce(
+        (xml, contentXml) => xml.replace(contentXml, ""),
+        image.sourceXml
+      );
+  if (/<pic:pic\b|<a:blip\b/i.test(pictureXml)) {
     return true;
   }
 
@@ -55189,7 +55198,14 @@ export function DocxEditorViewer({
             ) ?? resolveRenderableImageSource(child);
           const isLiveSyntheticTextBox =
             child.syntheticTextBox &&
-            !syntheticTextBoxContainsPictureLayer(child);
+            !syntheticTextBoxContainsPictureLayer(child, false);
+          const hasStructuredTextBoxContent =
+            child.textBoxText === undefined &&
+            child.contentNodes?.some(
+              (node) => node.type === "table" ||
+                (node.type === "paragraph" &&
+                  node.children.some((run) => run.type === "image"))
+            );
           const syntheticTextBoxParagraphs = isLiveSyntheticTextBox
             ? resolveSyntheticTextBoxParagraphs(child)
             : undefined;
@@ -55374,7 +55390,7 @@ export function DocxEditorViewer({
               {isLiveSyntheticTextBox ? (
                 <div
                   data-docx-textbox-editor="true"
-                  contentEditable={!isReadOnly}
+                  contentEditable={!isReadOnly && !hasStructuredTextBoxContent}
                   suppressContentEditableWarning
                   spellCheck={false}
                   onInput={(event) => event.stopPropagation()}
@@ -55402,7 +55418,7 @@ export function DocxEditorViewer({
                     }
                   }}
                   onBlur={(event) => {
-                    if (isReadOnly) {
+                    if (isReadOnly || hasStructuredTextBoxContent) {
                       return;
                     }
                     editor.setSyntheticTextBoxText(
@@ -55434,8 +55450,8 @@ export function DocxEditorViewer({
                     display: "block",
                   }}
                 >
-                  {child.textBoxText === undefined && child.contentNodes?.some(node => node.type === "table")
-                    ? child.contentNodes.map((node, index) => renderHeaderNode(node, `${runKey}-content-${index}`, documentContentTheme, editor.model.metadata.numberingDefinitions, undefined, widthPx))
+                  {hasStructuredTextBoxContent
+                    ? child.contentNodes?.map((node, index) => renderHeaderNode(node, `${runKey}-content-${index}`, documentContentTheme, editor.model.metadata.numberingDefinitions, undefined, widthPx))
                     : syntheticTextBoxParagraphs &&
                   syntheticTextBoxParagraphs.length > 0
                     ? syntheticTextBoxParagraphs.map(

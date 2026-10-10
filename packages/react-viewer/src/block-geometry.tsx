@@ -291,6 +291,8 @@ export function DocxBlockHighlights({
     document.fonts?.addEventListener("loadingdone", schedule);
     window.addEventListener("resize", schedule);
     root.addEventListener("scroll", schedule, true);
+    root.addEventListener("load", schedule, true);
+    root.addEventListener("error", schedule, true);
     void document.fonts?.ready.then(schedule);
     update();
     return () => {
@@ -301,6 +303,8 @@ export function DocxBlockHighlights({
       document.fonts?.removeEventListener("loadingdone", schedule);
       window.removeEventListener("resize", schedule);
       root.removeEventListener("scroll", schedule, true);
+      root.removeEventListener("load", schedule, true);
+      root.removeEventListener("error", schedule, true);
     };
   }, [rootRef, displayed, block, onGeometry]);
   return (

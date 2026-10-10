@@ -44,7 +44,7 @@
   },
   "dependencies": {
     "@chenglou/pretext": "^0.0.8",
-    "@tanstack/react-virtual": "^3.13.12",
+    "@tanstack/react-virtual": "^3.14.14",
     "fast-png": "^8.0.0",
     "utif": "^3.1.0"
   },
