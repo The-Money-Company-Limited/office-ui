@@ -657,9 +657,15 @@ export function collectDocxEstimatedOverflowBreakStartNodeIndexes(
     }
 
     const remainingHeightPx = currentPageContentHeightPx - pageConsumedHeightPx;
+    const requiredFitHeightPx = Math.max(
+      1,
+      requiredHeightPx - (node.type === "paragraph" && node.style?.keepNext !== true
+        ? paragraphAfterSpacingPx(node)
+        : 0)
+    );
     if (
       pageConsumedHeightPx > 0 &&
-      requiredHeightPx > remainingHeightPx + pageOverflowTolerancePx
+      requiredFitHeightPx > remainingHeightPx + pageOverflowTolerancePx
     ) {
       breaks.add(nodeIndex);
       pageConsumedHeightPx = 0;
@@ -1135,9 +1141,15 @@ export function buildDocumentPageNodeSegments(
       }
 
       const remainingHeightPx = currentPageContentHeightPx - pageConsumedHeightPx;
+      // Trailing paragraph spacing may extend beyond the page, but still
+      // consumes flow space when another paragraph follows on the same page.
+      const requiredFitHeightPx = Math.max(
+        1,
+        requiredHeightPx - (node.style?.keepNext === true ? 0 : afterSpacingPx)
+      );
       if (
         pageConsumedHeightPx > 0 &&
-        requiredHeightPx > remainingHeightPx + pageOverflowTolerancePx
+        requiredFitHeightPx > remainingHeightPx + pageOverflowTolerancePx
       ) {
         startNextPage();
         pageConsumedHeightPx = 0;

@@ -16,7 +16,10 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value, (_key, current) => {
     if (
       _key === "sourceRunProvenance" ||
-      _key === "sourceParagraphMarkFormatting"
+      _key === "sourceParagraphMarkFormatting" ||
+      _key === "blockId" ||
+      _key === "documentId" ||
+      _key === "sourcePartNames"
     ) {
       return undefined;
     }
@@ -56,9 +59,16 @@ describe("wasm vs legacy parser", () => {
 
     const legacyPkg = await parseDocxLegacy(bytes);
     const legacy = normalizeForCompare(buildDocModelLegacy(legacyPkg));
-    const wasm = normalizeForCompare(
-      (await buildDocModelFromBytes(bytes)).model
-    );
+    const parsed = (await buildDocModelFromBytes(bytes)).model;
+    const documentId = parsed.metadata.documentId;
+    expect(documentId).toMatch(/^[a-f0-9]{64}$/);
+    expect(parsed.metadata.sourcePartNames?.document).toBe("word/document.xml");
+    const sourceIds = [...JSON.stringify(parsed).matchAll(/"blockId":"([^"]+)"/g)]
+      .map((match) => match[1]);
+    expect(sourceIds).toHaveLength(3);
+    expect(new Set(sourceIds).size).toBe(3);
+    expect(sourceIds.every((id) => id.startsWith(`docx:${documentId}/word/document.xml/`))).toBe(true);
+    const wasm = normalizeForCompare(parsed);
 
     expect(stableStringify(wasm)).toBe(stableStringify(legacy));
   });

@@ -31,6 +31,21 @@ function paragraph(text: string, style?: ParagraphNode["style"]): ModelNode {
 // page greedily instead of breaking again right after the heading — that
 // would strand the heading alone on a near-empty page (Word never does this).
 describe("keepNext chain orphan page regression", () => {
+  it.each([140, 150])("fits short paragraph text before trailing page spacing", (leadingHeightPx) => {
+    const model: DocModel = {
+      nodes: [
+        paragraph("Leading", { spacing: { lineRule: "exact", lineTwips: leadingHeightPx * 15 } }),
+        paragraph("Trailing\ncontinued", { spacing: { lineRule: "exact", lineTwips: 300, afterTwips: 300 } }),
+        paragraph("Following", { spacing: { lineRule: "exact", lineTwips: 300 } })
+      ],
+      metadata: EMPTY_METADATA
+    };
+
+    expect(buildDocumentPageNodeSegments(model, 200, 400).map((page) =>
+      page.map((segment) => segment.nodeIndex)
+    )).toEqual([[0, 1], [2]]);
+  });
+
   it("keeps at least the first companion with a keepNext heading pushed near the page bottom", () => {
     const fillerCount = 8;
     const headingIndex = fillerCount;

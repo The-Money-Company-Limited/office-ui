@@ -111,3 +111,22 @@ fn images_retain_interleaved_order_and_repeated_occurrences() {
     assert_eq!(block.details["inlines"][1]["offset"], 6);
     assert_eq!(block.details["inlines"][3]["offset"], 13);
 }
+
+#[test]
+fn field_ranges_survive_unicode_textboxes_and_alternate_content() {
+    let picture = r#"<w:pict><v:shape style="width:20pt;height:20pt"><v:imagedata r:id="image"/></v:shape></w:pict>"#;
+    let textbox = r#"<w:pict><v:shape style="width:100pt;height:30pt"><v:textbox><w:txbxContent><w:p><w:r><w:t>é😀</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict>"#;
+    let alternate = format!(r#"<mc:AlternateContent><mc:Choice Requires="v">{picture}</mc:Choice><mc:Fallback>{picture}</mc:Fallback></mc:AlternateContent>"#);
+    let mut source = package(&format!(r#"<w:p><w:r><w:t>Start</w:t>{textbox}<w:fldChar w:fldCharType="begin"/><w:instrText>HYPERLINK \l target</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>Après😀</w:t>{alternate}<w:t>Linked</w:t><w:fldChar w:fldCharType="end"/><w:t>End</w:t></w:r></w:p>"#), "");
+    let relationships = &mut source.parts.get_mut("word/_rels/document.xml.rels").unwrap().content;
+    *relationships = relationships.replace("</Relationships>", r#"<Relationship Id="image" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/a.png"/></Relationships>"#);
+    source.binary_assets.insert("word/media/a.png".into(), vec![137, 80, 78, 71, 13, 10, 26, 10]);
+    let model = build_doc_model(&source);
+    let DocNode::Paragraph(p) = &model.nodes[0] else { panic!() };
+    let text: Vec<_> = p.children.iter().filter_map(|child| if let ParagraphChildNode::Text(run) = child { Some((run.text.as_str(), run.link.as_deref())) } else { None }).collect();
+    assert_eq!(text, vec![("Start", None), ("Après😀", Some("#target")), ("Linked", Some("#target")), ("End", None)]);
+    assert_eq!(p.children.iter().filter(|child| matches!(child, ParagraphChildNode::Image(_))).count(), 2);
+    let output = extract_document_blocks(&model);
+    assert_eq!(output.blocks[0].details["inlines"][2]["start"], 5);
+    assert_eq!(output.blocks[0].details["inlines"][2]["end"], 12);
+}

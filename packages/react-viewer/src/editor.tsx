@@ -14082,6 +14082,12 @@ function collectDocxEstimatedOverflowBreakStartNodeIndexes(
     }
 
     const remainingHeightPx = currentPageContentHeightPx - pageConsumedHeightPx;
+    const requiredFitHeightPx = Math.max(
+      1,
+      requiredHeightPx - (node.type === "paragraph" && node.style?.keepNext !== true
+        ? nodeAfterSpacingPx
+        : 0)
+    );
     const canKeepTrailingSectionTailOnCurrentPage =
       shouldKeepTrailingSectionTailOnCurrentPage(
         model,
@@ -14117,7 +14123,7 @@ function collectDocxEstimatedOverflowBreakStartNodeIndexes(
       );
     if (
       pageConsumedHeightPx > 0 &&
-      requiredHeightPx > remainingHeightPx + PAGE_OVERFLOW_TOLERANCE_PX &&
+      requiredFitHeightPx > remainingHeightPx + PAGE_OVERFLOW_TOLERANCE_PX &&
       !canKeepTrailingSectionTailOnCurrentPage
     ) {
       breaks.add(nodeIndex);
@@ -16196,6 +16202,12 @@ export function buildDocumentPageNodeSegments(
 
       const remainingHeightPx =
         currentPageContentHeightPx - pageConsumedHeightPx;
+      // Trailing paragraph spacing may extend beyond the page, but still
+      // consumes flow space when another paragraph follows on the same page.
+      const requiredFitHeightPx = Math.max(
+        1,
+        requiredHeightPx - (node.style?.keepNext === true ? 0 : afterSpacingPx)
+      );
       const canKeepTrailingSectionTailOnCurrentPage =
         shouldKeepTrailingSectionTailOnCurrentPage(
           model,
@@ -16231,7 +16243,7 @@ export function buildDocumentPageNodeSegments(
         );
       if (
         pageConsumedHeightPx > 0 &&
-        requiredHeightPx > remainingHeightPx + PAGE_OVERFLOW_TOLERANCE_PX &&
+        requiredFitHeightPx > remainingHeightPx + PAGE_OVERFLOW_TOLERANCE_PX &&
         !canKeepTrailingSectionTailOnCurrentPage
       ) {
         startNextPage();

@@ -155,9 +155,14 @@ describe("round-trip", () => {
     const serialized = await serializeDocModel(edited, pkg);
     const xml = serialized.parts.get("word/document.xml")?.content ?? "";
 
-    expect(xml).toContain('xml:space = "preserve"');
+    expect(xml).toMatch(/xml:space\s*=\s*"preserve"/);
     expect(xml.match(/xml:space/gi)).toHaveLength(1);
     expect(xml).toContain("> Alpha </w:t>");
+    const reparsed = await buildDocModel(serialized);
+    expect(reparsed.nodes[0]).toMatchObject({
+      type: "paragraph",
+      children: [{ type: "text", text: " Alpha " }],
+    });
   });
 
   it("retains footnote and endnote markers when surrounding text is edited", async () => {

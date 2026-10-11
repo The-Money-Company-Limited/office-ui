@@ -90,6 +90,73 @@ const TEST_PAGE_SEGMENTATION_CALLBACKS = {
 };
 
 describe("layout-core", () => {
+  it.each([140, 150])("fits terminal text without dropping its following flow spacing", (leadingHeightPx) => {
+    const model: DocModel = {
+      ...createModel(),
+      nodes: [
+        { type: "paragraph", children: [{ type: "text", text: "Leading" }] },
+        {
+          type: "paragraph",
+          children: [{ type: "text", text: "Trailing" }],
+          style: { spacing: { afterTwips: 300 } }
+        },
+        { type: "paragraph", children: [{ type: "text", text: "Following" }] }
+      ]
+    };
+    const heights = [leadingHeightPx, 60, 20];
+    const height = (node: DocModel["nodes"][number]) => heights[model.nodes.indexOf(node)]!;
+    const callbacks = {
+      ...TEST_PAGE_SEGMENTATION_CALLBACKS,
+      estimateDocNodeHeightPx: height,
+      estimateParagraphHeightPx: height,
+      estimateParagraphLineHeightPx: () => 20,
+      paragraphLineCountWithinWidth: (node: DocModel["nodes"][number]) => node === model.nodes[1] ? 2 : 1,
+      paragraphWidowControlEnabled: () => true,
+      paragraphCanSplitAcrossPages: () => false
+    };
+
+    expect(buildDocumentPageNodeSegments(model, 200, 400, callbacks)).toEqual([
+      [{ nodeIndex: 0 }, { nodeIndex: 1 }],
+      [{ nodeIndex: 2 }]
+    ]);
+    expect([...collectDocxEstimatedOverflowBreakStartNodeIndexes(
+      model, new Set(), 200, 400, callbacks
+    )]).toEqual([2]);
+  });
+
+  it("retains spacing inside a keep-next chain when testing whether the chain fits", () => {
+    const model: DocModel = {
+      ...createModel(),
+      nodes: [
+        { type: "paragraph", children: [{ type: "text", text: "Leading" }] },
+        {
+          type: "paragraph",
+          children: [{ type: "text", text: "Kept" }],
+          style: { keepNext: true, spacing: { afterTwips: 600 } }
+        },
+        { type: "paragraph", children: [{ type: "text", text: "Following" }] }
+      ]
+    };
+    const heights = [125, 60, 20];
+    const height = (node: DocModel["nodes"][number]) => heights[model.nodes.indexOf(node)]!;
+    const callbacks = {
+      ...TEST_PAGE_SEGMENTATION_CALLBACKS,
+      estimateDocNodeHeightPx: height,
+      estimateParagraphHeightPx: height,
+      estimateParagraphLineHeightPx: () => 20,
+      paragraphLineCountWithinWidth: () => 1,
+      paragraphCanSplitAcrossPages: () => false
+    };
+
+    expect(buildDocumentPageNodeSegments(model, 200, 400, callbacks)).toEqual([
+      [{ nodeIndex: 0 }],
+      [{ nodeIndex: 1 }, { nodeIndex: 2 }]
+    ]);
+    expect([...collectDocxEstimatedOverflowBreakStartNodeIndexes(
+      model, new Set(), 200, 400, callbacks
+    )]).toEqual([1]);
+  });
+
   it("resolves document-level layout metadata into a pure resolved document", () => {
     const resolved = resolveDocumentForLayout(createModel(), {
       pageWidth: 900,
