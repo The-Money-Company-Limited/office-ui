@@ -1,7 +1,3 @@
-use std::collections::HashSet;
-
-use serde::Serialize;
-
 use crate::model::{
     ImageCrop, ImageFloating, ImageHorizontalAlign, ImageRunNode, ImageRunNodeType,
     ImageVerticalAlign, ImageWrapText, ImageWrapType,
@@ -54,17 +50,6 @@ struct ParsedChartData {
     title: Option<String>,
     categories: Vec<String>,
     series: Vec<ParsedChartSeries>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ImageDedupeKey<'a> {
-    src: Option<&'a str>,
-    content_type: Option<&'a str>,
-    width_px: Option<f64>,
-    height_px: Option<f64>,
-    floating: Option<&'a ImageFloating>,
-    synthetic_text_box: Option<bool>,
 }
 
 fn css_length_value_and_unit_to_pixels(value: &str, unit: &str) -> Option<f64> {
@@ -1322,6 +1307,18 @@ pub fn parse_run_image_block(run_xml: &str, context: &ParseContext<'_>) -> Optio
 }
 
 pub fn parse_run_images(run_xml: &str, context: &ParseContext<'_>) -> Vec<ImageRunNode> {
+    parse_run_image_tokens(run_xml, context)
+        .into_iter()
+        .map(|(_, image)| image)
+        .collect()
+}
+
+pub fn parse_run_image_tokens(
+    run_xml: &str,
+    context: &ParseContext<'_>,
+) -> Vec<(usize, ImageRunNode)> {
+    let active_run_xml = prefer_alternate_content_choice(run_xml);
+    let run_xml = active_run_xml.as_str();
     let candidate_ranges = extract_balanced_tag_blocks_in_order(
         run_xml,
         &[
@@ -1331,36 +1328,21 @@ pub fn parse_run_images(run_xml: &str, context: &ParseContext<'_>) -> Vec<ImageR
             "w:object",
         ],
     );
-    let candidate_xml_blocks: Vec<&str> = if candidate_ranges.is_empty() {
-        vec![run_xml]
+    let candidate_xml_blocks: Vec<(usize, &str)> = if candidate_ranges.is_empty() {
+        vec![(0, run_xml)]
     } else {
         candidate_ranges
             .iter()
-            .map(|range| &run_xml[range.start..range.end])
+            .map(|range| (range.start, &run_xml[range.start..range.end]))
             .collect()
     };
 
     let mut images = Vec::new();
-    let mut seen_keys = HashSet::new();
-    for candidate_xml in candidate_xml_blocks {
+    for (source_start, candidate_xml) in candidate_xml_blocks {
         let Some(image) = parse_run_image_block(candidate_xml, context) else {
             continue;
         };
-
-        let dedupe_key = serde_json::to_string(&ImageDedupeKey {
-            src: image.src.as_deref(),
-            content_type: image.content_type.as_deref(),
-            width_px: image.width_px,
-            height_px: image.height_px,
-            floating: image.floating.as_ref(),
-            synthetic_text_box: image.synthetic_text_box,
-        })
-        .unwrap_or_default();
-
-        if !seen_keys.insert(dedupe_key) {
-            continue;
-        }
-        images.push(image);
+        images.push((source_start, image));
     }
 
     images

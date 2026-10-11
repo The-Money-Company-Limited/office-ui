@@ -10973,7 +10973,7 @@ function autoRunLineHeightPx(
   const multiple = resolveAutoLineSpacingMultiple(paragraph.style?.spacing?.lineTwips, 1);
   return Math.max(
     estimatedHeightPx,
-    (measureFontNaturalLineHeightPx(font) ?? 0) * Math.min(1, multiple)
+    (measureFontNaturalLineHeightPx(font) ?? 0) * multiple
   );
 }
 
@@ -12248,7 +12248,7 @@ export function estimateParagraphLineHeightPx(
     : 0;
   return Math.max(
     autoLineHeightPx,
-    naturalLineHeightPx * Math.min(1, resolvedAutoMultiple),
+    naturalLineHeightPx * resolvedAutoMultiple,
     minimumReadableAutoLineHeightPx,
     docGridMinimumLineHeightPx ?? 0
   );
