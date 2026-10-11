@@ -235,7 +235,12 @@ pub fn parse_table(
         parse_table_look(table_properties_xml.as_deref()),
         style_table_look.as_ref(),
     );
-    let row_blocks = extract_balanced_tag_blocks(table_xml, "w:tr");
+    let row_blocks: Vec<_> = extract_balanced_tag_blocks(table_xml, "w:tr")
+        .into_iter()
+        .filter(|row| direct_table_property(row, "w:trPr")
+            .and_then(|properties| direct_table_property(properties, "w:del"))
+            .is_none())
+        .collect();
     let source_grid_bound = table_grid_xml.map(|_| column_widths_twips.len() as i64)
         .unwrap_or_else(|| row_blocks.iter().map(|row| {
             extract_balanced_tag_blocks(row, "w:tc").iter().fold(0i64, |total, cell| {

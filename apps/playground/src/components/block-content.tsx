@@ -55,6 +55,8 @@ function inlineStyle(value?: TextStyle | null): React.CSSProperties {
   return {
     fontWeight: style.bold ? 700 : undefined,
     fontStyle: style.italic ? "italic" : undefined,
+    textTransform: style.allCaps ? "uppercase" : undefined,
+    fontVariantCaps: style.smallCaps && !style.allCaps ? "small-caps" : undefined,
     textDecoration: [style.underline && "underline", style.strike && "line-through"].filter(Boolean).join(" ") || undefined,
     color: color(style.color),
     backgroundColor: color(style.backgroundColor) ?? highlights[style.highlight ?? ""] ?? color(style.highlight),
@@ -98,7 +100,7 @@ function markdownRun(run: Inline): string {
   }
   const css = inlineStyle(style);
   if (css.backgroundColor) text = `<mark style="background-color:${css.backgroundColor}">${text}</mark>`;
-  const retained = Object.entries({ color: css.color, "font-family": css.fontFamily ? JSON.stringify(css.fontFamily) : undefined, "font-size": css.fontSize, "letter-spacing": css.letterSpacing, direction: css.direction }).filter(([, value]) => value !== undefined);
+  const retained = Object.entries({ color: css.color, "font-family": css.fontFamily ? JSON.stringify(css.fontFamily) : undefined, "font-size": css.fontSize, "letter-spacing": css.letterSpacing, "text-transform": css.textTransform, "font-variant-caps": css.fontVariantCaps, direction: css.direction }).filter(([, value]) => value !== undefined);
   if (retained.length) text = `<span style="${escapeHtml(retained.map(([key, value]) => `${key}:${value}`).join(";"))}">${text}</span>`;
   const href = safeLink(run.link);
   return href ? `[${text}](${encodeURI(href).replaceAll("(", "%28").replaceAll(")", "%29")})` : text;

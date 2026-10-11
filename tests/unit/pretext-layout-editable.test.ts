@@ -47,6 +47,26 @@ beforeAll(() => {
 });
 
 describe("pretext editable layout helpers", () => {
+  it("uses uppercase display advances while retaining source offsets through expansions", async () => {
+    const { layoutItemsWithPretextAroundExclusions, resolveCaretRectAtOffset, resolveSelectionRects } = await import("../../packages/react-viewer/src/pretext-layout");
+    const text = "aßb cdef";
+    const item = { text, font: "16px Calibri", startOffset: 0, endOffset: text.length };
+    const normal = layoutItemsWithPretextAroundExclusions(text, [item], 200, 22)!;
+    const caps = layoutItemsWithPretextAroundExclusions(text, [{ ...item, textTransform: "uppercase" }], 200, 22)!;
+    expect(caps.lines[0]?.fragments[0]?.width).toBeGreaterThan(normal.lines[0]?.fragments[0]?.width ?? 0);
+    expect(caps.lines.flatMap(line => line.fragments).map(fragment => fragment.text).join("")).toBe(text);
+    expect(caps.lines.at(-1)?.fragments.at(-1)?.endOffset).toBe(text.length);
+    const before = resolveCaretRectAtOffset(caps, 1)!;
+    const after = resolveCaretRectAtOffset(caps, 2)!;
+    expect(after.left - before.left).toBeCloseTo(16 * 0.66 * 2, 6);
+    const selection = resolveSelectionRects(caps, 1, 2);
+    expect(selection).toHaveLength(1);
+    expect(selection[0]?.width).toBeCloseTo(after.left - before.left, 6);
+    const narrow = layoutItemsWithPretextAroundExclusions(text, [{ ...item, textTransform: "uppercase" }], 24, 22)!;
+    expect(narrow.lines.flatMap(line => line.fragments).map(fragment => fragment.text).join("")).toBe(text);
+    expect(narrow.lines.flatMap(line => line.fragments).every(fragment => fragment.text === text.slice(fragment.startOffset, fragment.endOffset))).toBe(true);
+  });
+
   it("resolves offsets from points within a wrapped row", async () => {
     const {
       layoutTextWithPretextAroundExclusions,

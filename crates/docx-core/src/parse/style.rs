@@ -98,6 +98,8 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
     let italic = parse_on_off_attribute(xml, "i");
     let underline = parse_underline_attribute(xml);
     let strike = parse_on_off_attribute(xml, "strike");
+    let all_caps = parse_on_off_attribute(xml, "caps");
+    let small_caps = parse_on_off_attribute(xml, "smallCaps");
 
     let color_match = regex_capture(xml, r#"(?i)<w:color\b[^>]*w:val="([^"]+)""#);
     let highlight_match = regex_capture(xml, r#"(?i)<w:highlight\b[^>]*w:val="([^"]+)""#);
@@ -160,6 +162,8 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
         italic: None,
         underline: None,
         strike: None,
+        all_caps: None,
+        small_caps: None,
         color: None,
         highlight: None,
         background_color: None,
@@ -208,6 +212,14 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
     }
     if let Some(v) = strike {
         style.strike = Some(v);
+        has_any = true;
+    }
+    if let Some(v) = all_caps {
+        style.all_caps = Some(v);
+        has_any = true;
+    }
+    if let Some(v) = small_caps {
+        style.small_caps = Some(v);
         has_any = true;
     }
 
@@ -504,6 +516,8 @@ pub(crate) fn parse_run_style_in_table(
     let bold = toggle_of(|s| s.bold);
     let italic = toggle_of(|s| s.italic);
     let strike = toggle_of(|s| s.strike);
+    let all_caps = toggle_of(|s| s.all_caps);
+    let small_caps = toggle_of(|s| s.small_caps);
 
     let merged = merge_text_styles(&[
         default_run_style,
@@ -515,6 +529,8 @@ pub(crate) fn parse_run_style_in_table(
         style.bold = bold;
         style.italic = italic;
         style.strike = strike;
+        style.all_caps = all_caps;
+        style.small_caps = small_caps;
         style
     })
 }

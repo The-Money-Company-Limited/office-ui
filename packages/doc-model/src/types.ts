@@ -33,6 +33,8 @@ export interface TextStyle {
   italic?: boolean;
   underline?: boolean;
   strike?: boolean;
+  allCaps?: boolean;
+  smallCaps?: boolean;
   color?: string;
   highlight?: string;
   backgroundColor?: string;

@@ -140,6 +140,7 @@ import {
   DEFAULT_DOC_PAGE_WIDTH,
   pageMarginPaddingStyle,
   resolveDocumentLayout,
+  resolveDocumentLayoutFallback,
   parseSectionLayout,
   parseSectionPageBorders,
   TWIPS_PER_PIXEL,
@@ -3223,7 +3224,10 @@ export function buildPaginationSectionMetrics(
 
   return sections
     .map((section) => {
-      const layout = parseSectionLayout(section.sectionPropertiesXml);
+      const layout = parseSectionLayout(
+        section.sectionPropertiesXml,
+        model ? resolveDocumentLayoutFallback(model) : DEFAULT_DOCUMENT_LAYOUT
+      );
       const sectionColumns = parseSectionColumns(section.sectionPropertiesXml);
       const pageContentHeightMultiplier = Math.max(
         1,
@@ -8362,6 +8366,7 @@ function buildParagraphPretextLayoutItems(
           font: segment.font,
           fontKerning: segment.fontKerning,
           fontFeatureSettings: segment.fontFeatureSettings,
+          textTransform: segment.textTransform,
           startOffset: run.startOffset + segment.startOffset,
           endOffset: run.startOffset + segment.endOffset,
           break: "normal" as const,
@@ -8431,6 +8436,7 @@ function resolveUniformPretextSourceFont(
     }
     if (
       run.kind !== "text" ||
+      run.style?.allCaps === true ||
       (run.style?.characterSpacingTwips ?? 0) !== 0 ||
       run.style?.verticalAlign === "superscript" ||
       run.style?.verticalAlign === "subscript"
@@ -8586,6 +8592,7 @@ function buildMeasureSegmentsPretextLayoutItems(
         font: fontSegment.font,
         fontKerning: fontSegment.fontKerning,
         fontFeatureSettings: fontSegment.fontFeatureSettings,
+        textTransform: fontSegment.textTransform,
         startOffset: startOffset + fontSegment.startOffset,
         endOffset: startOffset + fontSegment.endOffset,
         break: "normal" as const,
@@ -11034,12 +11041,13 @@ function resolveMeasureFontForFamily(
 ): string {
   const fontStyle = style?.italic ? "italic" : "normal";
   const fontWeight = style?.bold ? "700" : "400";
+  const fontVariant = style?.smallCaps && !style.allCaps ? "small-caps" : "normal";
   const fontSizePx = resolveMeasureFontSizePx(style, paragraphBaseFontPx);
   const resolvedFontFamily =
     cssFontFamily(fontFamily ?? style?.fontFamily) ??
     cssFontFamily(DEFAULT_UNSPECIFIED_DOCX_FONT_FAMILY) ??
     '"Times New Roman", serif';
-  return `${fontStyle} normal ${fontWeight} ${fontSizePx}px ${resolvedFontFamily}`;
+  return `${fontStyle} ${fontVariant} ${fontWeight} ${fontSizePx}px ${resolvedFontFamily}`;
 }
 
 function resolveMeasureFont(
@@ -11062,6 +11070,7 @@ interface TextMeasureFontSegment extends DocxScriptFontSegment {
   font: string;
   fontKerning: "normal" | "none";
   fontFeatureSettings: string;
+  textTransform?: "uppercase";
 }
 
 function resolveTextMeasureFontSegments(
@@ -11072,6 +11081,7 @@ function resolveTextMeasureFontSegments(
 ): TextMeasureFontSegment[] {
   return segmentTextByDocxScriptFont(text, style).map((segment) => ({
     ...segment,
+    textTransform: style?.allCaps ? "uppercase" : undefined,
     fontFeatureSettings: resolveDocxFontFeatureSettings(style, typography),
     fontKerning: resolveDocxFontKerning(
       style,
@@ -11104,7 +11114,7 @@ function measureTextWidthPx(
     ? (style?.characterSpacingTwips as number) / TWIPS_PER_PIXEL
     : 0;
   const cacheKey = `${fontSegments
-    .map((segment) => `${segment.font}\u0001${segment.fontKerning}\u0001${segment.fontFeatureSettings}\u0001${segment.text}`)
+    .map((segment) => `${segment.font}\u0001${segment.fontKerning}\u0001${segment.fontFeatureSettings}\u0001${segment.textTransform ?? ""}\u0001${segment.text}`)
     .join("\u0002")}\u0000${characterSpacingPx}\u0000${text}`;
   const cached = textWidthByFontAndValue.get(cacheKey);
   if (cached !== undefined) {
@@ -11112,7 +11122,8 @@ function measureTextWidthPx(
   }
 
   const fontSizePx = resolveMeasureFontSizePx(style, paragraphBaseFontPx);
-  let measuredWidthPx = fallbackMeasureTextWidthPx(text, fontSizePx);
+  const displayText = style?.allCaps ? text.toUpperCase() : text;
+  let measuredWidthPx = fallbackMeasureTextWidthPx(displayText, fontSizePx);
 
   if (typeof document !== "undefined") {
     try {
@@ -11123,7 +11134,7 @@ function measureTextWidthPx(
       if (context) {
         measuredWidthPx = fontSegments.reduce((widthPx, segment) => {
           return (
-            widthPx + measureCanvasGlyphAdvance(context, segment.font, segment.text, segment.fontKerning, segment.fontFeatureSettings)
+            widthPx + measureCanvasGlyphAdvance(context, segment.font, segment.textTransform === "uppercase" ? segment.text.toUpperCase() : segment.text, segment.fontKerning, segment.fontFeatureSettings)
           );
         }, 0);
       }
@@ -11132,8 +11143,8 @@ function measureTextWidthPx(
     }
   }
 
-  if (characterSpacingPx !== 0 && text.length > 1) {
-    measuredWidthPx += characterSpacingPx * Math.max(0, text.length - 1);
+  if (characterSpacingPx !== 0 && displayText.length > 1) {
+    measuredWidthPx += characterSpacingPx * Math.max(0, displayText.length - 1);
   }
 
   setCacheEntry(textWidthByFontAndValue, cacheKey, measuredWidthPx);
@@ -17122,6 +17133,7 @@ function applyMixedAbsoluteFloatingImageOrigin(
     verticalRelativeTo === "page" || verticalRelativeTo === "margin";
   element.style.removeProperty("--docx-mixed-page-origin-x");
   element.style.removeProperty("--docx-mixed-page-origin-y");
+  element.style.removeProperty("--docx-mixed-paragraph-origin-y");
   if (horizontalPageAnchored === verticalPageAnchored) {
     return;
   }
@@ -17169,6 +17181,23 @@ function applyMixedAbsoluteFloatingImageOrigin(
       "--docx-mixed-page-origin-y",
       `${pageOriginTop +
         (verticalRelativeTo === "margin" ? layout.marginsPx.top : 0)}px`
+    );
+  }
+  const paragraph = element.closest<HTMLElement>("[data-docx-paragraph-host='true']");
+  if (
+    horizontalPageAnchored &&
+    verticalRelativeTo === "paragraph" &&
+    Number.isFinite(floating.yPx) &&
+    paragraph &&
+    paragraph !== containingBlock &&
+    containingBlock.contains(paragraph)
+  ) {
+    const paragraphBorderTop =
+      Number.parseFloat(window.getComputedStyle(paragraph).borderTopWidth) || 0;
+    element.style.setProperty(
+      "--docx-mixed-paragraph-origin-y",
+      `${(paragraph.getBoundingClientRect().top - containingRect.top) / scale +
+        paragraphBorderTop - containingBorderTop + containingBlock.scrollTop}px`
     );
   }
 }
@@ -17310,6 +17339,18 @@ export function absoluteFloatingImageStyle(
           ? (resolvedTop as number) - (floating.yPx as number)
           : 0;
         style.top = `calc(var(--docx-mixed-page-origin-y, ${fallbackOriginTop}px) + ${
+          (floating.yPx as number) + deltaY
+        }px)`;
+      }
+      if (
+        horizontalPageAnchored &&
+        verticalRelativeTo === "paragraph" &&
+        Number.isFinite(floating.yPx)
+      ) {
+        const fallbackOriginTop = Number.isFinite(resolvedTop)
+          ? (resolvedTop as number) - (floating.yPx as number)
+          : 0;
+        style.top = `calc(var(--docx-mixed-paragraph-origin-y, ${fallbackOriginTop}px) + ${
           (floating.yPx as number) + deltaY
         }px)`;
       }
@@ -18799,6 +18840,8 @@ function runStyleToCss(
   return {
     fontWeight: style?.bold ? 700 : undefined,
     fontStyle: style?.italic ? "italic" : undefined,
+    textTransform: style?.allCaps ? "uppercase" : undefined,
+    fontVariantCaps: style?.smallCaps && !style.allCaps ? "small-caps" : undefined,
     fontKerning: resolveDocxFontKerning(style, fontSizePt ?? style?.fontSizePt ?? inheritedFontSizePt),
     fontFeatureSettings: resolveDocxFontFeatureSettings(style, typography),
     textDecoration,
@@ -36739,8 +36782,12 @@ export function useDocxPageLayout(
   const primarySectionPropertiesXml =
     editor.model.metadata.sections?.[0]?.sectionPropertiesXml ??
     editor.model.metadata.sectionPropertiesXml;
+  const documentLayoutFallback = resolveDocumentLayoutFallback(editor.model);
   const layout = React.useMemo<DocxPageLayoutInfo>(() => {
-    const sectionLayout = parseSectionLayout(primarySectionPropertiesXml);
+    const sectionLayout = parseSectionLayout(
+      primarySectionPropertiesXml,
+      documentLayoutFallback
+    );
     const sectionColumns = parseSectionColumns(primarySectionPropertiesXml);
     const pageNumberStart = parseSectionPageNumberStart(
       primarySectionPropertiesXml
@@ -36778,7 +36825,7 @@ export function useDocxPageLayout(
         pageGapPx: DOC_PAGE_BREAK_GAP,
       },
     };
-  }, [primarySectionPropertiesXml]);
+  }, [primarySectionPropertiesXml, documentLayoutFallback]);
 
   return React.useMemo(
     () => ({
@@ -39026,9 +39073,10 @@ export function DocxEditorViewer({
   const primarySectionPropertiesXml =
     documentSections[0]?.sectionPropertiesXml ??
     editor.model.metadata.sectionPropertiesXml;
+  const documentLayoutFallback = resolveDocumentLayoutFallback(editor.model);
   const documentLayout = React.useMemo(
-    () => parseSectionLayout(primarySectionPropertiesXml),
-    [primarySectionPropertiesXml]
+    () => parseSectionLayout(primarySectionPropertiesXml, documentLayoutFallback),
+    [primarySectionPropertiesXml, documentLayoutFallback]
   );
   const paginationSectionMetrics = React.useMemo(
     () => buildPaginationSectionMetrics(
@@ -39059,7 +39107,8 @@ export function DocxEditorViewer({
         JSON.stringify(
           documentSections.map((section) => {
             const layout = parseSectionLayout(
-              section.sectionPropertiesXml ?? primarySectionPropertiesXml
+              section.sectionPropertiesXml ?? primarySectionPropertiesXml,
+              documentLayoutFallback
             );
             return [
               layout.pageWidthPx,
@@ -39082,6 +39131,7 @@ export function DocxEditorViewer({
       paginationSectionMetrics,
       documentSections,
       primarySectionPropertiesXml,
+      documentLayoutFallback,
       trackedChangesEnabled,
     ]
   );
@@ -40118,7 +40168,8 @@ export function DocxEditorViewer({
         sectionIndex: currentSectionIndex,
         pageIndexWithinSection,
         layout: parseSectionLayout(
-          section.sectionPropertiesXml ?? primarySectionPropertiesXml
+          section.sectionPropertiesXml ?? primarySectionPropertiesXml,
+          documentLayoutFallback
         ),
         pageNumber: currentPageNumber,
       });
@@ -40134,6 +40185,7 @@ export function DocxEditorViewer({
     pageIndexByNodeIndex,
     pageNodeSegmentsByPage,
     primarySectionPropertiesXml,
+    documentLayoutFallback,
   ]);
   // Content signature per page for thumbnail invalidation. Structure keys
   // alone cannot detect edits that keep pagination identical (same node

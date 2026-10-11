@@ -131,6 +131,8 @@ pub fn merge_text_styles(styles: &[Option<TextStyle>]) -> Option<TextStyle> {
         italic: None,
         underline: None,
         strike: None,
+        all_caps: None,
+        small_caps: None,
         color: None,
         highlight: None,
         background_color: None,
@@ -178,6 +180,12 @@ pub fn merge_text_styles(styles: &[Option<TextStyle>]) -> Option<TextStyle> {
         }
         if style.strike.is_some() {
             merged.strike = style.strike;
+        }
+        if style.all_caps.is_some() {
+            merged.all_caps = style.all_caps;
+        }
+        if style.small_caps.is_some() {
+            merged.small_caps = style.small_caps;
         }
         if style.color.is_some() {
             merged.color = style.color.clone();

@@ -55,6 +55,7 @@ export interface PretextLayoutItem {
   letterSpacingPx?: number;
   fontKerning?: FontKerningMode;
   fontFeatureSettings?: string;
+  textTransform?: "uppercase";
   lineHeightPx?: number;
   strutFont?: string;
   verticalAlign?: "super" | "sub";
@@ -101,6 +102,7 @@ export interface PretextLineFragment {
   letterSpacingPx?: number;
   fontKerning?: FontKerningMode;
   fontFeatureSettings?: string;
+  textTransform?: "uppercase";
   lineHeightPx?: number;
   verticalAlign?: "super" | "sub";
   hasCustomVerticalMetrics?: boolean;
@@ -254,11 +256,13 @@ function measureTextWidthPx(
   text: string,
   letterSpacingPx = 0,
   fontKerning: FontKerningMode = "auto",
-  fontFeatureSettings?: string
+  fontFeatureSettings?: string,
+  textTransform?: "uppercase"
 ): number {
   if (!text) {
     return 0;
   }
+  if (textTransform === "uppercase") text = text.toUpperCase();
 
   const context = getMeasureContext();
   if (!context) {
@@ -686,7 +690,8 @@ function measureOffsetWidthPx(
   offset: number,
   letterSpacingPx = 0,
   fontKerning: FontKerningMode = "auto",
-  fontFeatureSettings?: string
+  fontFeatureSettings?: string,
+  textTransform?: "uppercase"
 ): number {
   if (offset <= 0 || !text) {
     return 0;
@@ -697,7 +702,8 @@ function measureOffsetWidthPx(
     text.slice(0, Math.max(0, Math.min(offset, text.length))),
     letterSpacingPx,
     fontKerning,
-    fontFeatureSettings
+    fontFeatureSettings,
+    textTransform
   );
 }
 
@@ -864,7 +870,8 @@ function cachedFragmentOffsetAdvances(
           localOffset,
           fragment.letterSpacingPx,
           fragment.fontKerning,
-          fragment.fontFeatureSettings
+          fragment.fontFeatureSettings,
+          fragment.textTransform
         );
   }
   advances[fragment.text.length] = fragment.width;
@@ -933,13 +940,14 @@ function prepareCached(
   wordBreak: PretextWordBreak = "normal",
   letterSpacingPx = 0,
   fontKerning: FontKerningMode = "auto",
-  fontFeatureSettings?: string
+  fontFeatureSettings?: string,
+  textTransform?: "uppercase"
 ): PreparedTextWithSegments | undefined {
   if (!canUsePretext()) {
     return undefined;
   }
 
-  const cacheKey = `${font}\u0000${fontKerning}\u0000${fontFeatureSettings ?? ""}\u0000${wordBreak}\u0000${letterSpacingPx}\u0000${text}`;
+  const cacheKey = `${font}\u0000${fontKerning}\u0000${fontFeatureSettings ?? ""}\u0000${textTransform ?? ""}\u0000${wordBreak}\u0000${letterSpacingPx}\u0000${text}`;
   const cached = getCachedValue(preparedTextByKey, cacheKey);
   if (cached) {
     return cached;
@@ -957,6 +965,36 @@ function prepareCached(
       fontKerning,
       fontFeatureSettings,
     });
+    if (context && textTransform === "uppercase") {
+      context.font = font;
+      if (typeof context.letterSpacing === "string") context.letterSpacing = "0px";
+      if (typeof context.wordSpacing === "string") context.wordSpacing = "0px";
+      const spacing = letterSpacingPx / advanceScale;
+      prepared.segments.forEach((segment, index) => {
+        const displayed = segment.toUpperCase();
+        if (displayed === segment) return;
+        const displayedCount = countGraphemes(displayed);
+        const width = context.measureText(displayed).width + Math.max(0, displayedCount - 1) * spacing;
+        prepared.widths[index] = width;
+        prepared.lineEndFitAdvances[index] = width + (displayedCount > 0 ? spacing : 0);
+        prepared.lineEndPaintAdvances[index] = width;
+        if (spacing !== 0) prepared.spacingGraphemeCounts[index] = displayedCount;
+        if (prepared.breakableFitAdvances[index]) {
+          const offsets = graphemeCodeUnitOffsets(segment);
+          let previousWidth = 0;
+          let previousCount = 0;
+          prepared.breakableFitAdvances[index] = offsets.slice(1).map((offset) => {
+            const prefix = segment.slice(0, offset).toUpperCase();
+            const prefixWidth = context.measureText(prefix).width;
+            const prefixCount = countGraphemes(prefix);
+            const advance = prefixWidth - previousWidth + Math.max(0, prefixCount - previousCount - 1) * spacing;
+            previousWidth = prefixWidth;
+            previousCount = prefixCount;
+            return advance;
+          });
+        }
+      });
+    }
     let sourceOffset = 0;
     const sourceOffsets = prepared.segments.map((segment, index) => {
       const startOffset = sourceOffset;
@@ -1244,7 +1282,7 @@ function rollbackRichLineToLegalBreak(
       ...fragment,
       text,
       end: trimmedEnd,
-      width: measureTextWidthPx(item.font, text, item.letterSpacingPx, item.fontKerning, item.fontFeatureSettings),
+      width: measureTextWidthPx(item.font, text, item.letterSpacingPx, item.fontKerning, item.fontFeatureSettings, item.textTransform),
     });
     end = { itemIndex: fragment.itemIndex, ...trimmedEnd };
     break;
@@ -1594,6 +1632,7 @@ function joinContiguousShapingItems(items: PretextLayoutItem[]): PretextLayoutIt
       previous.letterSpacingPx === item.letterSpacingPx &&
       previous.fontKerning === item.fontKerning &&
       previous.fontFeatureSettings === item.fontFeatureSettings &&
+      previous.textTransform === item.textTransform &&
       previous.lineHeightPx === item.lineHeightPx &&
       previous.strutFont === item.strutFont &&
       previous.verticalAlign === item.verticalAlign &&
@@ -1987,7 +2026,8 @@ export function layoutItemsWithPretextAroundExclusions(
       item.wordBreak ?? "normal",
       item.letterSpacingPx,
       item.fontKerning,
-      item.fontFeatureSettings
+      item.fontFeatureSettings,
+      item.textTransform
     )
   );
   if (
@@ -2011,7 +2051,7 @@ export function layoutItemsWithPretextAroundExclusions(
       (item) =>
         `${item.font}\u0001${item.break ?? "normal"}\u0001${
           item.wordBreak ?? "normal"
-        }\u0001${item.letterSpacingPx ?? 0}\u0001${item.fontKerning ?? "auto"}\u0001${item.fontFeatureSettings ?? ""}\u0001${
+        }\u0001${item.letterSpacingPx ?? 0}\u0001${item.fontKerning ?? "auto"}\u0001${item.fontFeatureSettings ?? ""}\u0001${item.textTransform ?? ""}\u0001${
           item.lineHeightPx ?? ""
         }\u0001${item.strutFont ?? ""}\u0001${item.verticalAlign ?? ""}\u0001${
           item.widthPx ?? ""
@@ -2130,6 +2170,7 @@ export function layoutItemsWithPretextAroundExclusions(
           letterSpacingPx: item.letterSpacingPx,
           fontKerning: item.fontKerning,
           fontFeatureSettings: item.fontFeatureSettings,
+          textTransform: item.textTransform,
           lineHeightPx: item.lineHeightPx ?? safeLineHeightPx,
           verticalAlign: item.verticalAlign,
           hasCustomVerticalMetrics: item.verticalMetrics !== undefined,

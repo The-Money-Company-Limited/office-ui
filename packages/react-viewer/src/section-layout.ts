@@ -46,6 +46,26 @@ export const DEFAULT_DOCUMENT_LAYOUT: DocumentLayoutMetrics = {
   docGridLinePitchPx: undefined
 };
 
+const IMPORTED_DOCUMENT_LAYOUT: DocumentLayoutMetrics = {
+  pageWidthPx: 816,
+  pageHeightPx: 1056,
+  marginsPx: { top: 96, right: 96, bottom: 96, left: 96 },
+  headerDistancePx: 48,
+  footerDistancePx: 48,
+  docGridLinePitchPx: undefined
+};
+
+export function resolveDocumentLayoutFallback(model: DocModel): DocumentLayoutMetrics {
+  const { metadata } = model;
+  // Only a wholly absent section uses the imported-document fallback. Partial
+  // section properties keep their existing field defaults.
+  return metadata.documentOpenTag &&
+    !metadata.sectionPropertiesXml &&
+    !metadata.sections?.some((section) => section.sectionPropertiesXml)
+    ? IMPORTED_DOCUMENT_LAYOUT
+    : DEFAULT_DOCUMENT_LAYOUT;
+}
+
 export function pageMarginPaddingStyle(
   marginsPx: DocumentLayoutMetrics["marginsPx"]
 ): {
@@ -238,9 +258,12 @@ export function parseSectionPageBorders(
     : undefined;
 }
 
-export function parseSectionLayout(sectionPropertiesXml?: string): DocumentLayoutMetrics {
+export function parseSectionLayout(
+  sectionPropertiesXml?: string,
+  missingSectionLayout: DocumentLayoutMetrics = DEFAULT_DOCUMENT_LAYOUT
+): DocumentLayoutMetrics {
   if (!sectionPropertiesXml) {
-    return DEFAULT_DOCUMENT_LAYOUT;
+    return missingSectionLayout;
   }
 
   const pageSizeTag = sectionPropertiesXml.match(/<w:pgSz\b[^>]*>/i)?.[0];
@@ -307,5 +330,8 @@ export function resolveDocumentSectionPropertiesXml(model: DocModel): string | u
 }
 
 export function resolveDocumentLayout(model: DocModel): DocumentLayoutMetrics {
-  return parseSectionLayout(resolveDocumentSectionPropertiesXml(model));
+  return parseSectionLayout(
+    resolveDocumentSectionPropertiesXml(model),
+    resolveDocumentLayoutFallback(model)
+  );
 }

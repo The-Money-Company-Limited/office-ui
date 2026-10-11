@@ -361,6 +361,11 @@ fn run_properties_xml(style: Option<&TextStyle>) -> String {
     if style.strike == Some(true) {
         fragments.push("<w:strike/>".to_string());
     }
+    for (name, value) in [("caps", style.all_caps), ("smallCaps", style.small_caps)] {
+        if value.is_some() {
+            fragments.push(on_off_element_xml(name, value));
+        }
+    }
     if let Some(color) = &style.color {
         fragments.push(format!(
             r#"<w:color w:val="{}"/>"#,
@@ -2215,6 +2220,8 @@ const MARK_MANAGED_PROPERTIES: &[&str] = &[
     "w:i",
     "w:u",
     "w:strike",
+    "w:caps",
+    "w:smallCaps",
     "w:color",
     "w:highlight",
     "w:shd",

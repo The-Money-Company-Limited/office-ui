@@ -1085,6 +1085,8 @@ pub fn merge_text_styles(
         italic: None,
         underline: None,
         strike: None,
+        all_caps: None,
+        small_caps: None,
         color: None,
         highlight: None,
         background_color: None,
@@ -1130,6 +1132,12 @@ pub fn merge_text_styles(
         }
         if style.strike.is_some() {
             merged.strike = style.strike;
+        }
+        if style.all_caps.is_some() {
+            merged.all_caps = style.all_caps;
+        }
+        if style.small_caps.is_some() {
+            merged.small_caps = style.small_caps;
         }
         if style.color.is_some() {
             merged.color = style.color.clone();
@@ -1231,6 +1239,8 @@ pub fn merge_text_styles(
         || merged.italic.is_some()
         || merged.underline.is_some()
         || merged.strike.is_some()
+        || merged.all_caps.is_some()
+        || merged.small_caps.is_some()
         || merged.color.is_some()
         || merged.highlight.is_some()
         || merged.background_color.is_some()
@@ -1598,6 +1608,8 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
     let italic = parse_on_off_attribute(xml, "i");
     let underline = parse_underline_attribute(xml);
     let strike = parse_on_off_attribute(xml, "strike");
+    let all_caps = parse_on_off_attribute(xml, "caps");
+    let small_caps = parse_on_off_attribute(xml, "smallCaps");
 
     let color_match = super::scan::find_attribute_value_in_tag(xml, "w:color", "w:val");
     let highlight_match = super::scan::find_attribute_value_in_tag(xml, "w:highlight", "w:val");
@@ -1643,6 +1655,8 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
         italic: None,
         underline: None,
         strike: None,
+        all_caps: None,
+        small_caps: None,
         color: None,
         highlight: None,
         background_color: None,
@@ -1680,6 +1694,8 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
     style.italic = italic;
     style.underline = underline;
     style.strike = strike;
+    style.all_caps = all_caps;
+    style.small_caps = small_caps;
 
     if style.bold.is_none() {
         if let Some(value) = drawing_bold_match {

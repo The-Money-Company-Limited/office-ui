@@ -25,11 +25,13 @@ pub struct ParagraphRunToken {
     pub start: usize,
     pub end: usize,
     pub link: Option<String>,
+    pub text_links: Vec<(usize, Option<String>)>,
 }
 
 #[derive(Clone, Debug)]
 pub struct ParsedRunTextToken {
     pub text: String,
+    pub source_start: usize,
     pub note_reference: Option<NoteReference>,
 }
 
@@ -40,8 +42,10 @@ pub fn parse_run_text_tokens(run_xml: &str) -> Vec<ParsedRunTextToken> {
     );
     let mut parts = Vec::new();
     for caps in token_pattern.captures_iter(&normalized_run_xml) {
+        let source_start = caps.get(0).unwrap().start();
         if let Some(m) = caps.get(1) {
             parts.push(ParsedRunTextToken {
+                source_start,
                 text: decode_xml_entities(m.as_str()),
                 note_reference: None,
             });
@@ -49,6 +53,7 @@ pub fn parse_run_text_tokens(run_xml: &str) -> Vec<ParsedRunTextToken> {
         }
         if let Some(m) = caps.get(2) {
             parts.push(ParsedRunTextToken {
+                source_start,
                 text: decode_xml_entities(m.as_str()),
                 note_reference: None,
             });
@@ -58,6 +63,7 @@ pub fn parse_run_text_tokens(run_xml: &str) -> Vec<ParsedRunTextToken> {
             let reference_id: i64 = m.as_str().parse().unwrap_or(0);
             if reference_id >= 0 {
                 parts.push(ParsedRunTextToken {
+                    source_start,
                     text: String::new(),
                     note_reference: Some(NoteReference {
                         kind: NoteReferenceKind::Footnote,
@@ -71,6 +77,7 @@ pub fn parse_run_text_tokens(run_xml: &str) -> Vec<ParsedRunTextToken> {
             let reference_id: i64 = m.as_str().parse().unwrap_or(0);
             if reference_id >= 0 {
                 parts.push(ParsedRunTextToken {
+                    source_start,
                     text: String::new(),
                     note_reference: Some(NoteReference {
                         kind: NoteReferenceKind::Endnote,
@@ -90,19 +97,22 @@ pub fn parse_run_text_tokens(run_xml: &str) -> Vec<ParsedRunTextToken> {
                     let font = get_attribute(raw, "w:font").unwrap_or_default();
                     code.and_then(|code| super::symbols::symbol_character(&font, code).or_else(|| char::from_u32(code))).unwrap_or('\u{fffd}').to_string()
                 };
-            parts.push(ParsedRunTextToken { text, note_reference: None });
+            parts.push(ParsedRunTextToken { text, source_start, note_reference: None });
         } else if marker == "</w:p>" {
             parts.push(ParsedRunTextToken {
+                source_start,
                 text: "\n".to_string(),
                 note_reference: None,
             });
         } else if marker.starts_with("<w:tab") || marker.starts_with("<a:tab") {
             parts.push(ParsedRunTextToken {
+                source_start,
                 text: "\t".to_string(),
                 note_reference: None,
             });
         } else {
             parts.push(ParsedRunTextToken {
+                source_start,
                 text: "\n".to_string(),
                 note_reference: None,
             });
@@ -131,11 +141,7 @@ fn hyperlink_href_from_tag(hyperlink_tag: &str, context: &ParseContext<'_>) -> O
         ));
     }
     if let (Some(anchor), Some(target)) = (anchor.as_deref(), relationship_target.as_deref()) {
-        return Some(if target.contains('#') {
-            target.to_string()
-        } else {
-            format!("{target}#{anchor}")
-        });
+        return Some(format!("{}#{anchor}", target.split('#').next().unwrap_or(target)));
     }
     if let Some(target) = relationship_target {
         return Some(target);
@@ -147,24 +153,19 @@ fn hyperlink_href_from_field_instruction(raw_instruction: &str) -> Option<String
     if raw_instruction.is_empty() {
         return None;
     }
-    let instruction = decode_xml_entities(raw_instruction)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if !re::get_unchecked(r"(?i)\bHYPERLINK\b").is_match(&instruction) {
+    let instruction = decode_xml_entities(raw_instruction);
+    if !re::get_unchecked(r"(?i)^\s*HYPERLINK\b").is_match(&instruction) {
         return None;
     }
-    let anchor_match = re::get(r#"(?i)\\l\s+"([^"]+)""#)
+    let anchor_match = re::get(r#"(?i)\\l\s+(?:"([^"]+)"|([^\s\\]+))"#)
         .and_then(|re| re.captures(&instruction))
-        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
-    let explicit_target_match = re::get(r#"(?i)\bHYPERLINK\b\s+(?:"([^"]+)"|([^\s\\]+))"#)
+        .and_then(|c| c.get(1).or_else(|| c.get(2)).map(|m| m.as_str().to_string()));
+    let explicit_target_match = re::get(r#"(?i)^\s*HYPERLINK\b\s+(?:"([^"]+)"|([^\s\\]+))"#)
         .and_then(|re| re.captures(&instruction))
         .and_then(|c| c.get(1).or_else(|| c.get(2)).map(|m| m.as_str().to_string()));
     if let Some(target) = explicit_target_match {
         if let Some(ref anchor) = anchor_match {
-            if !target.contains('#') {
-                return Some(format!("{target}#{anchor}"));
-            }
+            return Some(format!("{}#{anchor}", target.split('#').next().unwrap_or(&target)));
         }
         return Some(target);
     }
@@ -191,59 +192,50 @@ pub fn parse_paragraph_runs(paragraph_xml: &str, context: &ParseContext<'_>) -> 
         .collect();
 
     let mut field_links_by_run: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
-    let mut field_depth = 0i64;
-    let mut instruction_parts: Vec<String> = Vec::new();
-    let mut active_field_link: Option<String> = None;
+    let mut field_text_links_by_run: std::collections::HashMap<usize, Vec<(usize, Option<String>)>> = std::collections::HashMap::new();
+    #[derive(Default)]
+    struct FieldState {
+        instruction: String,
+        link: Option<String>,
+        separated: bool,
+    }
+    let mut fields: Vec<FieldState> = Vec::new();
+    let field_tokens = re::get_unchecked(
+        r#"(?is)<w:instrText\b(?:[^>]*[^/>])?>([\s\S]*?)</w:instrText>|<w:fldChar\b[^>]*>|<w:t\b(?:[^>]*[^/>])?>[\s\S]*?</w:t>|<a:t\b(?:[^>]*[^/>])?>[\s\S]*?</a:t>|<w:(?:drawing|pict)\b[^>]*>|<w:(?:sym|tab|br|cr|noBreakHyphen|softHyphen|footnoteReference|endnoteReference)\b[^>]*/>|<a:(?:tab|br)\b[^>]*/>"#,
+    );
 
     for (run_index, range) in run_ranges.iter().enumerate() {
-        let run_xml = &paragraph_xml[range.start..range.end];
-        let begin_count = re::get(r#"(?i)<w:fldChar\b[^>]*w:fldCharType="begin"[^>]*/?>"#)
-            .map(|re| re.find_iter(run_xml).count())
-            .unwrap_or(0) as i64;
-        let separate_count = re::get(r#"(?i)<w:fldChar\b[^>]*w:fldCharType="separate"[^>]*/?>"#)
-            .map(|re| re.find_iter(run_xml).count())
-            .unwrap_or(0) as i64;
-        let end_count = re::get(r#"(?i)<w:fldChar\b[^>]*w:fldCharType="end"[^>]*/?>"#)
-            .map(|re| re.find_iter(run_xml).count())
-            .unwrap_or(0) as i64;
-
-        if begin_count > 0 && field_depth == 0 {
-            instruction_parts.clear();
-            active_field_link = None;
-        }
-        field_depth += begin_count;
-
-        if field_depth > 0 && active_field_link.is_none() {
-            let instr_re = re::get_unchecked(r"(?is)<w:instrText\b(?:[^>]*[^/>])?>([\s\S]*?)</w:instrText>");
-            for caps in instr_re.captures_iter(run_xml) {
-                if let Some(m) = caps.get(1) {
-                    instruction_parts.push(m.as_str().to_string());
+        let run_xml = prefer_alternate_content_choice(&strip_text_box_content(&paragraph_xml[range.start..range.end]));
+        let mut text_links = vec![(0, fields.iter().rev().find_map(|field| field.link.clone()))];
+        for token in field_tokens.captures_iter(&run_xml) {
+            if let Some(instruction) = token.get(1) {
+                if let Some(field) = fields.last_mut().filter(|field| !field.separated) {
+                    field.instruction.push_str(instruction.as_str());
+                }
+                continue;
+            }
+            let tag = token.get(0).unwrap().as_str();
+            if tag.to_ascii_lowercase().starts_with("<w:fldchar") {
+                match get_attribute(tag, "w:fldCharType").as_deref() {
+                    Some("begin") => fields.push(FieldState::default()),
+                    Some("separate") => {
+                        if let Some(field) = fields.last_mut() {
+                            field.link = hyperlink_href_from_field_instruction(&field.instruction);
+                            field.separated = true;
+                        }
+                    }
+                    Some("end") => { fields.pop(); }
+                    _ => {}
+                }
+                text_links.push((token.get(0).unwrap().end(), fields.iter().rev().find_map(|field| field.link.clone())));
+            } else {
+                let link = fields.iter().rev().find_map(|field| field.link.clone());
+                if let Some(link) = link.as_ref() {
+                    field_links_by_run.entry(run_index).or_insert_with(|| link.clone());
                 }
             }
         }
-
-        if field_depth > 0 && active_field_link.is_none() && separate_count > 0 {
-            active_field_link = hyperlink_href_from_field_instruction(&instruction_parts.join(" "));
-        }
-
-        if field_depth > 0 {
-            if let Some(ref link) = active_field_link {
-                if re::get(r"(?i)<(?:w:t|a:t)\b").is_some_and(|re| re.is_match(run_xml))
-                    || re::get(r"(?i)<w:(?:drawing|pict)\b")
-                        .is_some_and(|re| re.is_match(run_xml))
-                {
-                    field_links_by_run.insert(run_index, link.clone());
-                }
-            }
-        }
-
-        if end_count > 0 {
-            field_depth = (field_depth - end_count).max(0);
-            if field_depth == 0 {
-                instruction_parts.clear();
-                active_field_link = None;
-            }
-        }
+        field_text_links_by_run.insert(run_index, text_links);
     }
 
     let mut hyperlink_range_cursor = 0usize;
@@ -264,12 +256,15 @@ pub fn parse_paragraph_runs(paragraph_xml: &str, context: &ParseContext<'_>) -> 
                     None
                 }
             });
+            let text_links = field_text_links_by_run.remove(&run_index).unwrap_or_default()
+                .into_iter().map(|(offset, link)| (offset, hyperlink_href.clone().or(link))).collect();
             let link = hyperlink_href.or_else(|| field_links_by_run.get(&run_index).cloned());
             ParagraphRunToken {
                 xml: paragraph_xml[range.start..range.end].to_string(),
                 start: range.start,
                 end: range.end,
                 link,
+                text_links,
             }
         })
         .collect()
@@ -1257,7 +1252,8 @@ pub(crate) fn parse_paragraph_with_table_run_style(
                         r#type: TextRunNodeType::Text,
                         text: token.text,
                         style: style.clone(),
-                        link: run.link.clone(),
+                        link: run.text_links.iter().rev().find(|(offset, _)| *offset <= token.source_start)
+                            .and_then(|(_, link)| link.clone()),
                         note_reference: token.note_reference,
                     }));
                 }

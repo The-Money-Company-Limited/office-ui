@@ -93,4 +93,42 @@ describe("section layout parsing", () => {
       footerDistancePx: 708 / 15
     });
   });
+
+  it("uses imported page defaults only when all section properties are absent", () => {
+    const model = createModel();
+    model.metadata.documentOpenTag = '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">';
+    const metadataBefore = structuredClone(model.metadata);
+
+    expect(resolveDocumentLayout(model)).toEqual({
+      pageWidthPx: 816,
+      pageHeightPx: 1056,
+      marginsPx: { top: 96, right: 96, bottom: 96, left: 96 },
+      headerDistancePx: 48,
+      footerDistancePx: 48,
+      docGridLinePitchPx: undefined
+    });
+    expect(model.metadata).toEqual(metadataBefore);
+    expect(resolveDocumentLayout(createModel())).toEqual(parseSectionLayout());
+  });
+
+  it.each([
+    '<w:sectPr/>',
+    '<w:sectPr><w:pgMar w:top="1060" w:right="1000" w:bottom="1060" w:left="1000" w:footer="300"/></w:sectPr>',
+    '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>',
+    SECTION_PROPERTIES_XML
+  ])("preserves explicit and partial imported section metrics", (sectionPropertiesXml) => {
+    const model = createModel(sectionPropertiesXml);
+    model.metadata.documentOpenTag = '<w:document>';
+    expect(resolveDocumentLayout(model)).toEqual(parseSectionLayout(sectionPropertiesXml));
+  });
+
+  it("does not apply imported defaults to a missing section within a sectioned document", () => {
+    const model = createModel();
+    model.metadata.documentOpenTag = '<w:document>';
+    model.metadata.sections = [
+      { startNodeIndex: 0, headerSections: [], footerSections: [] },
+      { startNodeIndex: 1, sectionPropertiesXml: SECTION_PROPERTIES_XML, headerSections: [], footerSections: [] }
+    ];
+    expect(resolveDocumentLayout(model)).toEqual(parseSectionLayout());
+  });
 });
