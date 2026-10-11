@@ -247,6 +247,10 @@ pub struct TextStyle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub character_spacing_twips: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub character_scale_percent: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_character_scale: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub kerning_min_font_size_pt: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ligatures: Option<TextLigatures>,
@@ -622,6 +626,10 @@ pub struct ParagraphSpacing {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub after_twips: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_auto_spacing: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_auto_spacing: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub line_twips: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line_rule: Option<ParagraphLineRule>,
@@ -763,6 +771,10 @@ pub enum ParagraphTextAlignment {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParagraphStyle {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_before_auto_spacing: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_after_auto_spacing: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub align: Option<ParagraphAlignment>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -998,6 +1010,10 @@ pub struct TableCellStyle {
     pub text_direction: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_text_direction: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_wrap: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_no_wrap: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub borders: Option<TableBorderSet>,
 }

@@ -4,6 +4,7 @@ export const memory: WebAssembly.Memory;
 export const build_doc_model_from_bytes: (a: number, b: number, c: number) => void;
 export const build_doc_model_from_package: (a: number, b: number) => void;
 export const extract_document_blocks_wasm: (a: number, b: number, c: number) => void;
+export const extract_document_blocks_with_options_wasm: (a: number, b: number, c: number, d: number, e: number) => void;
 export const inspect_document_source_wasm: (a: number, b: number, c: number) => void;
 export const model_to_document_xml_from_json_wasm: (a: number, b: number, c: number, d: number) => void;
 export const model_to_document_xml_wasm: (a: number, b: number, c: number) => void;

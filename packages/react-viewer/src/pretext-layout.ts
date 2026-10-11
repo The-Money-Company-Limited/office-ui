@@ -56,6 +56,7 @@ export interface PretextLayoutItem {
   fontKerning?: FontKerningMode;
   fontFeatureSettings?: string;
   textTransform?: "uppercase";
+  horizontalScale?: number;
   lineHeightPx?: number;
   strutFont?: string;
   verticalAlign?: "super" | "sub";
@@ -75,6 +76,7 @@ export interface PretextEndingMarkMetrics {
 export interface PretextParagraphLineOptions {
   exactLineHeight?: boolean;
   endingMark?: PretextEndingMarkMetrics;
+  lineGrid?: { pitchPx: number; minimumHeightPx?: number };
 }
 
 export interface PretextExclusionRect {
@@ -103,6 +105,7 @@ export interface PretextLineFragment {
   fontKerning?: FontKerningMode;
   fontFeatureSettings?: string;
   textTransform?: "uppercase";
+  horizontalScale?: number;
   lineHeightPx?: number;
   verticalAlign?: "super" | "sub";
   hasCustomVerticalMetrics?: boolean;
@@ -155,9 +158,50 @@ export function withFixedLineBaseline(
   return transform(layout);
 }
 
+export function withPretextHorizontalAlignment(
+  layout: PretextVariableWidthLayout,
+  align: "center" | "right"
+): PretextVariableWidthLayout {
+  return {
+    ...layout,
+    horizontalAlignmentApplied: align,
+    lines: layout.lines.map((line) => {
+      const byInterval = new Map<string, PretextLineFragment[]>();
+      for (const fragment of line.fragments) {
+        const key = `${fragment.intervalX}:${fragment.intervalWidth}`;
+        const group = byInterval.get(key) ?? [];
+        group.push(fragment);
+        byInterval.set(key, group);
+      }
+      const shifts = new Map<PretextLineFragment, number>();
+      for (const group of byInterval.values()) {
+        const first = group[0]!;
+        let right = first.x;
+        for (const fragment of group) {
+          const visibleLength = fragment.text.replace(/[ \t\r\n]+$/, "").length;
+          if (visibleLength === 0) continue;
+          const advance = cachedFragmentOffsetAdvances(layout.font ?? "", fragment)[visibleLength];
+          right = fragment.x + (advance ?? fragment.width);
+        }
+        const remaining = Math.max(0, first.intervalWidth - (right - first.x));
+        const shift = first.intervalX - first.x + remaining * (align === "center" ? 0.5 : 1);
+        for (const fragment of group) shifts.set(fragment, shift);
+      }
+      return {
+        ...line,
+        fragments: line.fragments.map((fragment) => ({
+          ...fragment,
+          x: fragment.x + (shifts.get(fragment) ?? 0),
+        })),
+      };
+    }),
+  };
+}
+
 export type PretextCaretAffinity = "upstream" | "downstream";
 
 export interface PretextVariableWidthLayout {
+  horizontalAlignmentApplied?: "center" | "right";
   lineCount: number;
   height: number;
   lines: PretextLineLayout[];
@@ -251,13 +295,23 @@ function getMeasureContext():
   return measureCanvasContext ?? undefined;
 }
 
+export function resolveHorizontalTextScale(percent: number | undefined): number {
+  return Number.isInteger(percent) && percent! >= 1 && percent! <= 600
+    ? percent! / 100 : 1;
+}
+
+function validHorizontalScale(value = 1): number {
+  return Number.isFinite(value) && value > 0 && value <= 6 ? value : 1;
+}
+
 function measureTextWidthPx(
   font: string,
   text: string,
   letterSpacingPx = 0,
   fontKerning: FontKerningMode = "auto",
   fontFeatureSettings?: string,
-  textTransform?: "uppercase"
+  textTransform?: "uppercase",
+  horizontalScale = 1
 ): number {
   if (!text) {
     return 0;
@@ -273,15 +327,16 @@ function measureTextWidthPx(
   context.font = font;
   if ("fontKerning" in context) context.fontKerning = fontKerning;
   const advanceScale = canvasFontAdvanceScale(context, font);
+  const horizontalAdvanceScale = advanceScale * validHorizontalScale(horizontalScale);
   const spacingAdvance =
     Math.max(0, graphemeCodeUnitOffsets(text).length - 1) * letterSpacingPx;
   if (typeof context.letterSpacing === "string") {
-    context.letterSpacing = `${letterSpacingPx / advanceScale}px`;
-    return Math.max(0, context.measureText(text).width * advanceScale);
+    context.letterSpacing = `${letterSpacingPx / horizontalAdvanceScale}px`;
+    return Math.max(0, context.measureText(text).width * horizontalAdvanceScale);
   }
   return Math.max(
     0,
-    context.measureText(text).width * advanceScale + spacingAdvance
+    context.measureText(text).width * horizontalAdvanceScale + spacingAdvance
   );
 }
 
@@ -501,13 +556,42 @@ export function measurePretextFragmentBaselinePx(
   return metrics.ascent;
 }
 
+export function resolveLineGridHeightPx(
+  naturalHeightPx: number,
+  pitchPx: number,
+  minimumHeightPx = pitchPx
+): number {
+  if (!Number.isFinite(pitchPx) || pitchPx <= 0) return naturalHeightPx;
+  return Math.max(
+    Math.ceil(Math.max(0, naturalHeightPx) / pitchPx - 1e-7) * pitchPx,
+    minimumHeightPx
+  );
+}
+
 function createLine(
   y: number,
   fragments: PretextLineFragment[],
   font: string,
   lineHeightPx: number,
-  exactLineHeight = false
+  options?: PretextParagraphLineOptions
 ): PretextLineLayout {
+  const exactLineHeight = options?.exactLineHeight === true;
+  const lineGrid = !exactLineHeight && options?.lineGrid &&
+    Number.isFinite(options.lineGrid.pitchPx) && options.lineGrid.pitchPx > 0
+      ? options.lineGrid : undefined;
+  if (lineGrid) {
+    fragments = fragments.map((fragment) => {
+      if (fragment.hasCustomVerticalMetrics) return fragment;
+      const fragmentFont = fragment.font ?? font;
+      const naturalHeightPx = measureFontNaturalLineHeightPx(
+        fragment.strutFont ?? fragmentFont
+      ) ?? fragment.lineHeightPx ?? lineHeightPx;
+      return Object.assign(fragment, {
+        lineHeightPx: naturalHeightPx,
+        ...itemLineMetrics({ ...fragment, font: fragmentFont }, naturalHeightPx),
+      });
+    });
+  }
   const strut = fontLineMetrics(font, lineHeightPx);
   const candidates = fragments.map((fragment) => ({
     ascent: fragment.ascent ?? lineHeightPx,
@@ -518,12 +602,16 @@ function createLine(
       ? candidates
       : [strut]
   );
+  const height = lineGrid
+    ? resolveLineGridHeightPx(metrics.height, lineGrid.pitchPx, lineGrid.minimumHeightPx)
+    : metrics.height;
+  const gridLeading = (height - metrics.height) / 2;
   return {
     y,
     fragments,
-    height: exactLineHeight ? lineHeightPx : metrics.height,
-    ascent: exactLineHeight ? strut.ascent : metrics.ascent,
-    descent: exactLineHeight ? strut.descent : metrics.descent,
+    height: exactLineHeight ? lineHeightPx : height,
+    ascent: exactLineHeight ? strut.ascent : metrics.ascent + gridLeading,
+    descent: exactLineHeight ? strut.descent : metrics.descent + gridLeading,
   };
 }
 
@@ -580,7 +668,7 @@ function layoutEmptyParagraphWithEndingMark(
     [fragment],
     mark.strutFont ?? mark.font,
     safeHeightPx,
-    options?.exactLineHeight
+    options
   );
   const rowHeightPx = row.height ?? resolvedHeightPx;
   let interval = rowWidthsAtY(
@@ -620,6 +708,10 @@ function endingMarkCacheKey(mark?: PretextEndingMarkMetrics): string {
   return mark
     ? `${mark.sourceOffset},${mark.font},${mark.strutFont ?? ""},${mark.lineHeightPx ?? ""},${mark.verticalAlign ?? ""},${mark.verticalMetrics?.ascent ?? ""},${mark.verticalMetrics?.descent ?? ""}`
     : "";
+}
+
+function lineGridCacheKey(grid?: PretextParagraphLineOptions["lineGrid"]): string {
+  return grid ? `${grid.pitchPx},${grid.minimumHeightPx ?? ""}` : "";
 }
 
 function appendTrailingHardBreakLine(
@@ -670,7 +762,7 @@ function appendTrailingHardBreakLine(
     [fragment],
     font,
     lineHeightPx,
-    options?.exactLineHeight
+    options
   );
   const rowHeightPx = Math.max(1, row.height ?? lineHeightPx);
   let interval = rowWidthsAtY(containerWidthPx, rowHeightPx, row.y, exclusions)[0];
@@ -691,7 +783,8 @@ function measureOffsetWidthPx(
   letterSpacingPx = 0,
   fontKerning: FontKerningMode = "auto",
   fontFeatureSettings?: string,
-  textTransform?: "uppercase"
+  textTransform?: "uppercase",
+  horizontalScale = 1
 ): number {
   if (offset <= 0 || !text) {
     return 0;
@@ -703,7 +796,8 @@ function measureOffsetWidthPx(
     letterSpacingPx,
     fontKerning,
     fontFeatureSettings,
-    textTransform
+    textTransform,
+    horizontalScale
   );
 }
 
@@ -871,7 +965,8 @@ function cachedFragmentOffsetAdvances(
           fragment.letterSpacingPx,
           fragment.fontKerning,
           fragment.fontFeatureSettings,
-          fragment.textTransform
+          fragment.textTransform,
+          fragment.horizontalScale
         );
   }
   advances[fragment.text.length] = fragment.width;
@@ -941,13 +1036,15 @@ function prepareCached(
   letterSpacingPx = 0,
   fontKerning: FontKerningMode = "auto",
   fontFeatureSettings?: string,
-  textTransform?: "uppercase"
+  textTransform?: "uppercase",
+  horizontalScale = 1
 ): PreparedTextWithSegments | undefined {
   if (!canUsePretext()) {
     return undefined;
   }
 
-  const cacheKey = `${font}\u0000${fontKerning}\u0000${fontFeatureSettings ?? ""}\u0000${textTransform ?? ""}\u0000${wordBreak}\u0000${letterSpacingPx}\u0000${text}`;
+  const resolvedScale = validHorizontalScale(horizontalScale);
+  const cacheKey = resolvedScale + "\u0000" + `${font}\u0000${fontKerning}\u0000${fontFeatureSettings ?? ""}\u0000${textTransform ?? ""}\u0000${wordBreak}\u0000${letterSpacingPx}\u0000${text}`;
   const cached = getCachedValue(preparedTextByKey, cacheKey);
   if (cached) {
     return cached;
@@ -961,7 +1058,7 @@ function prepareCached(
     const prepared = prepareWithSegments(text, font, {
       whiteSpace: "pre-wrap",
       wordBreak,
-      letterSpacing: letterSpacingPx / advanceScale,
+      letterSpacing: letterSpacingPx / (advanceScale * resolvedScale),
       fontKerning,
       fontFeatureSettings,
     });
@@ -969,7 +1066,7 @@ function prepareCached(
       context.font = font;
       if (typeof context.letterSpacing === "string") context.letterSpacing = "0px";
       if (typeof context.wordSpacing === "string") context.wordSpacing = "0px";
-      const spacing = letterSpacingPx / advanceScale;
+      const spacing = letterSpacingPx / (advanceScale * resolvedScale);
       prepared.segments.forEach((segment, index) => {
         const displayed = segment.toUpperCase();
         if (displayed === segment) return;
@@ -1006,7 +1103,7 @@ function prepareCached(
     });
     sourceOffsets.push(sourceOffset);
     sourceOffsetsByPreparedText.set(prepared, sourceOffsets);
-    advanceScaleByPreparedText.set(prepared, advanceScale);
+    advanceScaleByPreparedText.set(prepared, advanceScale * resolvedScale);
     preparedTextByKey.set(cacheKey, prepared);
     trimCache(preparedTextByKey, PREPARED_TEXT_CACHE_MAX_ENTRIES);
     return prepared;
@@ -1282,7 +1379,7 @@ function rollbackRichLineToLegalBreak(
       ...fragment,
       text,
       end: trimmedEnd,
-      width: measureTextWidthPx(item.font, text, item.letterSpacingPx, item.fontKerning, item.fontFeatureSettings, item.textTransform),
+      width: measureTextWidthPx(item.font, text, item.letterSpacingPx, item.fontKerning, item.fontFeatureSettings, item.textTransform, item.horizontalScale),
     });
     end = { itemIndex: fragment.itemIndex, ...trimmedEnd };
     break;
@@ -1633,6 +1730,7 @@ function joinContiguousShapingItems(items: PretextLayoutItem[]): PretextLayoutIt
       previous.fontKerning === item.fontKerning &&
       previous.fontFeatureSettings === item.fontFeatureSettings &&
       previous.textTransform === item.textTransform &&
+      validHorizontalScale(previous.horizontalScale) === validHorizontalScale(item.horizontalScale) &&
       previous.lineHeightPx === item.lineHeightPx &&
       previous.strutFont === item.strutFont &&
       previous.verticalAlign === item.verticalAlign &&
@@ -1838,7 +1936,13 @@ export function layoutTextWithPretextAroundExclusions(
   }
 
   const safeContainerWidthPx = Math.max(1, containerWidthPx);
-  const safeLineHeightPx = Math.max(1, lineHeightPx);
+  const safeLineHeightPx = options?.lineGrid && !options.exactLineHeight
+    ? Math.max(1, resolveLineGridHeightPx(
+        measureFontNaturalLineHeightPx(font) ?? lineHeightPx,
+        options.lineGrid.pitchPx,
+        options.lineGrid.minimumHeightPx
+      ))
+    : Math.max(1, lineHeightPx);
   const normalizedExclusions = (exclusions ?? []).map((exclusion) => ({
     left: exclusion.left,
     right: exclusion.right,
@@ -1846,7 +1950,7 @@ export function layoutTextWithPretextAroundExclusions(
     bottom: exclusion.bottom,
   }));
   const cacheKey = layoutCacheKey(
-    `plain\u0000${font}\u0000${fontKerning}\u0000${fontFeatureSettings ?? ""}\u0000${wordBreak}\u0000${letterSpacingPx}\u0000${options?.exactLineHeight === true}\u0000${endingMarkCacheKey(options?.endingMark)}\u0000${text}`,
+    `plain\u0000${font}\u0000${fontKerning}\u0000${fontFeatureSettings ?? ""}\u0000${wordBreak}\u0000${letterSpacingPx}\u0000${options?.exactLineHeight === true}\u0000${endingMarkCacheKey(options?.endingMark)}\u0000${lineGridCacheKey(options?.lineGrid)}\u0000${text}`,
     safeContainerWidthPx,
     safeLineHeightPx,
     normalizedExclusions
@@ -1937,7 +2041,7 @@ export function layoutTextWithPretextAroundExclusions(
       fragments,
       font,
       safeLineHeightPx,
-      options?.exactLineHeight
+      options
     );
     lines.push(row);
     rowTopPx += row.height ?? safeLineHeightPx;
@@ -2027,7 +2131,8 @@ export function layoutItemsWithPretextAroundExclusions(
       item.letterSpacingPx,
       item.fontKerning,
       item.fontFeatureSettings,
-      item.textTransform
+      item.textTransform,
+      item.horizontalScale
     )
   );
   if (
@@ -2049,6 +2154,7 @@ export function layoutItemsWithPretextAroundExclusions(
   const layoutSignature = items
     .map(
       (item) =>
+        validHorizontalScale(item.horizontalScale) + "\u0001" +
         `${item.font}\u0001${item.break ?? "normal"}\u0001${
           item.wordBreak ?? "normal"
         }\u0001${item.letterSpacingPx ?? 0}\u0001${item.fontKerning ?? "auto"}\u0001${item.fontFeatureSettings ?? ""}\u0001${item.textTransform ?? ""}\u0001${
@@ -2061,7 +2167,7 @@ export function layoutItemsWithPretextAroundExclusions(
     )
     .join("\u0002");
   const cacheKey = layoutCacheKey(
-    `items\u0000${fallbackFont ?? ""}\u0000${options?.exactLineHeight === true}\u0000${endingMarkCacheKey(options?.endingMark)}\u0000${layoutSignature}`,
+    `items\u0000${fallbackFont ?? ""}\u0000${options?.exactLineHeight === true}\u0000${endingMarkCacheKey(options?.endingMark)}\u0000${lineGridCacheKey(options?.lineGrid)}\u0000${layoutSignature}`,
     safeContainerWidthPx,
     safeLineHeightPx,
     normalizedExclusions
@@ -2171,6 +2277,7 @@ export function layoutItemsWithPretextAroundExclusions(
           fontKerning: item.fontKerning,
           fontFeatureSettings: item.fontFeatureSettings,
           textTransform: item.textTransform,
+          horizontalScale: validHorizontalScale(item.horizontalScale),
           lineHeightPx: item.lineHeightPx ?? safeLineHeightPx,
           verticalAlign: item.verticalAlign,
           hasCustomVerticalMetrics: item.verticalMetrics !== undefined,
@@ -2198,7 +2305,7 @@ export function layoutItemsWithPretextAroundExclusions(
       fragments,
       fallbackFont ?? items[0]?.font ?? "",
       safeLineHeightPx,
-      options?.exactLineHeight
+      options
     );
     if (
       rowStartOffsets &&

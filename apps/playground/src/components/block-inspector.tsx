@@ -4,11 +4,13 @@ import { Braces, Download, Loader2 } from "lucide-react";
 import {
   DOCUMENT_BLOCK_TYPES,
   DocxBlockHighlights,
+  DocxWordHighlights,
   extractDocumentBlocks,
   revealDocxSource,
   type DocModel,
   type DocumentBlock,
   type DocumentBlockType,
+  type DocumentWord,
   type DocxBlockGeometry,
   type StructuredDocument,
 } from "@extend-ai/react-docx";
@@ -35,6 +37,53 @@ const colors: Record<DocumentBlockType, string> = {
 };
 
 const colorForBlock = (block: DocumentBlock) => colors[block.type];
+
+function WordInspector({ blocks, rootRef, showAll, showJson }: {
+  blocks: DocumentBlock[];
+  rootRef: React.RefObject<HTMLDivElement | null>;
+  showAll: boolean;
+  showJson: boolean;
+}): React.JSX.Element {
+  const words = React.useMemo(() => blocks.flatMap(block => block.words ?? []), [blocks]);
+  const [hovered, setHovered] = React.useState<DocumentWord>();
+  const [selected, setSelected] = React.useState<DocumentWord>();
+  const [geometry, setGeometry] = React.useState<DocxBlockGeometry>();
+  const scroll = React.useRef<HTMLDivElement>(null);
+  const active = hovered ?? selected;
+  const virtualizer = useVirtualizer({ count: words.length,
+    getItemKey: index => words[index].id, getScrollElement: () => scroll.current,
+    estimateSize: () => 42, overscan: 10 });
+  React.useEffect(() => { setHovered(undefined); setSelected(undefined); setGeometry(undefined); }, [words]);
+  React.useEffect(() => virtualizer.measure(), [showJson, words, virtualizer]);
+  return <>
+    <div ref={scroll} className="min-h-0 flex-1 overflow-auto" onMouseLeave={() => setHovered(undefined)}>
+      {showJson ? <pre className="whitespace-pre-wrap break-all p-4 text-[11px] leading-5">
+        {JSON.stringify(active ? { ...active, geometry } : words, null, 2)}
+      </pre> : <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+        {virtualizer.getVirtualItems().map(item => {
+          const word = words[item.index];
+          return <button key={word.id} type="button" data-word-output-id={word.id}
+            data-index={item.index} ref={virtualizer.measureElement}
+            className="absolute left-0 top-0 flex w-full items-center gap-3 border-b px-4 py-2 text-left text-sm hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-primary"
+            style={{ transform: `translateY(${item.start}px)`, backgroundColor: active?.id === word.id ? "#2563eb0d" : undefined }}
+            onMouseEnter={() => { setGeometry(undefined); setHovered(word); }}
+            onFocus={() => { setGeometry(undefined); setHovered(word); }}
+            onBlur={() => setHovered(undefined)}
+            onClick={() => { setSelected(word); if (rootRef.current) revealDocxSource(rootRef.current, word.sourceRefs[0]); }}>
+            <span className="min-w-0 flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{word.content}</span>
+            <span className="text-[11px] text-muted-foreground">{active?.id === word.id && geometry?.fragments.length
+              ? [...new Set(geometry.fragments.map(fragment => `p. ${fragment.pageIndex + 1}`))].join(", ")
+              : word.sourceRefs[0]?.story}</span>
+          </button>;
+        })}
+      </div>}
+    </div>
+    {active && geometry && geometry.status !== "rendered" ? <p className="border-t px-4 py-2 text-xs text-muted-foreground">
+      {geometry.status === "not_mounted" ? "Click to reveal this word." : "Some text has no visible word geometry in the current view."}
+    </p> : null}
+    <DocxWordHighlights rootRef={rootRef} word={active} words={showAll ? words : undefined} onGeometry={setGeometry} />
+  </>;
+}
 
 function blockDetail(block: DocumentBlock): string | undefined {
   const details = block.details;
@@ -76,7 +125,8 @@ export function BlockInspector({
   const [geometry, setGeometry] = React.useState<DocxBlockGeometry>();
   const [type, setType] = React.useState<string>("all");
   const [showJson, setShowJson] = React.useState(false);
-  const [contentMode, setContentMode] = React.useState<"formatted" | "markdown">("formatted");
+  const [contentMode, setContentMode] = React.useState<"formatted" | "markdown" | "words">("formatted");
+  const [includeWords, setIncludeWords] = React.useState(false);
   const [showAllHighlights, setShowAllHighlights] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const images = React.useMemo(() => collectBlockImages(model), [model]);
@@ -88,7 +138,7 @@ export function BlockInspector({
     setActiveId(undefined);
     setSelectedId(undefined);
     setGeometry(undefined);
-    void extractDocumentBlocks(model)
+    void extractDocumentBlocks(model, { includeWords })
       .then((result) => {
         if (!cancelled) {
           setOutput(result);
@@ -105,7 +155,7 @@ export function BlockInspector({
     return () => {
       cancelled = true;
     };
-  }, [model]);
+  }, [model, includeWords]);
   const allRows = React.useMemo(() => rows(output?.blocks ?? []), [output]);
   const counts = React.useMemo(() => {
     const result = new Map<DocumentBlockType, number>();
@@ -120,6 +170,8 @@ export function BlockInspector({
   const active = allRows.find(
     (row) => row.block.id === (activeId ?? selectedId)
   )?.block;
+  const filteredBlocks = React.useMemo(() => filtered.map(row => row.block), [filtered]);
+  const wordCount = React.useMemo(() => filteredBlocks.reduce((count, block) => count + (block.words?.length ?? 0), 0), [filteredBlocks]);
   const highlighted = React.useMemo(
     () => showAllHighlights ? filtered.map((row) => row.block) : undefined,
     [showAllHighlights, filtered]
@@ -155,14 +207,14 @@ export function BlockInspector({
             {busy ? (
               <Loader2 className="size-3 animate-spin" />
             ) : (
-              allRows.length
+              contentMode === "words" ? `${wordCount} words` : allRows.length
             )}
           </span>
           <div className="ml-auto flex gap-1">
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="Show block JSON"
+              aria-label={contentMode === "words" ? "Show word JSON" : "Show block JSON"}
               aria-pressed={showJson}
               onClick={() => setShowJson(!showJson)}
             >
@@ -181,10 +233,10 @@ export function BlockInspector({
         </div>
         <div className="border-b px-4 py-2">
           <div role="group" aria-label="Block text format" className="mb-3 flex gap-1 rounded-md bg-muted p-1">
-            {(["formatted", "markdown"] as const).map((mode) => (
+            {(["formatted", "markdown", "words"] as const).map((mode) => (
               <button key={mode} type="button" aria-pressed={!showJson && contentMode === mode}
                 className={`flex-1 rounded-sm px-2 py-1 text-xs capitalize ${!showJson && contentMode === mode ? "bg-background shadow-xs" : "text-muted-foreground"}`}
-                onClick={() => { setContentMode(mode); setShowJson(false); }}>
+                onClick={() => { setContentMode(mode); setShowJson(false); setActiveId(undefined); setSelectedId(undefined); if (mode === "words") setIncludeWords(true); }}>
                 {mode}
               </button>
             ))}
@@ -222,7 +274,7 @@ export function BlockInspector({
             {error}
           </p>
         ) : null}
-        <div
+        {contentMode === "words" ? <WordInspector blocks={filteredBlocks} rootRef={rootRef} showAll={showAllHighlights} showJson={showJson} /> : <div
           ref={scrollRef}
           className="min-h-0 flex-1 overflow-auto"
           onMouseLeave={() => setActiveId(undefined)}
@@ -316,7 +368,7 @@ export function BlockInspector({
               })}
             </div>
           )}
-        </div>
+        </div>}
         {output?.warnings.length ? (
           <details className="border-t px-4 py-2 text-xs text-muted-foreground">
             <summary>{output.warnings.length} import diagnostics</summary>
@@ -327,7 +379,7 @@ export function BlockInspector({
             </ul>
           </details>
         ) : null}
-        {active && geometry && geometry.status !== "rendered" ? (
+        {contentMode !== "words" && active && geometry && geometry.status !== "rendered" ? (
           <p className="border-t px-4 py-2 text-xs text-muted-foreground">
             {geometry.status === "unresolved"
               ? "This source does not have supported page geometry."
@@ -339,14 +391,14 @@ export function BlockInspector({
           </p>
         ) : null}
       </aside>
-      <DocxBlockHighlights
+      {contentMode !== "words" ? <DocxBlockHighlights
         rootRef={rootRef}
         block={active}
         blocks={highlighted}
         color={active ? colors[active.type] : undefined}
         colorForBlock={colorForBlock}
         onGeometry={setGeometry}
-      />
+      /> : null}
     </>
   );
 }

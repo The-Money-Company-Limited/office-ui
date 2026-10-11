@@ -34,6 +34,18 @@ export interface DocxSourceRef {
   offsetEncoding: "utf-16";
 }
 
+export interface ExtractDocumentBlocksOptions {
+  includeWords?: boolean;
+}
+
+export interface DocumentWord {
+  object: "word";
+  id: string;
+  blockId: string;
+  content: string;
+  sourceRefs: DocxSourceRef[];
+}
+
 export interface DocumentBlock {
   object: "block";
   id: string;
@@ -43,6 +55,7 @@ export interface DocumentBlock {
   sourceRefs: DocxSourceRef[];
   parentBlockId?: string;
   children: DocumentBlock[];
+  words?: DocumentWord[];
 }
 
 export interface StructuredDocument {
@@ -55,9 +68,10 @@ export interface StructuredDocument {
 }
 
 export async function extractDocumentBlocks(
-  model: DocModel
+  model: DocModel,
+  options: ExtractDocumentBlocksOptions = {}
 ): Promise<StructuredDocument> {
-  return (await wasmExtractDocumentBlocks(model)) as StructuredDocument;
+  return (await wasmExtractDocumentBlocks(model, options)) as StructuredDocument;
 }
 
 export function flattenDocumentBlocks(

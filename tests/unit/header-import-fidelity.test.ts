@@ -58,6 +58,37 @@ function HeaderViewer({ model }: { model: DocModel }): React.JSX.Element {
 }
 
 describe("header import fidelity", () => {
+  it.each([
+    { referenceType: "first", titlePage: true, evenAndOddHeaders: false, occurrences: 1 },
+    { referenceType: "first", titlePage: false, evenAndOddHeaders: false, occurrences: 0 },
+    { referenceType: "default", titlePage: false, evenAndOddHeaders: true, occurrences: 2 }
+  ])("renders only the selected header and footer variants", ({
+    referenceType, titlePage, evenAndOddHeaders, occurrences
+  }) => {
+    const model = cloneDocModel(defaultStarterModel);
+    model.nodes = Array.from({ length: 3 }, (_, index) => ({
+      type: "paragraph" as const,
+      style: { pageBreakBefore: index > 0 },
+      children: [{ type: "text" as const, text: `Body ${index + 1}` }]
+    }));
+    model.metadata.sections = undefined;
+    model.metadata.sectionPropertiesXml = `<w:sectPr>${titlePage ? "<w:titlePg/>" : ""}</w:sectPr>`;
+    model.metadata.compatibility = { ...model.metadata.compatibility, evenAndOddHeaders };
+    model.metadata.headerSections = [{
+      partName: "word/header1.xml", referenceType,
+      nodes: [{ type: "paragraph", children: [{ type: "text", text: "Header variant" }] }]
+    }];
+    model.metadata.footerSections = [{
+      partName: "word/footer1.xml", referenceType,
+      nodes: [{ type: "paragraph", children: [{ type: "text", text: "Footer variant" }] }]
+    }];
+
+    const html = renderToStaticMarkup(React.createElement(HeaderViewer, { model }));
+    expect(html.match(/data-docx-page-surface="true"/g)).toHaveLength(3);
+    expect(html.match(/data-docx-header-footer-region="header"/g) ?? []).toHaveLength(occurrences);
+    expect(html.match(/data-docx-header-footer-region="footer"/g) ?? []).toHaveLength(occurrences);
+  });
+
   it("preserves signed table indents from Word", async () => {
     const zip = createZip([
       { name: "[Content_Types].xml", content: CONTENT_TYPES_XML },

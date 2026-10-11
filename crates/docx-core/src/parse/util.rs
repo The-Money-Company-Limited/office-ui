@@ -159,6 +159,8 @@ pub fn merge_text_styles(styles: &[Option<TextStyle>]) -> Option<TextStyle> {
         right_to_left: None,
         complex_script: None,
         character_spacing_twips: None,
+        character_scale_percent: None,
+        source_character_scale: None,
         kerning_min_font_size_pt: None,
         ligatures: None,
         contextual_alternates: None,
@@ -263,6 +265,10 @@ pub fn merge_text_styles(styles: &[Option<TextStyle>]) -> Option<TextStyle> {
         if style.complex_script.is_some() {
             merged.complex_script = style.complex_script;
         }
+        if style.character_scale_percent.is_some() || style.source_character_scale.is_some() {
+            merged.character_scale_percent = style.character_scale_percent;
+            merged.source_character_scale = style.source_character_scale.clone();
+        }
         if style.character_spacing_twips.is_some() {
             merged.character_spacing_twips = style.character_spacing_twips;
         }
@@ -304,6 +310,12 @@ pub fn merge_paragraph_spacing(
         after_twips: direct
             .and_then(|d| d.after_twips)
             .or(inherited.and_then(|i| i.after_twips)),
+        before_auto_spacing: direct
+            .and_then(|d| d.before_auto_spacing)
+            .or(inherited.and_then(|i| i.before_auto_spacing)),
+        after_auto_spacing: direct
+            .and_then(|d| d.after_auto_spacing)
+            .or(inherited.and_then(|i| i.after_auto_spacing)),
         line_twips: direct
             .and_then(|d| d.line_twips)
             .or(inherited.and_then(|i| i.line_twips)),
@@ -313,6 +325,8 @@ pub fn merge_paragraph_spacing(
     };
     if merged.before_twips.is_none()
         && merged.after_twips.is_none()
+        && merged.before_auto_spacing.is_none()
+        && merged.after_auto_spacing.is_none()
         && merged.line_twips.is_none()
         && merged.line_rule.is_none()
     {
@@ -776,11 +790,15 @@ pub fn parse_paragraph_spacing_from_xml(xml: &str) -> Option<ParagraphSpacing> {
     let spacing = ParagraphSpacing {
         before_twips: parse_integer_attribute(&spacing_tag, "w:before"),
         after_twips: parse_integer_attribute(&spacing_tag, "w:after"),
+        before_auto_spacing: super::styles::parse_on_off_value(get_attribute(&spacing_tag, "w:beforeAutospacing").as_deref()),
+        after_auto_spacing: super::styles::parse_on_off_value(get_attribute(&spacing_tag, "w:afterAutospacing").as_deref()),
         line_twips: parse_integer_attribute(&spacing_tag, "w:line"),
         line_rule,
     };
     if spacing.before_twips.is_none()
         && spacing.after_twips.is_none()
+        && spacing.before_auto_spacing.is_none()
+        && spacing.after_auto_spacing.is_none()
         && spacing.line_twips.is_none()
         && spacing.line_rule.is_none()
     {

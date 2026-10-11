@@ -27,6 +27,18 @@ pub fn extract_document_blocks_wasm(model_json: &str) -> Result<String, JsValue>
 }
 
 #[wasm_bindgen]
+pub fn extract_document_blocks_with_options_wasm(
+    model_json: &str,
+    options_json: &str,
+) -> Result<String, JsValue> {
+    let model = doc_model_from_json(model_json)?;
+    let options = serde_json::from_str(options_json)
+        .map_err(|error| JsValue::from_str(&format!("Invalid block extraction options JSON: {error}")))?;
+    serde_json::to_string(&docx_core::extract_document_blocks_with_options(&model, options))
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+#[wasm_bindgen]
 pub fn inspect_document_source_wasm(bytes: &[u8]) -> Result<String, JsValue> {
     let package = parse_document_bytes(bytes).map_err(|error| JsValue::from_str(&error))?;
     serde_json::to_string(&docx_core::document_source_graph(&package))

@@ -384,6 +384,16 @@ fn run_properties_xml(style: Option<&TextStyle>) -> String {
         ));
     }
 
+    let percent = style.character_scale_percent.filter(|value| *value <= 600);
+    let original_scale = style.source_character_scale.as_deref().filter(|raw| {
+        crate::parse::parse_character_scale_percent_value(raw) == percent
+    });
+    if let Some(raw) = original_scale {
+        fragments.push(format!(r#"<w:w w:val="{}"/>"#, escape_xml(raw)));
+    } else if let Some(percent) = percent {
+        fragments.push(format!(r#"<w:w w:val="{percent}"/>"#));
+    }
+
     if let Some(kerning_min_font_size_pt) = style.kerning_min_font_size_pt {
         if kerning_min_font_size_pt.is_finite() && kerning_min_font_size_pt >= 0.0 {
             fragments.push(format!(
@@ -802,6 +812,14 @@ fn paragraph_properties_xml(style: Option<&ParagraphStyle>, text_alignment: Opti
     }
     if let Some(after) = twips_to_xml_non_negative(style.spacing.as_ref().and_then(|s| s.after_twips)) {
         spacing_fragments.push(format!(r#"w:after="{after}""#));
+    }
+    for (name, value) in [
+        ("w:beforeAutospacing", style.spacing.as_ref().and_then(|s| s.before_auto_spacing)),
+        ("w:afterAutospacing", style.spacing.as_ref().and_then(|s| s.after_auto_spacing)),
+    ] {
+        if let Some(value) = value {
+            spacing_fragments.push(format!(r#"{name}="{}""#, if value { "1" } else { "0" }));
+        }
     }
     if let Some(line) = twips_to_xml_non_negative(style.spacing.as_ref().and_then(|s| s.line_twips)) {
         spacing_fragments.push(format!(r#"w:line="{line}""#));
@@ -2231,6 +2249,7 @@ const MARK_MANAGED_PROPERTIES: &[&str] = &[
     "w:rtl",
     "w:cs",
     "w:spacing",
+    "w:w",
     "w:kern",
     "w:vertAlign",
     "w:bdr",
@@ -2867,6 +2886,57 @@ fn patch_source_paragraph_snap_to_grid(
     source
 }
 
+fn patch_source_paragraph_auto_spacing(paragraph: &ParagraphNode, source: &str) -> String {
+    let Some(style) = paragraph.style.as_ref() else {
+        return source.to_string();
+    };
+    let edits = [
+        ("w:beforeAutospacing", style.spacing.as_ref().and_then(|s| s.before_auto_spacing), style.source_before_auto_spacing),
+        ("w:afterAutospacing", style.spacing.as_ref().and_then(|s| s.after_auto_spacing), style.source_after_auto_spacing),
+    ];
+    if edits.iter().all(|(_, desired, original)| desired == original) {
+        return source.to_string();
+    }
+    let range = direct_property_children(source).into_iter()
+        .find(|(name, _)| name == "w:pPr").map(|(_, range)| range);
+    let properties = range.as_ref()
+        .map(|range| &source[range.start..range.end]).unwrap_or("<w:pPr/>");
+    let spacing_range = direct_property_children(properties).into_iter()
+        .find(|(name, _)| name == "w:spacing").map(|(_, range)| range);
+    let mut spacing = spacing_range.as_ref()
+        .map(|range| properties[range.start..range.end].to_string())
+        .unwrap_or_else(|| "<w:spacing/>".to_string());
+    for (name, desired, original) in edits {
+        if desired == original { continue; }
+        let opening_end = opening_tag_end(&spacing, 0).unwrap_or(spacing.len());
+        let opening = &spacing[..opening_end];
+        let updated = match desired {
+            Some(value) => set_xml_attribute(opening, name, if value { "1" } else { "0" }),
+            None => remove_xml_attribute(opening, name),
+        };
+        spacing.replace_range(..opening_end, &updated);
+    }
+    let mut updated = properties.to_string();
+    if let Some(spacing_range) = spacing_range {
+        updated.replace_range(spacing_range.start..spacing_range.end, &spacing);
+    } else {
+        updated = insert_property_child(properties, "w:pPr", "w:spacing", &spacing, &[
+            "w:spacing", "w:ind", "w:contextualSpacing", "w:mirrorIndents",
+            "w:suppressOverlap", "w:jc", "w:textDirection", "w:textAlignment",
+            "w:textboxTightWrap", "w:outlineLvl", "w:divId", "w:cnfStyle",
+            "w:rPr", "w:sectPr", "w:pPrChange",
+        ]);
+    }
+    let mut source = source.to_string();
+    if let Some(range) = range {
+        source.replace_range(range.start..range.end, &updated);
+    } else {
+        let insert_at = opening_tag_end(&source, 0).unwrap_or(0);
+        source.insert_str(insert_at, &updated);
+    }
+    source
+}
+
 fn patch_source_paragraph_properties(
     paragraph: &ParagraphNode,
     source: &str,
@@ -2874,7 +2944,8 @@ fn patch_source_paragraph_properties(
 ) -> String {
     let marked = patch_source_paragraph_mark(paragraph, source);
     let aligned = patch_source_paragraph_text_alignment(paragraph, &marked, state);
-    patch_source_paragraph_snap_to_grid(paragraph, &aligned, state)
+    let grid = patch_source_paragraph_snap_to_grid(paragraph, &aligned, state);
+    patch_source_paragraph_auto_spacing(paragraph, &grid)
 }
 
 fn paragraph_xml(
@@ -3402,12 +3473,14 @@ fn paragraph_has_source_property_edits(paragraph: &ParagraphNode) -> bool {
             .style
             .as_ref()
             .is_some_and(|style| style.text_alignment != style.source_text_alignment
-                || style.snap_to_grid != style.source_snap_to_grid)
+                || style.snap_to_grid != style.source_snap_to_grid
+                || style.spacing.as_ref().and_then(|s| s.before_auto_spacing) != style.source_before_auto_spacing
+                || style.spacing.as_ref().and_then(|s| s.after_auto_spacing) != style.source_after_auto_spacing)
 }
 
 fn cell_has_source_property_edits(cell: &TableCellNode) -> bool {
     cell.style.as_ref().is_some_and(|style| {
-        style.text_direction != style.source_text_direction || table_width_edit(
+        style.text_direction != style.source_text_direction || style.no_wrap != style.source_no_wrap || table_width_edit(
             style.preferred_width.as_ref(),
             style.width_twips,
             style.source_width.as_ref(),
@@ -3584,6 +3657,21 @@ fn patch_table_source_properties_inner(
                 if let Some(range) = range {
                     patched_cell.replace_range(range.start..range.end, &properties);
                 } else if style.text_direction.is_some() {
+                    let end = opening_tag_end(&patched_cell, 0).unwrap_or(0);
+                    patched_cell.insert_str(end, &properties);
+                }
+            }
+            if let Some(style) = cell.style.as_ref().filter(|style| style.no_wrap != style.source_no_wrap) {
+                let range = direct_property_children(&patched_cell).into_iter()
+                    .find(|(name, _)| name == "w:tcPr").map(|(_, range)| range);
+                let properties = range.as_ref()
+                    .map(|range| &patched_cell[range.start..range.end]).unwrap_or("<w:tcPr/>");
+                let attributes = style.no_wrap.map(|value| [("w:val", if value { "1" } else { "0" }.to_string())]);
+                let properties = patch_direct_table_property(properties, "w:tcPr", "w:noWrap",
+                    attributes.as_ref().map(|values| values.as_slice()), CELL_PROPERTIES_ORDER);
+                if let Some(range) = range {
+                    patched_cell.replace_range(range.start..range.end, &properties);
+                } else if style.no_wrap.is_some() {
                     let end = opening_tag_end(&patched_cell, 0).unwrap_or(0);
                     patched_cell.insert_str(end, &properties);
                 }
@@ -3891,6 +3979,9 @@ fn table_xml(table: &TableNode, state: &mut ImageSerializationState<'_>, run_id_
                     }
                     if let Some(direction) = cell.style.as_ref().and_then(|s| s.text_direction.as_deref()) {
                         cell_props.push(format!(r#"<w:textDirection w:val="{}"/>"#, escape_xml(direction)));
+                    }
+                    if let Some(no_wrap) = cell.style.as_ref().and_then(|s| s.no_wrap) {
+                        cell_props.push(format!(r#"<w:noWrap w:val="{}"/>"#, if no_wrap { "1" } else { "0" }));
                     }
                     if let Some(vertical_align) =
                         cell.style.as_ref().and_then(|s| s.vertical_align)

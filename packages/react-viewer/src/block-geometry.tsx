@@ -2,6 +2,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import type {
   DocumentBlock,
+  DocumentWord,
   DocxSourceRef,
 } from "@extend-ai/react-docx-doc-model";
 
@@ -30,7 +31,7 @@ export interface DocxBlockGeometry {
   scope: "mounted_pages";
   issues: Array<{
     nodeId: string;
-    reason: "unsupported_range" | "document_mismatch" | "not_on_page";
+    reason: "unsupported_range" | "document_mismatch" | "not_on_page" | "range_text_mismatch";
   }>;
   fragments: DocxBlockFragment[];
   unresolvedSourceIds: string[];
@@ -92,24 +93,160 @@ export function resolveDocxSourceGeometry(
   return resolveSourceGeometry(root, refs);
 }
 
+function textNodes(element: HTMLElement, owner: HTMLElement): Text[] {
+  const nodes: Text[] = [];
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    const parent = node.parentElement;
+    if (!parent || parent.closest("[data-docx-numbering-label],[data-docx-generated-text],[data-docx-pagination-ignore],button,textarea,select,[aria-hidden='true']")) continue;
+    const source = parent.closest<HTMLElement>("[data-docx-source-id]");
+    if (source && source !== owner) {
+      const prefix = `${owner.dataset.docxSourceId}/child/`;
+      const id = source.dataset.docxSourceId ?? "";
+      if (!id.startsWith(prefix) || !/^\d+$/.test(id.slice(prefix.length))) continue;
+      if (source.matches("[data-docx-image-location],[role='math']") || parent.closest("svg")) continue;
+    }
+    nodes.push(node);
+  }
+  return nodes;
+}
+
+interface TextRangeEntry {
+  node: Text;
+  start: number;
+  end: number;
+}
+
+interface TextRangeIndex {
+  entries: TextRangeEntry[];
+  prefixEnds: number[];
+}
+
+interface PageMetrics {
+  rect: DOMRect;
+  pageIndex: number;
+  pageWidth: number;
+  pageHeight: number;
+  xScale: number;
+  yScale: number;
+}
+
+interface GeometryCache {
+  elementsById?: Map<string, HTMLElement[]>;
+  boxes: Map<HTMLElement, BlockBoundingBox | undefined>;
+  text: Map<HTMLElement, TextRangeIndex>;
+  pages: Map<HTMLElement, PageMetrics | undefined>;
+}
+
+function createGeometryCache(): GeometryCache {
+  return { boxes: new Map(), text: new Map(), pages: new Map() };
+}
+
+function cachedVisibleBox(element: HTMLElement, surface: HTMLElement, cache: GeometryCache): BlockBoundingBox | undefined {
+  if (!cache.boxes.has(element)) cache.boxes.set(element, visibleBox(element, surface));
+  return cache.boxes.get(element);
+}
+
+function textRangeIndex(element: HTMLElement, cache: GeometryCache): TextRangeIndex {
+  const cached = cache.text.get(element);
+  if (cached) return cached;
+  const selector = "[data-docx-text-start][data-docx-text-end]";
+  const annotated = [...element.querySelectorAll<HTMLElement>(selector)]
+    .filter(node => node.closest("[data-docx-source-id]") === element);
+  const chunks = new Map(annotated.map(node => [node, {
+    offset: Number(node.dataset.docxTextStart), end: Number(node.dataset.docxTextEnd),
+  }]));
+  const fallback = { offset: 0, end: Number.POSITIVE_INFINITY };
+  const entries: TextRangeEntry[] = [];
+  for (const node of textNodes(element, element)) {
+    const chunk = annotated.length
+      ? chunks.get(node.parentElement!.closest<HTMLElement>(selector)!)
+      : fallback;
+    if (!chunk) continue;
+    const start = chunk.offset;
+    chunk.offset += node.length;
+    const end = Math.min(chunk.offset, chunk.end);
+    if (Number.isFinite(start) && end > start) entries.push({ node, start, end });
+  }
+  entries.sort((a, b) => a.start - b.start || a.end - b.end);
+  let lastEnd = 0;
+  const result = { entries, prefixEnds: entries.map(entry => lastEnd = Math.max(lastEnd, entry.end)) };
+  cache.text.set(element, result);
+  return result;
+}
+
+function pageMetrics(surface: HTMLElement, wrapper: HTMLElement, cache: GeometryCache): PageMetrics | undefined {
+  if (!cache.pages.has(surface)) {
+    const rect = surface.getBoundingClientRect();
+    const style = getComputedStyle(surface);
+    const pageWidth = parseFloat(style.width) || surface.offsetWidth;
+    const pageHeight = parseFloat(style.height) || surface.offsetHeight;
+    cache.pages.set(surface, rect.width && rect.height && pageWidth && pageHeight ? {
+      rect, pageWidth, pageHeight, pageIndex: Number(wrapper.dataset.docxPageIndex),
+      xScale: rect.width / pageWidth, yScale: rect.height / pageHeight,
+    } : undefined);
+  }
+  return cache.pages.get(surface);
+}
+
+function rangeBoxes(
+  element: HTMLElement,
+  surface: HTMLElement,
+  ref: DocxSourceRef,
+  cache: GeometryCache,
+  expectedText?: string
+): { boxes: BlockBoundingBox[]; mismatch: boolean } {
+  const boxes: BlockBoundingBox[] = [];
+  let mismatch = false;
+  const start = ref.start!, end = ref.end!;
+  const { entries, prefixEnds } = textRangeIndex(element, cache);
+  let low = 0, high = entries.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (prefixEnds[middle] <= start) low = middle + 1;
+    else high = middle;
+  }
+  for (let index = low; index < entries.length && entries[index].start < end; index++) {
+    const { node, start: nodeStart, end: nodeEnd } = entries[index];
+    const from = Math.max(start, nodeStart), to = Math.min(end, nodeEnd);
+    if (to <= from) continue;
+    if (expectedText !== undefined && node.data.slice(from - nodeStart, to - nodeStart) !== expectedText.slice(from - start, to - start)) {
+      mismatch = true;
+      continue;
+    }
+    const clip = cachedVisibleBox(node.parentElement!, surface, cache);
+    if (!clip) continue;
+    const range = document.createRange();
+    range.setStart(node, from - nodeStart);
+    range.setEnd(node, to - nodeStart);
+    for (const rect of range.getClientRects()) {
+      const box = intersect(rect, clip);
+      if (box.right > box.left && box.bottom > box.top) boxes.push(box);
+    }
+  }
+  return { boxes, mismatch };
+}
+
 function resolveSourceGeometry(
   root: HTMLElement,
   refs: readonly DocxSourceRef[],
-  elementsById?: Map<string, HTMLElement[]>,
-  boxCache?: Map<HTMLElement, BlockBoundingBox | undefined>
+  cache: GeometryCache = createGeometryCache(),
+  expectedText?: string
 ): DocxBlockGeometry {
   const fragments: DocxBlockFragment[] = [];
   const unresolvedSourceIds: string[] = [];
   let foundElement = false;
   const issues: DocxBlockGeometry["issues"] = [];
   for (const ref of refs) {
-    if (ref.start !== undefined || ref.end !== undefined) {
+    const ranged = ref.start !== undefined || ref.end !== undefined;
+    if (ranged && (!Number.isInteger(ref.start) || !Number.isInteger(ref.end) || ref.start! < 0 || ref.end! <= ref.start!)) {
       issues.push({ nodeId: ref.nodeId, reason: "unsupported_range" });
       unresolvedSourceIds.push(ref.nodeId);
       continue;
     }
-    const elements = elementsById
-      ? elementsById.get(ref.nodeId) ?? []
+    const elements = cache.elementsById
+      ? cache.elementsById.get(ref.nodeId) ?? []
       : root.querySelectorAll<HTMLElement>(
           `[data-docx-source-id="${CSS.escape(ref.nodeId)}"]`
         );
@@ -128,18 +265,15 @@ function resolveSourceGeometry(
         continue;
       }
       foundElement = true;
-      const box = boxCache?.has(element)
-        ? boxCache.get(element)
-        : visibleBox(element, surface);
-      boxCache?.set(element, box);
+      const box = cachedVisibleBox(element, surface, cache);
       if (!box) continue;
-      const page = surface.getBoundingClientRect();
-      const pageStyle = getComputedStyle(surface);
-      const pageWidth = parseFloat(pageStyle.width) || surface.offsetWidth;
-      const pageHeight = parseFloat(pageStyle.height) || surface.offsetHeight;
-      if (!page.width || !page.height || !pageWidth || !pageHeight) continue;
-      const xScale = page.width / pageWidth;
-      const yScale = page.height / pageHeight;
+      const range = ranged ? rangeBoxes(element, surface, ref, cache, expectedText) : undefined;
+      if (range?.mismatch) issues.push({ nodeId: ref.nodeId, reason: "range_text_mismatch" });
+      const boxes = range ? range.boxes : [box];
+      const metrics = pageMetrics(surface, wrapper, cache);
+      if (!metrics) continue;
+      const { rect: page, pageWidth, pageHeight, pageIndex, xScale, yScale } = metrics;
+      for (const box of boxes) {
       const boundingBox = {
         left: (box.left - page.left) / xScale,
         top: (box.top - page.top) / yScale,
@@ -149,7 +283,7 @@ function resolveSourceGeometry(
       const { left, top, right, bottom } = boundingBox;
       fragments.push({
         nodeId: ref.nodeId,
-        pageIndex: Number(wrapper.dataset.docxPageIndex),
+        pageIndex,
         pageWidth,
         pageHeight,
         boundingBox,
@@ -162,12 +296,13 @@ function resolveSourceGeometry(
         coordinateSpace: "page-css-px",
       });
       resolved = true;
+      }
     }
     if (!resolved) unresolvedSourceIds.push(ref.nodeId);
   }
   return {
     status: fragments.length
-      ? unresolvedSourceIds.length
+      ? unresolvedSourceIds.length || issues.length
         ? "partially_rendered"
         : "rendered"
       : issues.length
@@ -193,25 +328,90 @@ export function resolveDocxBlockGeometries(
     elements.push(element);
     elementsById.set(id, elements);
   }
-  const boxCache = new Map<HTMLElement, BlockBoundingBox | undefined>();
+  const cache = createGeometryCache();
+  cache.elementsById = elementsById;
   return new Map(blocks.map((block) => [
     block.id,
-    resolveSourceGeometry(root, block.sourceRefs, elementsById, boxCache),
+    resolveSourceGeometry(root, block.sourceRefs, cache,
+      block.sourceRefs.length === 1 && block.sourceRefs[0].start !== undefined ? block.content : undefined),
   ]));
 }
 
-export function revealDocxSource(root: HTMLElement, nodeId: string): void {
-  const element = root.querySelector<HTMLElement>(
-    `[data-docx-source-id="${CSS.escape(nodeId)}"]`
-  );
-  if (element) {
-    element.scrollIntoView({ block: "center", inline: "nearest" });
-    return;
+function wordTarget(word: DocumentWord): DocumentBlock {
+  return { object: "block", id: word.id, type: "text", content: word.content,
+    details: { kind: "word", blockId: word.blockId }, sourceRefs: word.sourceRefs, children: [] };
+}
+
+export function resolveDocxWordGeometries(
+  root: HTMLElement,
+  words: readonly DocumentWord[]
+): Map<string, DocxBlockGeometry> {
+  return resolveDocxBlockGeometries(root, words.map(wordTarget));
+}
+
+export function DocxWordHighlights({ word, words, ...props }: {
+  rootRef: React.RefObject<HTMLElement | null>;
+  word?: DocumentWord;
+  words?: readonly DocumentWord[];
+  color?: string;
+  onGeometry?: (geometry: DocxBlockGeometry) => void;
+}): React.JSX.Element {
+  const active = React.useMemo(() => word ? wordTarget(word) : undefined, [word]);
+  const targets = React.useMemo(() => words?.map(wordTarget), [words]);
+  return <DocxBlockHighlights {...props} block={active} blocks={targets} />;
+}
+
+const revealSequences = new WeakMap<HTMLElement, number>();
+
+export function revealDocxSource(root: HTMLElement, source: string | DocxSourceRef): void {
+  const nodeId = typeof source === "string" ? source : source.nodeId;
+  const ref = typeof source === "string" || source.start === undefined || source.end === undefined ? undefined : source;
+  const sequence = (revealSequences.get(root) ?? 0) + 1;
+  revealSequences.set(root, sequence);
+  const revealRange = (): boolean => {
+    if (!ref) return false;
+    const fragment = resolveSourceGeometry(root, [ref]).fragments[0];
+    if (!fragment) return false;
+    const surface = root.querySelector<HTMLElement>(
+      `[data-docx-page-index="${fragment.pageIndex}"] [data-docx-page-surface]`
+    );
+    if (!surface) return false;
+    const target = document.createElement("span");
+    target.setAttribute("aria-hidden", "true");
+    target.setAttribute("data-docx-pagination-ignore", "true");
+    const box = fragment.boundingBox;
+    Object.assign(target.style, {
+      position: "absolute", width: "1px", height: "1px", pointerEvents: "none",
+      left: `${(box.left + box.right) / 2}px`, top: `${(box.top + box.bottom) / 2}px`,
+    });
+    surface.append(target);
+    target.scrollIntoView({ block: "center", inline: "nearest" });
+    target.remove();
+    return true;
+  };
+  if (ref) {
+    if (revealRange()) return;
+  } else {
+    const element = root.querySelector<HTMLElement>(
+      `[data-docx-source-id="${CSS.escape(nodeId)}"]`
+    );
+    if (element) {
+      element.scrollIntoView({ block: "center", inline: "nearest" });
+      return;
+    }
   }
   const viewer = root.querySelector<HTMLElement>("[data-docx-editor-root]");
   (viewer ?? root).dispatchEvent(
-    new CustomEvent("docx-reveal-source", { detail: { nodeId } })
+    new CustomEvent("docx-reveal-source", { detail: { nodeId, start: ref?.start, end: ref?.end } })
   );
+  if (ref) {
+    let attempts = 0;
+    const retry = () => {
+      if (revealSequences.get(root) !== sequence || !root.isConnected || revealRange()) return;
+      if (++attempts < 30) requestAnimationFrame(retry);
+    };
+    requestAnimationFrame(retry);
+  }
 }
 
 export interface DocxBlockHighlightsProps {
@@ -307,13 +507,16 @@ export function DocxBlockHighlights({
       root.removeEventListener("error", schedule, true);
     };
   }, [rootRef, displayed, block, onGeometry]);
+  const surfaces = new Map<number, HTMLElement>();
+  for (const surface of rootRef.current?.querySelectorAll<HTMLElement>("[data-docx-page-surface]") ?? []) {
+    const index = surface.closest<HTMLElement>("[data-docx-page-index]")?.dataset.docxPageIndex;
+    if (index !== undefined) surfaces.set(Number(index), surface);
+  }
   return (
     <>
       {displayed.flatMap((item) =>
         (geometries.get(item.id)?.fragments ?? []).map((fragment, index) => {
-          const surface = rootRef.current?.querySelector<HTMLElement>(
-            `[data-docx-page-index="${fragment.pageIndex}"] [data-docx-page-surface]`
-          );
+          const surface = surfaces.get(fragment.pageIndex);
           if (!surface) return null;
           const box = fragment.boundingBox;
           const tint = colorForBlock?.(item) ?? color;
@@ -321,6 +524,7 @@ export function DocxBlockHighlights({
           return createPortal(
             <div
               data-docx-block-highlight={item.id}
+              data-docx-word-highlight={item.details.kind === "word" ? item.id : undefined}
               data-docx-block-type={item.type}
               data-docx-highlight-active={active || undefined}
               aria-hidden="true"

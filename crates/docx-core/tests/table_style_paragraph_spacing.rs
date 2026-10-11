@@ -109,7 +109,7 @@ fn table_style_paragraph_spacing_overrides_doc_defaults_in_cells() {
     assert_eq!(styled_spacing.after_twips, Some(0));
     assert_eq!(styled_spacing.line_twips, Some(240));
 
-    // A table without a tblStyle keeps the document defaults.
+    // A default table style without paragraph spacing keeps document defaults.
     let unstyled_cell_paragraph = first_cell_paragraph(&model, 1);
     let unstyled_spacing = unstyled_cell_paragraph
         .style
@@ -118,4 +118,59 @@ fn table_style_paragraph_spacing_overrides_doc_defaults_in_cells() {
         .expect("unstyled cell spacing");
     assert_eq!(unstyled_spacing.after_twips, Some(160));
     assert_eq!(unstyled_spacing.line_twips, Some(259));
+}
+
+#[test]
+fn declared_default_table_style_resolves_properties_without_adding_style_reference() {
+    for default_value in ["1", "true", "on"] {
+        let styles_xml = STYLES_XML.replace(
+            r#"<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/></w:style>"#,
+            &format!(r#"<w:style w:type="table" w:default="{default_value}" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:tblPr><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>"#),
+        );
+        let package = build_package(DOCUMENT_XML, &styles_xml);
+        let model = build_doc_model(&package);
+        let docx_core::model::DocNode::Table(table) = &model.nodes[2] else {
+            panic!("expected table");
+        };
+        let style = table.style.as_ref().expect("table properties");
+        assert_eq!(style.style_id, None);
+        assert_eq!(style.source_style_id, None);
+        let margins = style.cell_margin_twips.as_ref().expect("default margins");
+        assert_eq!(margins.top_twips, Some(0));
+        assert_eq!(margins.bottom_twips, Some(0));
+        assert_eq!(margins.left_twips, Some(108));
+        assert_eq!(margins.right_twips, Some(108));
+        let spacing = first_cell_paragraph(&model, 1)
+            .style.as_ref().and_then(|style| style.spacing.as_ref()).expect("spacing");
+        assert_eq!(spacing.after_twips, Some(0));
+        assert_eq!(spacing.line_twips, Some(240));
+        let exported = docx_core::serialize_doc_model(&model, Some(&package));
+        let reparsed = build_doc_model(&exported);
+        let docx_core::model::DocNode::Table(reparsed_table) = &reparsed.nodes[2] else {
+            panic!("expected table");
+        };
+        assert_eq!(reparsed_table.source_xml, table.source_xml);
+        assert_eq!(reparsed_table.style.as_ref().unwrap().style_id, None);
+    }
+}
+
+#[test]
+fn explicit_table_reference_and_direct_properties_take_precedence_over_default() {
+    let styles = STYLES_XML.replace(
+        r#"<w:name w:val="Normal Table"/></w:style>"#,
+        r#"<w:name w:val="Normal Table"/><w:tblPr><w:tblCellMar><w:top w:w="240" w:type="dxa"/><w:bottom w:w="240" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>"#,
+    );
+    for (properties, expected_top, expected_bottom) in [
+        (r#"<w:tblStyle w:val="Missing"/>"#, None, None),
+        (r#"<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/></w:tblCellMar>"#, Some(0), Some(0)),
+    ] {
+        let document = format!(r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tblPr>{properties}</w:tblPr><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl></w:body></w:document>"#);
+        let model = build_doc_model(&build_package(&document, &styles));
+        let docx_core::model::DocNode::Table(table) = &model.nodes[0] else {
+            panic!("expected table");
+        };
+        let margins = table.style.as_ref().and_then(|style| style.cell_margin_twips.as_ref());
+        assert_eq!(margins.and_then(|margins| margins.top_twips), expected_top);
+        assert_eq!(margins.and_then(|margins| margins.bottom_twips), expected_bottom);
+    }
 }

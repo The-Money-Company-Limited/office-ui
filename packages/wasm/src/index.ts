@@ -3,6 +3,7 @@ import wasmInit, {
   build_doc_model_from_bytes,
   build_doc_model_from_package,
   extract_document_blocks_wasm,
+  extract_document_blocks_with_options_wasm,
   inspect_document_source_wasm,
   model_to_document_xml_from_json_wasm,
   package_to_array_buffer_wasm,
@@ -186,10 +187,15 @@ export async function wasmInspectDocumentSource(bytes: ArrayBuffer | Uint8Array)
   return JSON.parse(inspect_document_source_wasm(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)));
 }
 
-export async function wasmExtractDocumentBlocks(model: unknown): Promise<unknown> {
+export async function wasmExtractDocumentBlocks(
+  model: unknown,
+  options: { includeWords?: boolean } = {}
+): Promise<unknown> {
   await initWasm();
   const json = JSON.stringify(model, (key, value) => key === "data" || key === "src" ? undefined : value);
-  return JSON.parse(extract_document_blocks_wasm(json));
+  return JSON.parse(options.includeWords
+    ? extract_document_blocks_with_options_wasm(json, JSON.stringify(options))
+    : extract_document_blocks_wasm(json));
 }
 
 export async function wasmBuildDocModelFromBytes(bytes: ArrayBuffer | Uint8Array): Promise<{

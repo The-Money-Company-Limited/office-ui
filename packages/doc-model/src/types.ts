@@ -69,6 +69,9 @@ export interface TextStyle {
   rightToLeft?: boolean;
   complexScript?: boolean;
   characterSpacingTwips?: number;
+  /** Horizontal character width as an integer percentage; 100 is unscaled. */
+  characterScalePercent?: number;
+  sourceCharacterScale?: string;
   /** Minimum font size in points at which OOXML kerning is enabled. */
   kerningMinFontSizePt?: number;
   ligatures?: TextLigatures;
@@ -201,6 +204,8 @@ export interface ParagraphNumbering {
 export interface ParagraphSpacing {
   beforeTwips?: number;
   afterTwips?: number;
+  beforeAutoSpacing?: boolean;
+  afterAutoSpacing?: boolean;
   lineTwips?: number;
   lineRule?: "auto" | "exact" | "atLeast";
 }
@@ -239,6 +244,10 @@ export interface ParagraphTabStop {
 export type ParagraphTextAlignment = "auto" | "top" | "center" | "baseline" | "bottom";
 
 export interface ParagraphStyle {
+  /** @internal Imported effective automatic before-spacing. */
+  sourceBeforeAutoSpacing?: boolean;
+  /** @internal Imported effective automatic after-spacing. */
+  sourceAfterAutoSpacing?: boolean;
   align?: ParagraphAlignment;
   snapToGrid?: boolean;
   /** @internal Imported effective document-grid snapping. */
@@ -380,6 +389,10 @@ export interface TableCellStyle {
   textDirection?: "lrTb" | "tbRl" | "btLr" | "lrTbV" | "tbRlV" | "tbLrV";
   /** @internal */
   sourceTextDirection?: TableCellStyle["textDirection"];
+  /** Protects the preferred cell width during automatic table layout. */
+  noWrap?: boolean;
+  /** @internal */
+  sourceNoWrap?: boolean;
   borders?: TableBorderSet;
 }
 

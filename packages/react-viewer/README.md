@@ -244,6 +244,12 @@ async function attachViewerFont(face: FontFace) {
 ```
 
 Provide matching font data and descriptors for each required weight and style.
+If a reference renderer uses different vertical metrics for the same font,
+the caller can supply verified `ascentOverride`, `descentOverride`, and
+`lineGapOverride` descriptors on the `FontFace`. These affect browser layout
+as well as viewer measurements. Bind such a profile to the actual font bytes
+and reference environment; a family name or document charset alone does not
+establish the correct metrics.
 The caller owns loading and cleanup. Load fonts before creating a standalone
 `createDocxThumbnailRenderer`; after changing fonts, dispose and recreate that
 renderer to refresh its captured pagination.

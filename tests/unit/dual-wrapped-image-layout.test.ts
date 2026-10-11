@@ -208,7 +208,8 @@ describe("dual wrapped image layout", () => {
     );
 
     expect(geometry?.exclusion.right).toBe(624);
-    expect(geometry?.imageLeftPx).toBe(510);
+    expect(geometry?.exclusion.left).toBe(510);
+    expect(geometry?.imageLeftPx).toBe(522);
   });
 
   it("keeps narrow near-edge wraps in Pretext with an edge exclusion", async () => {

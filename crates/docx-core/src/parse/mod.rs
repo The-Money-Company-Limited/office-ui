@@ -57,6 +57,7 @@ pub use relationships::{
     parse_part_relationships, parse_relationships_from_parts, relationship_part_name_for_part,
     resolve_part_path,
 };
+pub(crate) use style::parse_character_scale_percent_value;
 pub use style::{
     parse_paragraph_align_from_xml, parse_paragraph_drop_cap_from_xml, parse_paragraph_style,
     parse_run_style, parse_text_style_from_xml,

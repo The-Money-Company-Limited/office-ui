@@ -422,15 +422,11 @@ export function selectSectionVariantForPage<T extends HeaderSection | FooterSect
     return first;
   }
 
-  if (evenAndOddHeadersEnabled && !oddPageNumber && even) {
+  if (evenAndOddHeadersEnabled && !oddPageNumber) {
     return even;
   }
 
-  if (defaultSection) {
-    return defaultSection;
-  }
-
-  return first ?? even ?? sections[0];
+  return defaultSection;
 }
 
 export function resolveSectionIndexForNodeIndex(

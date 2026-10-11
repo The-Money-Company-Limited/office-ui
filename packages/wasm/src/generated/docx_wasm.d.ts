@@ -7,6 +7,8 @@ export function build_doc_model_from_package(_package: any): string;
 
 export function extract_document_blocks_wasm(model_json: string): string;
 
+export function extract_document_blocks_with_options_wasm(model_json: string, options_json: string): string;
+
 export function inspect_document_source_wasm(bytes: Uint8Array): string;
 
 export function model_to_document_xml_from_json_wasm(model_json: string, base_package?: any | null): string;
@@ -28,6 +30,7 @@ export interface InitOutput {
     readonly build_doc_model_from_bytes: (a: number, b: number, c: number) => void;
     readonly build_doc_model_from_package: (a: number, b: number) => void;
     readonly extract_document_blocks_wasm: (a: number, b: number, c: number) => void;
+    readonly extract_document_blocks_with_options_wasm: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly inspect_document_source_wasm: (a: number, b: number, c: number) => void;
     readonly model_to_document_xml_from_json_wasm: (a: number, b: number, c: number, d: number) => void;
     readonly model_to_document_xml_wasm: (a: number, b: number, c: number) => void;

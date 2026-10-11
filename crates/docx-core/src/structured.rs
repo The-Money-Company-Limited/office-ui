@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::model::*;
 use crate::package::OoxmlPackage;
@@ -41,6 +42,23 @@ pub struct SourceRef {
     pub offset_encoding: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractDocumentBlocksOptions {
+    #[serde(default)]
+    pub include_words: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentWord {
+    pub object: String,
+    pub id: String,
+    pub block_id: String,
+    pub content: String,
+    pub source_refs: Vec<SourceRef>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentBlock {
@@ -53,6 +71,8 @@ pub struct DocumentBlock {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_block_id: Option<String>,
     pub children: Vec<DocumentBlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub words: Option<Vec<DocumentWord>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -178,6 +198,7 @@ struct Extractor {
     document_id: String,
     part_name: String,
     story: String,
+    include_words: bool,
 }
 
 impl Extractor {
@@ -207,7 +228,37 @@ impl Extractor {
             }],
             parent_block_id: parent.map(str::to_string),
             children,
+            words: None,
         }
+    }
+
+    fn words(&self, block_id: &str, content: &str) -> Vec<DocumentWord> {
+        let mut offset = 0;
+        content
+            .split_word_bounds()
+            .filter_map(|word| {
+                let start = offset;
+                offset += word.encode_utf16().count();
+                if word.chars().all(char::is_whitespace) {
+                    return None;
+                }
+                Some(DocumentWord {
+                    object: "word".into(),
+                    id: format!("{block_id}/word/{start}-{offset}"),
+                    block_id: block_id.into(),
+                    content: word.into(),
+                    source_refs: vec![SourceRef {
+                        document_id: self.document_id.clone(),
+                        node_id: block_id.into(),
+                        part_name: self.part_name.clone(),
+                        story: self.story.clone(),
+                        start: Some(start),
+                        end: Some(offset),
+                        offset_encoding: "utf-16".into(),
+                    }],
+                })
+            })
+            .collect()
     }
 
     fn story_block(&self, nodes: &[DocNode], kind: BlockType) -> DocumentBlock {
@@ -342,7 +393,11 @@ impl Extractor {
                 }
             }
         }
-        self.block(id.to_string(), kind, content, json!({"type":"text_details", "kind":"paragraph", "style":p.style, "styleId":style_id, "headingLevel":style.and_then(|s|s.heading_level), "numbering":style.and_then(|s|s.numbering.as_ref()), "inlines":inline, "fieldInstructions":field_instructions}), children, parent)
+        let mut block = self.block(id.to_string(), kind, content, json!({"type":"text_details", "kind":"paragraph", "style":p.style, "styleId":style_id, "headingLevel":style.and_then(|s|s.heading_level), "numbering":style.and_then(|s|s.numbering.as_ref()), "inlines":inline, "fieldInstructions":field_instructions}), children, parent);
+        if self.include_words {
+            block.words = Some(self.words(id, &block.content));
+        }
+        block
     }
 
     fn table(&self, table: &TableNode, fallback: &str, parent: Option<&str>) -> DocumentBlock {
@@ -450,6 +505,13 @@ fn without_empty_blocks(blocks: Vec<DocumentBlock>, parent: Option<&str>) -> Vec
 }
 
 pub fn extract_document_blocks(model: &DocModel) -> StructuredDocument {
+    extract_document_blocks_with_options(model, ExtractDocumentBlocksOptions::default())
+}
+
+pub fn extract_document_blocks_with_options(
+    model: &DocModel,
+    options: ExtractDocumentBlocksOptions,
+) -> StructuredDocument {
     let document_id = model
         .metadata
         .document_id
@@ -459,6 +521,7 @@ pub fn extract_document_blocks(model: &DocModel) -> StructuredDocument {
         document_id: document_id.clone(),
         part_name: source_part(model, "document"),
         story: "body".into(),
+        include_words: options.include_words,
     };
     let mut blocks = extractor.nodes(&model.nodes, None);
     let mut seen = HashSet::new();

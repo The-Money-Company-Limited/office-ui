@@ -438,6 +438,29 @@ describe("layout-core", () => {
     ).toBeUndefined();
   });
 
+  it("keeps absent header and footer variants blank after inheritance", () => {
+    const first = { referenceType: "first", partName: "first", nodes: [] };
+    const even = { referenceType: "even", partName: "even", nodes: [] };
+    const ordinary = { referenceType: "default", partName: "ordinary", nodes: [] };
+    const titlePage = "<w:sectPr><w:titlePg/></w:sectPr>";
+
+    expect(selectSectionVariantForPage([first], titlePage, 0)).toBe(first);
+    expect(selectSectionVariantForPage([first], titlePage, 1)).toBeUndefined();
+    expect(selectSectionVariantForPage([first], titlePage, 2)).toBeUndefined();
+    expect(selectSectionVariantForPage([first], undefined, 0)).toBeUndefined();
+    expect(selectSectionVariantForPage([ordinary], undefined, 1, {
+      evenAndOddHeaders: true
+    })).toBeUndefined();
+    expect(selectSectionVariantForPage([ordinary], undefined, 1, {
+      evenAndOddHeaders: false
+    })).toBe(ordinary);
+    expect(selectSectionVariantForPage([even], undefined, 0)).toBeUndefined();
+    expect(selectSectionVariantForPage([even], undefined, 1)).toBe(even);
+    expect(selectSectionVariantForPage([even], undefined, 1, {
+      evenAndOddHeaders: false
+    })).toBeUndefined();
+  });
+
   it("inherits header/footer references forward when later sections omit references", () => {
     const resolvedSections = resolveDocumentSectionsFromMetadata({
       sourceParts: 1,

@@ -125,6 +125,7 @@ pub struct ParsedStyleSheet {
     pub paragraph_style_by_id: HashMap<String, ParagraphStyleDefinition>,
     pub run_style_by_id: HashMap<String, TextStyle>,
     pub table_style_by_id: HashMap<String, ParsedTableStyleDefinition>,
+    pub default_table_style_id: Option<String>,
     /// Table styles' own `w:pPr` spacing (basedOn-resolved). ECMA-376 layers
     /// table-style paragraph properties between document defaults and
     /// paragraph styles for every paragraph inside a styled table.
@@ -151,6 +152,7 @@ pub fn empty_style_sheet() -> ParsedStyleSheet {
         paragraph_style_by_id: HashMap::new(),
         run_style_by_id: HashMap::new(),
         table_style_by_id: HashMap::new(),
+        default_table_style_id: None,
         table_paragraph_spacing_by_style_id: HashMap::new(),
         doc_default_paragraph_spacing: None,
         default_paragraph_style: None,

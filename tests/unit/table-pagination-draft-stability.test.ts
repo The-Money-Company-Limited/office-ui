@@ -114,8 +114,20 @@ describe("table pagination draft stability", () => {
     });
   });
 
-  it("keeps clamping cantSplit rows that still fit on a fresh page", () => {
-    const nodes: DocModel["nodes"] = [createCantSplitTable()];
+  it.each([
+    { marginTwips: undefined, expectedHeight: 21 },
+    { marginTwips: 60, expectedHeight: 28 }
+  ])("keeps clamping cantSplit rows with vertical margins $marginTwips that fit on a fresh page", ({ marginTwips, expectedHeight }) => {
+    const table = createCantSplitTable();
+    if (marginTwips !== undefined) {
+      table.style = {
+        cellMarginTwips: {
+          topTwips: marginTwips,
+          bottomTwips: marginTwips
+        }
+      };
+    }
+    const nodes: DocModel["nodes"] = [table];
 
     expect(
       resolveTableMeasuredRowHeightsForPagination(
@@ -130,7 +142,7 @@ describe("table pagination draft stability", () => {
         }
       )
     ).toEqual({
-      0: [28]
+      0: [expectedHeight]
     });
   });
 

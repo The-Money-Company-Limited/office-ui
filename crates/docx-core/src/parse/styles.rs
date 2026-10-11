@@ -172,12 +172,16 @@ pub fn parse_paragraph_spacing_from_xml(xml: &str) -> Option<ParagraphSpacing> {
     let spacing = ParagraphSpacing {
         before_twips: parse_integer_attribute(&spacing_tag, "w:before"),
         after_twips: parse_integer_attribute(&spacing_tag, "w:after"),
+        before_auto_spacing: parse_on_off_value(get_attribute(&spacing_tag, "w:beforeAutospacing").as_deref()),
+        after_auto_spacing: parse_on_off_value(get_attribute(&spacing_tag, "w:afterAutospacing").as_deref()),
         line_twips: parse_integer_attribute(&spacing_tag, "w:line"),
         line_rule,
     };
 
     if spacing.before_twips.is_none()
         && spacing.after_twips.is_none()
+        && spacing.before_auto_spacing.is_none()
+        && spacing.after_auto_spacing.is_none()
         && spacing.line_twips.is_none()
         && spacing.line_rule.is_none()
     {
@@ -277,7 +281,7 @@ pub fn parse_paragraph_shading_from_xml(xml: &str) -> Option<String> {
     normalize_hex_color(get_attribute(&shading_tag, "w:fill").as_deref())
 }
 
-fn parse_on_off_value(value: Option<&str>) -> Option<bool> {
+pub(super) fn parse_on_off_value(value: Option<&str>) -> Option<bool> {
     let value = value?;
     let normalized = value.trim().to_ascii_lowercase();
     Some(
@@ -1113,6 +1117,8 @@ pub fn merge_text_styles(
         right_to_left: None,
         complex_script: None,
         character_spacing_twips: None,
+        character_scale_percent: None,
+        source_character_scale: None,
         kerning_min_font_size_pt: None,
         ligatures: None,
         contextual_alternates: None,
@@ -1215,6 +1221,10 @@ pub fn merge_text_styles(
         if style.complex_script.is_some() {
             merged.complex_script = style.complex_script;
         }
+        if style.character_scale_percent.is_some() || style.source_character_scale.is_some() {
+            merged.character_scale_percent = style.character_scale_percent;
+            merged.source_character_scale = style.source_character_scale.clone();
+        }
         if style.character_spacing_twips.is_some() {
             merged.character_spacing_twips = style.character_spacing_twips;
         }
@@ -1267,6 +1277,8 @@ pub fn merge_text_styles(
         || merged.right_to_left.is_some()
         || merged.complex_script.is_some()
         || merged.character_spacing_twips.is_some()
+        || merged.character_scale_percent.is_some()
+        || merged.source_character_scale.is_some()
         || merged.kerning_min_font_size_pt.is_some()
         || merged.ligatures.is_some()
         || merged.contextual_alternates.is_some()
@@ -1291,6 +1303,12 @@ fn merge_paragraph_spacing(
         after_twips: direct
             .and_then(|value| value.after_twips)
             .or_else(|| inherited.and_then(|value| value.after_twips)),
+        before_auto_spacing: direct
+            .and_then(|value| value.before_auto_spacing)
+            .or_else(|| inherited.and_then(|value| value.before_auto_spacing)),
+        after_auto_spacing: direct
+            .and_then(|value| value.after_auto_spacing)
+            .or_else(|| inherited.and_then(|value| value.after_auto_spacing)),
         line_twips: direct
             .and_then(|value| value.line_twips)
             .or_else(|| inherited.and_then(|value| value.line_twips)),
@@ -1301,6 +1319,8 @@ fn merge_paragraph_spacing(
 
     if merged.before_twips.is_none()
         && merged.after_twips.is_none()
+        && merged.before_auto_spacing.is_none()
+        && merged.after_auto_spacing.is_none()
         && merged.line_twips.is_none()
         && merged.line_rule.is_none()
     {
@@ -1683,6 +1703,8 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
         right_to_left: None,
         complex_script: None,
         character_spacing_twips: None,
+        character_scale_percent: None,
+        source_character_scale: None,
         kerning_min_font_size_pt: None,
         ligatures: super::style::parse_text_ligatures_from_xml(xml),
         contextual_alternates: super::style::parse_contextual_alternates_from_xml(xml),
@@ -1690,6 +1712,8 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
         run_border: None,
     };
 
+    style.character_scale_percent = super::style::parse_character_scale_percent_from_xml(xml);
+    style.source_character_scale = super::scan::find_attribute_value_in_tag(xml, "w:w", "w:val");
     style.bold = bold;
     style.italic = italic;
     style.underline = underline;
@@ -2134,6 +2158,8 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
             None
         } else {
             Some(ParagraphStyle {
+                source_before_auto_spacing: None,
+                source_after_auto_spacing: None,
                 align,
                 snap_to_grid,
                 source_snap_to_grid: None,
@@ -2173,6 +2199,7 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
 
     let mut raw_styles_by_id = HashMap::new();
     let mut raw_table_styles_by_id = HashMap::new();
+    let mut default_table_style_id = None;
 
     for style_xml in extract_balanced_tag_blocks(styles_xml, "w:style") {
         let style_tag = super::scan::find_tag_token(&style_xml, "w:style").unwrap_or_default();
@@ -2253,6 +2280,11 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
         );
 
         if style_type == RawStyleType::Table {
+            if get_attribute(&style_tag, "w:default")
+                .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "on"))
+            {
+                default_table_style_id = Some(style_id.clone());
+            }
             let mut conditions = HashMap::new();
             let whole_table_source_xml = strip_table_conditional_style_blocks(&style_xml);
             if let Some(whole_table_condition) =
@@ -2559,6 +2591,8 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
 
     let merged_default_paragraph_style = resolved_default_paragraph_style.as_ref().map(|resolved| {
         ParagraphStyle {
+            source_before_auto_spacing: None,
+            source_after_auto_spacing: None,
             align: resolved.align.or(default_paragraph_style.as_ref().and_then(|value| value.align)),
             snap_to_grid: resolved.snap_to_grid.or(default_paragraph_style.as_ref().and_then(|value| value.snap_to_grid)),
             source_snap_to_grid: None,
@@ -2669,6 +2703,7 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
         paragraph_style_by_id,
         run_style_by_id,
         table_style_by_id,
+        default_table_style_id,
         table_paragraph_spacing_by_style_id,
         doc_default_paragraph_spacing: default_paragraph_style
             .as_ref()

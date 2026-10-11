@@ -130,6 +130,9 @@ fn parse_table_cell_geometry(cell_xml: &str) -> ParsedTableCellResult {
         .and_then(|xml| direct_table_property(xml, "w:textDirection"))
         .and_then(|tag| get_attribute(tag, "w:val"))
         .filter(|value| matches!(value.as_str(), "lrTb" | "tbRl" | "btLr" | "lrTbV" | "tbRlV" | "tbLrV"));
+    let no_wrap = cell_properties_xml.as_deref()
+        .and_then(|xml| direct_table_property(xml, "w:noWrap"))
+        .and_then(|tag| parse_on_off_attribute(tag, "noWrap"));
     let v_merge_raw = v_merge_tag
         .as_deref()
         .and_then(|tag| get_attribute(tag, "w:val"))
@@ -150,6 +153,7 @@ fn parse_table_cell_geometry(cell_xml: &str) -> ParsedTableCellResult {
         || margin_twips.is_some()
         || vertical_align.is_some()
         || text_direction.is_some()
+        || no_wrap.is_some()
         || borders.is_some();
     ParsedTableCellResult {
         cell: TableCellNode {
@@ -171,6 +175,8 @@ fn parse_table_cell_geometry(cell_xml: &str) -> ParsedTableCellResult {
                     vertical_align,
                     source_text_direction: text_direction.clone(),
                     text_direction,
+                    no_wrap,
+                    source_no_wrap: no_wrap,
                     borders,
                 })
             } else {
@@ -191,11 +197,12 @@ pub fn parse_table(
         .as_deref()
         .and_then(|xml| direct_table_property(xml, "w:tblStyle"))
         .and_then(|tag| get_attribute(tag, "w:val"));
-    let table_style = table_style_id
+    let resolved_table_style_id = table_style_id
         .as_deref()
+        .or(context.style_sheet.default_table_style_id.as_deref());
+    let table_style = resolved_table_style_id
         .and_then(|id| context.style_sheet.table_style_by_id.get(id));
-    let table_paragraph_spacing = table_style_id
-        .as_deref()
+    let table_paragraph_spacing = resolved_table_style_id
         .and_then(|id| context.style_sheet.table_paragraph_spacing_by_style_id.get(id));
     let style_table_properties = table_style
         .and_then(|style| style.conditions.get(&TableConditionalStyleType::WholeTable))
@@ -339,6 +346,8 @@ pub fn parse_table(
                                 vertical_align: None,
                                 text_direction: None,
                                 source_text_direction: None,
+                                no_wrap: None,
+                                source_no_wrap: None,
                                 borders: None,
                             });
                             anchor_style.row_span =
@@ -361,6 +370,8 @@ pub fn parse_table(
                     vertical_align: None,
                     text_direction: None,
                     source_text_direction: None,
+                    no_wrap: None,
+                    source_no_wrap: None,
                     borders: None,
                 });
                 style.v_merge_continuation = Some(true);
@@ -381,6 +392,8 @@ pub fn parse_table(
                     vertical_align: None,
                     text_direction: None,
                     source_text_direction: None,
+                    no_wrap: None,
+                    source_no_wrap: None,
                     borders: None,
                 });
                 style.row_span = Some(1);
@@ -493,6 +506,8 @@ pub fn parse_table(
                             vertical_align: None,
                             text_direction: None,
                             source_text_direction: None,
+                            no_wrap: None,
+                            source_no_wrap: None,
                             borders: None,
                         });
                         cell_style.preferred_width = Some(preferred_width.clone());
@@ -554,6 +569,8 @@ pub fn parse_table(
                         vertical_align: None,
                         text_direction: None,
                         source_text_direction: None,
+                        no_wrap: None,
+                        source_no_wrap: None,
                         borders: None,
                     });
                     cell_style.background_color = condition.cell_background_color.clone();
@@ -571,6 +588,8 @@ pub fn parse_table(
                         vertical_align: None,
                         text_direction: None,
                         source_text_direction: None,
+                        no_wrap: None,
+                        source_no_wrap: None,
                         borders: None,
                     });
                     cell_style.borders = merge_table_border_sets(
@@ -862,6 +881,8 @@ fn normalize_conflicting_table_grid(
                     vertical_align: None,
                     text_direction: None,
                     source_text_direction: None,
+                    no_wrap: None,
+                    source_no_wrap: None,
                     borders: None,
                 });
                 style.grid_span = Some(new_span);
@@ -1138,6 +1159,8 @@ fn apply_text_alignment_to_table_cell_content(
             .and_then(|style| style.text_alignment);
         let inherited = explicit_style.or(Some(table_alignment));
         let style = paragraph.style.get_or_insert(crate::model::ParagraphStyle {
+            source_before_auto_spacing: None,
+            source_after_auto_spacing: None,
             align: None,
             snap_to_grid: None,
             source_snap_to_grid: None,
@@ -1197,6 +1220,8 @@ fn apply_paragraph_alignment_to_table_cell_content(
                     continue;
                 }
                 let style = paragraph.style.get_or_insert(crate::model::ParagraphStyle {
+                    source_before_auto_spacing: None,
+                    source_after_auto_spacing: None,
                     align: None,
                     snap_to_grid: None,
                     source_snap_to_grid: None,

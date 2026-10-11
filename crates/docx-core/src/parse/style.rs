@@ -89,6 +89,34 @@ pub(crate) fn parse_contextual_alternates_from_xml(xml: &str) -> Option<bool> {
     }
 }
 
+pub(crate) fn parse_character_scale_percent_value(raw: &str) -> Option<u16> {
+    let value = raw.trim();
+    let (digits, negative) = if let Some(digits) = value.strip_suffix('%') {
+        (digits, false)
+    } else if let Some(digits) = value.strip_prefix('-') {
+        (digits, true)
+    } else {
+        (value.strip_prefix('+').unwrap_or(value), false)
+    };
+    if digits.is_empty() || !digits.bytes().all(|digit| digit.is_ascii_digit()) {
+        return None;
+    }
+    let significant_digits = digits.trim_start_matches('0');
+    let percent = if significant_digits.is_empty() {
+        0
+    } else {
+        significant_digits.parse::<u16>().ok()?
+    };
+    (percent <= 600 && (!negative || percent == 0)).then_some(percent)
+}
+
+pub(crate) fn parse_character_scale_percent_from_xml(xml: &str) -> Option<u16> {
+    let tag = super::scan::find_tag_token(xml, "w:w")?;
+    get_attribute(&tag, "w:val").as_deref()
+        .map(parse_character_scale_percent_value)
+        .unwrap_or(Some(100))
+}
+
 pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Option<TextStyle> {
     if xml.is_empty() {
         return None;
@@ -190,6 +218,8 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
         right_to_left: None,
         complex_script: None,
         character_spacing_twips: None,
+        character_scale_percent: None,
+        source_character_scale: None,
         kerning_min_font_size_pt: None,
         ligatures: None,
         contextual_alternates: None,
@@ -271,6 +301,10 @@ pub fn parse_text_style_from_xml(xml: &str, theme_fonts: &ThemeFontMap) -> Optio
             has_any = true;
         }
     }
+
+    style.character_scale_percent = parse_character_scale_percent_from_xml(xml);
+    style.source_character_scale = super::scan::find_attribute_value_in_tag(xml, "w:w", "w:val");
+    has_any |= style.character_scale_percent.is_some() || style.source_character_scale.is_some();
 
     if let Some(spacing) = character_spacing_match.and_then(|v| v.parse::<i64>().ok()) {
         style.character_spacing_twips = Some(spacing);
@@ -751,6 +785,8 @@ pub fn parse_paragraph_style_in_table(
         style_id,
         style_name,
         numbering,
+        source_before_auto_spacing: spacing.as_ref().and_then(|spacing| spacing.before_auto_spacing),
+        source_after_auto_spacing: spacing.as_ref().and_then(|spacing| spacing.after_auto_spacing),
         spacing,
         indent,
         background_color,

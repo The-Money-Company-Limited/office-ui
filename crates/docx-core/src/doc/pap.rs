@@ -268,14 +268,14 @@ impl Pap {
             if let Some(before) = self.dya_before {
                 spacing.push_str(&format!(r#" w:before="{before}""#));
             }
-            if self.before_auto == Some(true) {
-                spacing.push_str(r#" w:beforeAutospacing="1""#);
+            if let Some(automatic) = self.before_auto {
+                spacing.push_str(if automatic { r#" w:beforeAutospacing="1""# } else { r#" w:beforeAutospacing="0""# });
             }
             if let Some(after) = self.dya_after {
                 spacing.push_str(&format!(r#" w:after="{after}""#));
             }
-            if self.after_auto == Some(true) {
-                spacing.push_str(r#" w:afterAutospacing="1""#);
+            if let Some(automatic) = self.after_auto {
+                spacing.push_str(if automatic { r#" w:afterAutospacing="1""# } else { r#" w:afterAutospacing="0""# });
             }
             if let Some(lspd) = self.lspd {
                 let (line, rule) = if lspd.f_mult {
@@ -368,6 +368,19 @@ fn sprm_bytes(sprm: &Sprm<'_>) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_spacing_preserves_explicit_false_and_absence() {
+        assert!(!Pap::default().to_ppr_inner_xml(&|_| None).contains("Autospacing"));
+        let mut pap = Pap::default();
+        for value in [1u8, 0u8] {
+            pap.apply_papx(&[0x5B, 0x24, value, 0x5C, 0x24, value]);
+            let xml = pap.to_ppr_inner_xml(&|_| None);
+            let spacing = crate::parse::parse_paragraph_spacing_from_xml(&xml).unwrap();
+            assert_eq!(spacing.before_auto_spacing, Some(value != 0));
+            assert_eq!(spacing.after_auto_spacing, Some(value != 0));
+        }
+    }
 
     #[test]
     fn applies_indent_and_justification() {
