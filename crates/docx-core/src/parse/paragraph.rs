@@ -7,7 +7,7 @@ use crate::model::{
 };
 use crate::parse::context::ParseContext;
 use crate::parse::re;
-use crate::parse::images::parse_run_images;
+use crate::parse::images::parse_run_image_tokens;
 use crate::parse::style::{parse_paragraph_style_in_table, parse_run_style_in_table};
 use crate::parse::util::{
     decode_hex_code_point, decode_xml_attribute, normalize_legacy_form_display_value,
@@ -33,6 +33,14 @@ pub struct ParsedRunTextToken {
     pub text: String,
     pub source_start: usize,
     pub note_reference: Option<NoteReference>,
+}
+
+fn run_text_xml(run_xml: &str) -> String {
+    let mut active = prefer_alternate_content_choice(run_xml);
+    for range in extract_balanced_tag_ranges(&active, "w:txbxContent").into_iter().rev() {
+        active.replace_range(range.start..range.end, &" ".repeat(range.end - range.start));
+    }
+    active
 }
 
 pub fn parse_run_text_tokens(run_xml: &str) -> Vec<ParsedRunTextToken> {
@@ -205,7 +213,7 @@ pub fn parse_paragraph_runs(paragraph_xml: &str, context: &ParseContext<'_>) -> 
     );
 
     for (run_index, range) in run_ranges.iter().enumerate() {
-        let run_xml = prefer_alternate_content_choice(&strip_text_box_content(&paragraph_xml[range.start..range.end]));
+        let run_xml = run_text_xml(&paragraph_xml[range.start..range.end]);
         let mut text_links = vec![(0, fields.iter().rev().find_map(|field| field.link.clone()))];
         for token in field_tokens.captures_iter(&run_xml) {
             if let Some(instruction) = token.get(1) {
@@ -1239,25 +1247,26 @@ pub(crate) fn parse_paragraph_with_table_run_style(
                     children.push(ParagraphChildNode::FormField(active_x_field));
                     continue;
                 }
-                let images = parse_run_images(&run.xml, context);
+                let images = parse_run_image_tokens(&run.xml, context);
                 // Text boxes own a separate story, including when their drawing
                 // renders as a group or cannot be represented as an image.
-                let run_xml_for_text = strip_text_box_content(&run.xml);
+                let run_xml_for_text = run_text_xml(&run.xml);
                 let parsed_tokens = parse_run_text_tokens(&run_xml_for_text);
+                let mut ordered_children = Vec::new();
                 for token in parsed_tokens {
                     if token.text.is_empty() && token.note_reference.is_none() {
                         continue;
                     }
-                    children.push(ParagraphChildNode::Text(TextRunNode {
+                    ordered_children.push((token.source_start, ParagraphChildNode::Text(TextRunNode {
                         r#type: TextRunNodeType::Text,
                         text: token.text,
                         style: style.clone(),
                         link: run.text_links.iter().rev().find(|(offset, _)| *offset <= token.source_start)
                             .and_then(|(_, link)| link.clone()),
                         note_reference: token.note_reference,
-                    }));
+                    })));
                 }
-                for mut image in images {
+                for (source_start, mut image) in images {
                     if let Some(xml) = image.source_xml.as_deref() {
                         let active_xml = prefer_alternate_content_choice(xml);
                         let text_boxes = extract_balanced_tag_blocks(&active_xml, "w:txbxContent");
@@ -1266,8 +1275,10 @@ pub(crate) fn parse_paragraph_with_table_run_style(
                             image.semantic_kind = Some("text_box".into());
                         }
                     }
-                    children.push(ParagraphChildNode::Image(image));
+                    ordered_children.push((source_start, ParagraphChildNode::Image(image)));
                 }
+                ordered_children.sort_by_key(|(offset, _)| *offset);
+                children.extend(ordered_children.into_iter().map(|(_, child)| child));
             }
         }
     }

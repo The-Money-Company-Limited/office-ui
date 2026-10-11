@@ -88,3 +88,26 @@ fn deleted_rows_do_not_enter_visible_table_or_merge_spans() {
     assert!(!block.content.contains("Removed"));
     assert!(source.parts["word/document.xml"].content.contains("Removed"));
 }
+
+#[test]
+fn images_retain_interleaved_order_and_repeated_occurrences() {
+    let drawing = r#"<w:pict><v:shape style="width:20pt;height:20pt"><v:imagedata r:id="image"/></v:shape></w:pict>"#;
+    let mut source = package(&format!("<w:p><w:r><w:t>Before</w:t>{drawing}<w:t>Between</w:t>{drawing}<w:t>After</w:t></w:r></w:p>"), "");
+    let relationships = &mut source.parts.get_mut("word/_rels/document.xml.rels").unwrap().content;
+    *relationships = relationships.replace("</Relationships>", r#"<Relationship Id="image" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/a.png"/></Relationships>"#);
+    source.binary_assets.insert("word/media/a.png".into(), vec![137, 80, 78, 71, 13, 10, 26, 10]);
+    let model = build_doc_model(&source);
+    let DocNode::Paragraph(p) = &model.nodes[0] else { panic!() };
+    let order: Vec<_> = p.children.iter().map(|child| match child {
+        ParagraphChildNode::Text(run) => run.text.as_str(),
+        ParagraphChildNode::Image(_) => "image",
+        _ => "control",
+    }).collect();
+    assert_eq!(order, vec!["Before", "image", "Between", "image", "After"]);
+    let output = extract_document_blocks(&model);
+    let block = &output.blocks[0];
+    assert_eq!(block.children.len(), 2);
+    assert_ne!(block.children[0].id, block.children[1].id);
+    assert_eq!(block.details["inlines"][1]["offset"], 6);
+    assert_eq!(block.details["inlines"][3]["offset"], 13);
+}
