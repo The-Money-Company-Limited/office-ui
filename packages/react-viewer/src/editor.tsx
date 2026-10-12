@@ -47145,7 +47145,7 @@ export function DocxEditorViewer({
         return;
       }
 
-      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
+      if (event.ctrlKey || event.metaKey || event.altKey) {
         return;
       }
 
@@ -47163,6 +47163,79 @@ export function DocxEditorViewer({
       }
 
       if (eventTargetIsInteractiveControl(target)) {
+        return;
+      }
+
+      if (event.shiftKey) {
+        if (
+          isReadOnly ||
+          !target.closest("[data-docx-paragraph-host='true']") ||
+          target.closest(
+            "[data-docx-image-location],[data-docx-drop-cap='true'],[data-docx-table-move-handle='true'],[data-image-resize-handle='true']"
+          )
+        ) {
+          return;
+        }
+
+        const wrappedSession = activeWrappedParagraphSessionRef.current;
+        const textarea = wrappedParagraphTextareaRef.current;
+        const nativeSelection = window.getSelection();
+        const nativeAnchor =
+          nativeSelection?.anchorNode &&
+          viewerRootRef.current?.contains(nativeSelection.anchorNode)
+            ? resolveParagraphBoundaryFromSelectionPoint(
+                nativeSelection.anchorNode,
+                nativeSelection.anchorOffset
+              )
+            : undefined;
+        const anchor = wrappedSession
+          ? {
+              location: cloneTextRangeLocation(wrappedSession.location),
+              offset: textarea && document.activeElement === textarea
+                ? textareaOffsetToSourceOffset(
+                    wrappedSession.text,
+                    textarea.selectionDirection === "backward"
+                      ? textarea.selectionEnd
+                      : textarea.selectionStart
+                  )
+                : wrappedSession.anchorOffset,
+            }
+          : nativeAnchor ?? editor.activeTextRange?.start;
+        const clicked = resolveBoundaryFromPoint({
+          x: event.clientX,
+          y: event.clientY,
+        });
+        const currentRange =
+          resolveActiveRangeFromDomSelection() ?? editor.activeTextRange;
+        if (
+          !anchor ||
+          !clicked ||
+          (sameParagraphLocation(anchor.location, clicked.location) &&
+            (!currentRange ||
+              sameParagraphLocation(
+                currentRange.start.location,
+                currentRange.end.location
+              )))
+        ) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        cancelPendingPointerSelectionReconcile();
+        wrappedParagraphPendingSelectionRef.current = undefined;
+        // Commit the editing surface change before attaching a range to its text.
+        flushSync(() => {
+          clearObjectSelectionForTextEntry();
+          setActiveWrappedParagraphSession(undefined);
+        });
+        const selectionIntentNonce = beginSelectionIntent();
+        editor.beginSelectionSession("pointer", { settleAfterMs: 320 });
+        viewerRootRef.current?.focus({ preventScroll: true });
+        setSelectionFromDocxBoundaries(anchor, clicked);
+        scheduleSelectionIntentFrame(selectionIntentNonce, () => {
+          setSelectionFromDocxBoundaries(anchor, clicked);
+        });
         return;
       }
 
@@ -47194,12 +47267,21 @@ export function DocxEditorViewer({
     },
     [
       activeHeaderFooterEdit,
+      beginSelectionIntent,
       beginCrossNodeSelectionDrag,
+      cancelPendingPointerSelectionReconcile,
+      clearObjectSelectionForTextEntry,
       closeContextMenu,
       closeTableContextMenu,
       contextMenuState,
+      editor,
+      isReadOnly,
+      resolveActiveRangeFromDomSelection,
       resolveBoundaryFromPoint,
+      resolveParagraphBoundaryFromSelectionPoint,
       scheduleCloseActiveHeaderFooterEdit,
+      scheduleSelectionIntentFrame,
+      setSelectionFromDocxBoundaries,
       tableContextMenuState,
     ]
   );
