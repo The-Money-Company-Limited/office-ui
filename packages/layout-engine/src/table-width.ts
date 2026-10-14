@@ -92,12 +92,55 @@ export interface FixedTableRowWidths {
   cells: readonly FixedTableCellWidth[];
 }
 
+function resolveUnspecifiedFixedTableGridWidths(
+  params: Parameters<typeof resolveFixedTableGridWidths>[0]
+): number[] | undefined {
+  const target = params.preferredTableWidth;
+  if (target === undefined || !Number.isFinite(target) || target <= 0 ||
+      params.initialGridWidths?.some((width) => Number.isFinite(width) && width > 0)) {
+    return undefined;
+  }
+  const spanOf = (cell: FixedTableCellWidth): number =>
+    Math.max(1, Number.isFinite(cell.gridSpan) ? Math.floor(cell.gridSpan!) : 1);
+  const count = Math.max(params.initialGridWidths?.length ?? 0,
+    ...params.rows.map((row) => row.cells.reduce((sum, cell) => sum + spanOf(cell), 0)));
+  if (count <= 0 || params.rows.some((row) =>
+    (row.gridBefore ?? 0) > 0 || (row.gridAfter ?? 0) > 0)) return undefined;
+
+  const widths = Array<number>(count).fill(0);
+  const specified = Array<boolean>(count).fill(false);
+  for (const row of params.rows) {
+    let column = 0;
+    for (const cell of row.cells) {
+      const span = spanOf(cell);
+      const request = cell.preferredWidth;
+      if (request !== undefined && Number.isFinite(request) && request > 0) {
+        if (span === 1) {
+          widths[column] = Math.max(widths[column], request);
+          specified[column] = true;
+        } else if (column !== 0 || span !== count || Math.abs(request - target) > 0.01) {
+          return undefined;
+        }
+      }
+      column += span;
+    }
+    if (column !== count) return undefined;
+  }
+  const missing = specified.filter((value) => !value).length;
+  const total = widths.reduce((sum, width) => sum + width, 0);
+  if (missing === 0 || total >= target) return undefined;
+  const remainder = (target - total) / missing;
+  return widths.map((width, index) => specified[index] ? width : remainder);
+}
+
 /** Resolve ordered fixed-layout grid requests in a single measurement unit. */
 export function resolveFixedTableGridWidths(params: {
   initialGridWidths?: readonly number[];
   rows: readonly FixedTableRowWidths[];
   preferredTableWidth?: number;
 }): number[] {
+  const unspecified = resolveUnspecifiedFixedTableGridWidths(params);
+  if (unspecified) return unspecified;
   let widths = (params.initialGridWidths ?? []).map((width) =>
     Number.isFinite(width) && width >= 0 ? width : 0
   );

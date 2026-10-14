@@ -57,11 +57,9 @@ const IMPORTED_DOCUMENT_LAYOUT: DocumentLayoutMetrics = {
 
 export function resolveDocumentLayoutFallback(model: DocModel): DocumentLayoutMetrics {
   const { metadata } = model;
-  // Only a wholly absent section uses the imported-document fallback. Partial
-  // section properties keep their existing field defaults.
   return metadata.documentOpenTag &&
-    !metadata.sectionPropertiesXml &&
-    !metadata.sections?.some((section) => section.sectionPropertiesXml)
+    (metadata.sectionPropertiesXml ||
+      !metadata.sections?.some((section) => section.sectionPropertiesXml))
     ? IMPORTED_DOCUMENT_LAYOUT
     : DEFAULT_DOCUMENT_LAYOUT;
 }
@@ -101,7 +99,7 @@ function readTwipsAttribute(tagXml: string | undefined, attribute: string): numb
     return undefined;
   }
 
-  const match = tagXml.match(new RegExp(`${attribute}="(\\d+)"`, "i"));
+  const match = tagXml.match(new RegExp(`${attribute}="(\\d+(?:\\.\\d+)?)"`, "i"));
   if (!match?.[1]) {
     return undefined;
   }
@@ -273,9 +271,9 @@ export function parseSectionLayout(
   const pageWidthTwips = readTwipsAttribute(pageSizeTag, "w:w");
   const pageHeightTwips = readTwipsAttribute(pageSizeTag, "w:h");
   const rawPageWidthPx =
-    sectionTwipsToPixels(pageWidthTwips) ?? DEFAULT_DOCUMENT_LAYOUT.pageWidthPx;
+    sectionTwipsToPixels(pageWidthTwips) ?? missingSectionLayout.pageWidthPx;
   const rawPageHeightPx =
-    sectionTwipsToPixels(pageHeightTwips) ?? DEFAULT_DOCUMENT_LAYOUT.pageHeightPx;
+    sectionTwipsToPixels(pageHeightTwips) ?? missingSectionLayout.pageHeightPx;
   // Explicit dimensions define layout coordinates independently of print
   // orientation. Only infer orientation for an incomplete page size.
   const pageSize = resolvePageSizeForOrientation({

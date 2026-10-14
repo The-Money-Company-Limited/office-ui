@@ -94,7 +94,7 @@ describe("section layout parsing", () => {
     });
   });
 
-  it("uses imported page defaults only when all section properties are absent", () => {
+  it("uses imported page defaults when all section properties are absent", () => {
     const model = createModel();
     model.metadata.documentOpenTag = '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">';
     const metadataBefore = structuredClone(model.metadata);
@@ -116,10 +116,14 @@ describe("section layout parsing", () => {
     '<w:sectPr><w:pgMar w:top="1060" w:right="1000" w:bottom="1060" w:left="1000" w:footer="300"/></w:sectPr>',
     '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>',
     SECTION_PROPERTIES_XML
-  ])("preserves explicit and partial imported section metrics", (sectionPropertiesXml) => {
+  ])("preserves declared imported section metrics and defaults omitted sizes", (sectionPropertiesXml) => {
     const model = createModel(sectionPropertiesXml);
     model.metadata.documentOpenTag = '<w:document>';
-    expect(resolveDocumentLayout(model)).toEqual(parseSectionLayout(sectionPropertiesXml));
+    expect(resolveDocumentLayout(model)).toEqual({
+      ...parseSectionLayout(sectionPropertiesXml),
+      ...(!sectionPropertiesXml.includes("w:pgSz")
+        ? { pageWidthPx: 816, pageHeightPx: 1056 } : {}),
+    });
   });
 
   it("does not apply imported defaults to a missing section within a sectioned document", () => {

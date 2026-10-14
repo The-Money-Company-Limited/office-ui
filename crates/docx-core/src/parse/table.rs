@@ -231,9 +231,10 @@ pub fn parse_table(
     let table_grid_xml = direct_table_property(table_xml, "w:tblGrid");
     let column_widths_twips: Vec<i64> = table_grid_xml
         .map(|grid| {
-            re::get_unchecked(r"(?i)<w:gridCol\b[^>]*>")
-                .find_iter(grid)
-                .filter_map(|m| parse_integer_attribute(m.as_str(), "w:w"))
+            crate::xml::extract_direct_child_tag_ranges(grid)
+                .into_iter()
+                .filter(|range| range.tag_name.eq_ignore_ascii_case("w:gridCol"))
+                .filter_map(|range| parse_integer_attribute(&grid[range.start..range.end], "w:w"))
                 .filter(|&width| width >= 0)
                 .collect()
         })

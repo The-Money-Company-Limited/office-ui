@@ -52,9 +52,16 @@ pub fn parse_run_text_tokens(run_xml: &str) -> Vec<ParsedRunTextToken> {
     for caps in token_pattern.captures_iter(&normalized_run_xml) {
         let source_start = caps.get(0).unwrap().start();
         if let Some(m) = caps.get(1) {
+            // Literal XML line endings are text whitespace; explicit break
+            // elements carry the document's line-break semantics.
+            let text = if m.as_str().contains(['\r', '\n']) {
+                decode_xml_entities(&m.as_str().replace("\r\n", " ").replace(['\r', '\n'], " "))
+            } else {
+                decode_xml_entities(m.as_str())
+            };
             parts.push(ParsedRunTextToken {
                 source_start,
-                text: decode_xml_entities(m.as_str()),
+                text,
                 note_reference: None,
             });
             continue;

@@ -66,8 +66,11 @@ export function createSectionPageNumberTracker(metadata: DocModel["metadata"]): 
       }
       pendingPageNumber = undefined;
       if (override !== undefined) {
-        pageNumber = normalizeSectionPageNumber(override, properties);
-        return false;
+        const normalized = normalizeSectionPageNumber(override, properties);
+        const needsBlank = metadata.compatibility?.evenAndOddHeaders === true &&
+          atPageTop && hasPreviousPages && normalized % 2 !== pageNumber % 2;
+        pageNumber = normalized;
+        return needsBlank;
       }
       const normalized = normalizeSectionPageNumber(pageNumber, properties);
       const needsBlank = atPageTop && hasPreviousPages && normalized !== pageNumber;

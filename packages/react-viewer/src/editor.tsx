@@ -195,6 +195,7 @@ import {
   sliceLayoutToLineRange,
   resolveNextUnblockedFullWidthLineTopPx,
 } from "./pretext-layout";
+import { fontTableEntries } from "./font-table";
 import {
   defaultTabStopPxForNode,
   documentWithDefaultTabLayout,
@@ -1999,8 +2000,6 @@ function collectEmbeddedFontFaceDescriptors(
 
   const fontRelationships = parseOoxmlRelationships(pkg, "word/fontTable.xml");
   const descriptors: EmbeddedFontFaceDescriptor[] = [];
-  const fontPattern =
-    /<w:font\b[^>]*w:name="([^"]+)"[^>]*>([\s\S]*?)<\/w:font>/gi;
   const fontVariants = [
     { tagName: "embedRegular", style: "normal" as const, weight: "400" },
     { tagName: "embedBold", style: "normal" as const, weight: "700" },
@@ -2008,14 +2007,7 @@ function collectEmbeddedFontFaceDescriptors(
     { tagName: "embedBoldItalic", style: "italic" as const, weight: "700" },
   ];
 
-  let fontMatch: RegExpExecArray | null;
-  while ((fontMatch = fontPattern.exec(fontTableXml))) {
-    const family = fontMatch[1]?.trim();
-    const fontXml = fontMatch[2] ?? "";
-    if (!family) {
-      continue;
-    }
-
+  for (const { family, xml: fontXml } of fontTableEntries(fontTableXml)) {
     fontVariants.forEach((variant) => {
       const tagXml =
         fontXml.match(
@@ -6708,6 +6700,22 @@ interface ParagraphDualWrappedTextLayout {
   minimumLineHeightPx?: number;
   gridLinePitchPx?: number;
   layout: PretextVariableWidthLayout;
+}
+
+function wrappedImageStaysInTableCell(image: ImageRunNode): boolean {
+  const relativeTo = image.floating?.verticalRelativeTo?.toLowerCase();
+  return (!image.sourceXml || /<wp:anchor\b/i.test(image.sourceXml)) &&
+    !/<wp:anchor\b[^>]*\blayoutInCell=["'](?:0|false)["']/i.test(image.sourceXml ?? "") &&
+    (!relativeTo || relativeTo === "paragraph" || relativeTo === "line") &&
+    shouldRenderWrappedFloatingImage(image);
+}
+
+function tableCellWrappedImageBottomPx(
+  geometries: DualWrappedFloatingImageGeometry[]
+): number {
+  return geometries.reduce((bottom, geometry) =>
+    wrappedImageStaysInTableCell(geometry.image)
+      ? Math.max(bottom, geometry.exclusion.bottom) : bottom, 0);
 }
 
 interface PageFlowFloatingWrapObstacle extends PretextExclusionRect {
@@ -12772,8 +12780,18 @@ function estimateTableCellContentHeightPx(
       totalHeightPx += Math.max(1, pretextHeightPx);
       continue;
     }
-    const resolvedBaseHeight =
-      pretextHeightPx > 0 ? Math.max(baseHeight, pretextHeightPx) : baseHeight;
+    const wrappedLayout = paragraphTextWidthPx !== undefined &&
+      paragraphForLayout.children.some(child => child.type === "image" && wrappedImageStaysInTableCell(child))
+      ? resolveParagraphDualWrappedTextLayout(
+          paragraphForLayout, paragraphTextWidthPx, lineHeightPx,
+          { minimumLineHeightPx, gridLinePitchPx: resolveParagraphDocGridLinePitchPx(paragraphForLayout, docGridLinePitchPx, disableDocGridSnap) }, typography
+        )
+      : undefined;
+    const wrappedHeightPx = wrappedLayout
+      ? beforeSpacing + topBorderInsetPx + tableCellWrappedImageBottomPx(wrappedLayout.geometries) +
+        bottomBorderInsetPx + afterSpacing
+      : 0;
+    const resolvedBaseHeight = Math.max(baseHeight, pretextHeightPx, wrappedHeightPx);
     // Only treat the pretext layout as a genuine multi-line expansion when it
     // exceeds the base estimate by at least half a line. A tiny (rounding)
     // difference between the two height calcs must not trigger the extra-line
@@ -12819,6 +12837,20 @@ function rowUsesCompleteParagraphSlicePlans(
   row: TableNode["rows"][number] | undefined
 ): boolean {
   return Boolean(row && row.style?.heightRule !== "exact" && rowCanUseParagraphSlicePlans(row));
+}
+
+function rowUsesWrappedImageSliceBoundaries(
+  row: TableNode["rows"][number] | undefined
+): boolean {
+  return Boolean(row && row.style?.heightRule !== "exact" &&
+    row.cells.some(cell => cell.nodes.some(node => node.type === "paragraph" &&
+      node.children.some(child => child.type === "image" && wrappedImageStaysInTableCell(child)))) &&
+    row.cells.every(cell =>
+      (cell.style?.rowSpan ?? 1) <= 1 && !cell.style?.vMergeContinuation &&
+      !tableCellHasVerticalText(cell) &&
+      cell.nodes.every(node => isParagraphCellContentNode(node) &&
+        node.children.every(child => child.type === "text" && !child.noteReference ||
+          child.type === "image" && wrappedImageStaysInTableCell(child)))));
 }
 
 function rowHasDeepFlowContent(row: TableNode["rows"][number]): boolean {
@@ -13401,7 +13433,13 @@ function estimateParagraphBoundaryOffsetsPx(
   const wholeTextPlan = resolveWholeTextPretextPlan(
     paragraphForLayout, paragraphTextWidthPx, lineHeightPx, { minimumLineHeightPx: minimumLineHeightPx, gridLinePitchPx: resolveParagraphDocGridLinePitchPx(paragraphForLayout, docGridLinePitchPx, disableDocGridSnap) }, typography
   );
-  const pretextLayout = wholeTextPlan?.layout ?? (pretextSource
+  const wrappedLayout = useCompleteLineBoundaries
+    ? resolveParagraphDualWrappedTextLayout(
+        paragraphForLayout, paragraphTextWidthPx, lineHeightPx,
+        { minimumLineHeightPx, gridLinePitchPx: resolveParagraphDocGridLinePitchPx(paragraphForLayout, docGridLinePitchPx, disableDocGridSnap) }, typography
+      )
+    : undefined;
+  const pretextLayout = wrappedLayout?.layout ?? wholeTextPlan?.layout ?? (pretextSource
     ? layoutParagraphPretextSource(
         paragraphForLayout,
         pretextSource,
@@ -13442,18 +13480,23 @@ function estimateParagraphBoundaryOffsetsPx(
   const lineBoundariesPx = lineTopOffsetsPx.map(
     (lineTopPx, index) => textTopPx + lineTopPx + (pretextLayout?.lines[index]?.height ?? lineHeightPx)
   );
+  const imageSpansPx = wrappedLayout?.geometries.map(geometry => ({
+    topPx: textTopPx + Math.max(0, geometry.imageTopPx),
+    bottomPx: textTopPx + Math.max(0, geometry.imageTopPx + geometry.imageHeightPx),
+  })) ?? [];
 
   return {
     heightPx,
     safeBoundariesPx: uniqueSortedPixelBoundaries([
       ...lineBoundariesPx,
+      ...imageSpansPx.flatMap(span => [span.topPx, span.bottomPx]),
       heightPx,
     ], useCompleteLineBoundaries),
     protectedLineSpansPx: useCompleteLineBoundaries
-      ? lineTopOffsetsPx.map((lineTopPx, index) => ({
+      ? [...imageSpansPx, ...lineTopOffsetsPx.map((lineTopPx, index) => ({
           topPx: textTopPx + lineTopPx,
           bottomPx: lineBoundariesPx[index],
-        }))
+        }))]
       : undefined,
   };
 }
@@ -13648,7 +13691,8 @@ function resolveTableRowSliceHeightOnSafeBoundaryPx(params: {
     docGridLinePitchPx,
   } = params;
   const row = table.rows[rowIndex];
-  const useCompleteLineBoundaries = rowUsesCompleteParagraphSlicePlans(row);
+  const useCompleteLineBoundaries = rowUsesCompleteParagraphSlicePlans(row) ||
+    rowUsesWrappedImageSliceBoundaries(row);
   if (
     !row ||
     (!rowHasNestedTableContent(row) &&
@@ -16766,9 +16810,10 @@ export function buildDocumentPageNodeSegments(
           numberingDefinitions,
           docGridLinePitchPx: nodeMetrics.docGridLinePitchPx,
         }, typography);
+        // A page containing only a repeated header is already fresh for row content.
         if (
           safeSliceHeightPx === undefined &&
-          pageConsumedHeightPx > 0 &&
+          pageConsumedHeightPx > repeatedHeaderHeightPxOnThisPage &&
           currentPageSegments.length > 0
         ) {
           startNextPage();
@@ -37577,6 +37622,7 @@ function renderHeaderNode(
         <div
           key={`${paragraphKeyPrefix}-paragraph`}
           data-docx-source-id={paragraphNode.blockId}
+          data-docx-source-kind="paragraph"
           data-docx-section-paragraph-key={sectionDraftKey}
           style={paragraphStyle}
         >
@@ -37600,6 +37646,7 @@ function renderHeaderNode(
         <div
           key={`${paragraphKeyPrefix}-paragraph`}
           data-docx-source-id={paragraphNode.blockId}
+          data-docx-source-kind="paragraph"
           data-docx-section-paragraph-host="true"
           data-docx-section-paragraph-key={resolvedDraftKey}
           data-docx-section-region={location.region}
@@ -37686,6 +37733,7 @@ function renderHeaderNode(
       <div
         key={`${paragraphKeyPrefix}-paragraph`}
           data-docx-source-id={paragraphNode.blockId}
+        data-docx-source-kind="paragraph"
         contentEditable
         suppressContentEditableWarning
         data-docx-table-cell-paragraph-host="true"
@@ -42005,7 +42053,15 @@ export function DocxEditorViewer({
         }
 
         const style = window.getComputedStyle(element);
-        const marginTop = Number.parseFloat(style.marginTop || "0");
+        // Keep page-start suppression out of reusable measurements while
+        // preserving spacing determined by the surrounding paragraphs.
+        const marginTop = effectiveParagraphBeforeSpacingPx(
+          editor.model,
+          nodeIndex,
+          node,
+          nodeIndex > 0 ? 1 : 0,
+          false
+        );
         const marginBottom = Number.parseFloat(style.marginBottom || "0");
         const outerHeightPx = Math.max(
           1,
@@ -55688,11 +55744,14 @@ export function DocxEditorViewer({
           layout: lineRange ? sliceLayoutToLineRange(activeWrappedLayout, lineRange.startLineIndex,
             lineRange.endLineIndex >= lineRange.totalLineCount ? activeWrappedLayout.lineCount : lineRange.endLineIndex) : activeWrappedLayout,
           lineHeightPx: activeDualWrappedLayout.lineHeightPx,
-          blockHeightPx: lineRange ? undefined : resolveDragPreviewAwareWrapBlockHeightPx(
+          blockHeightPx: lineRange ? undefined : Math.max(
+            location.kind === "table-cell"
+              ? tableCellWrappedImageBottomPx(activeDualWrappedLayout.geometries) : 0,
+            resolveDragPreviewAwareWrapBlockHeightPx(
             activeWrappedLayout,
             activeDualWrappedLayout.geometries,
             options?.pageFlowForeignExclusions
-          ),
+          )),
           obstacleNodes: (
             <>
               {activeDualWrappedLayout.geometries.map((geometry) =>
@@ -56161,6 +56220,7 @@ export function DocxEditorViewer({
                           <div
                             key={`${runKey}-textbox-paragraph-${paragraphIndex}`}
                             data-docx-source-id={paragraph.sourceId ?? child.contentNodes?.[paragraphIndex]?.blockId}
+                            data-docx-source-kind="paragraph"
                             style={{
                               minHeight: `${Math.max(
                                 1,
@@ -57410,6 +57470,10 @@ export function DocxEditorViewer({
       wholeParagraphs,
     } = params;
     if (!cell.nodes.every(isParagraphCellContentNode)) {
+      return undefined;
+    }
+    if (cell.nodes.some(node => node.children.some(child =>
+      child.type === "image" && wrappedImageStaysInTableCell(child)))) {
       return undefined;
     }
 

@@ -48,12 +48,13 @@ function intersect(a: BlockBoundingBox, b: BlockBoundingBox): BlockBoundingBox {
 
 function visibleBox(
   element: HTMLElement,
-  surface: HTMLElement
+  surface: HTMLElement,
+  bounds?: BlockBoundingBox
 ): BlockBoundingBox | undefined {
   const style = getComputedStyle(element);
   if (style.display === "none" || style.visibility === "hidden")
     return undefined;
-  const rect = element.getBoundingClientRect();
+  const rect = bounds ?? element.getBoundingClientRect();
   let box: BlockBoundingBox = {
     left: rect.left,
     top: rect.top,
@@ -228,11 +229,104 @@ function rangeBoxes(
   return { boxes, mismatch };
 }
 
+function combiningMarkBox(
+  node: Text,
+  surface: HTMLElement,
+  xScale: number
+): BlockBoundingBox | undefined {
+  const value = node.data.trim();
+  if (!/^\p{M}+$/u.test(value)) return undefined;
+  const range = document.createRange();
+  range.setStart(node, node.data.search(/\S/u));
+  range.setEnd(node, node.data.trimEnd().length);
+  const rect = range.getBoundingClientRect();
+  if (rect.width || !rect.height) return undefined;
+  const parent = node.parentElement!;
+  const style = getComputedStyle(parent);
+  const context = document.createElement("canvas").getContext("2d");
+  if (!context) return undefined;
+  context.font = style.font || `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  const metrics = context.measureText(value);
+  if (metrics.width || metrics.actualBoundingBoxLeft + metrics.actualBoundingBoxRight <= 0) return undefined;
+  let bounds: BlockBoundingBox = {
+    left: rect.left - metrics.actualBoundingBoxLeft * xScale,
+    right: rect.right + metrics.actualBoundingBoxRight * xScale,
+    top: rect.top,
+    bottom: rect.bottom,
+  };
+  if (style.display !== "inline" && style.display !== "contents") {
+    const frame = parent.getBoundingClientRect();
+    if (/hidden|clip|scroll|auto/.test(style.overflowX))
+      bounds = { ...bounds, left: Math.max(bounds.left, frame.left), right: Math.min(bounds.right, frame.right) };
+    if (/hidden|clip|scroll|auto/.test(style.overflowY))
+      bounds = { ...bounds, top: Math.max(bounds.top, frame.top), bottom: Math.min(bounds.bottom, frame.bottom) };
+  }
+  return visibleBox(parent, surface, bounds);
+}
+
+function paragraphTextBoxes(
+  element: HTMLElement,
+  surface: HTMLElement,
+  cache: GeometryCache,
+  xScale: number
+): BlockBoundingBox[] {
+  const boxes: BlockBoundingBox[] = [];
+  let previousExtent: BlockBoundingBox | undefined;
+  const nodes = textNodes(element, element);
+  const marksOnly = nodes.every(node => !node.data.trim() || /^\p{M}+$/u.test(node.data.trim()));
+  for (const node of nodes) {
+    const start = node.data.search(/\S/u);
+    if (start < 0) continue;
+    const end = node.data.trimEnd().length;
+    const mark = marksOnly ? combiningMarkBox(node, surface, xScale) : undefined;
+    if (mark) {
+      boxes.push(mark);
+      previousExtent = mark;
+      continue;
+    }
+    const clip = cachedVisibleBox(node.parentElement!, surface, cache);
+    if (!clip) continue;
+    const range = document.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, end);
+    const textRects = [...range.getClientRects()];
+    range.selectNodeContents(node);
+    const fullRects = start > 0 || end < node.length ? [...range.getClientRects()] : textRects;
+    for (const rect of textRects) {
+      const box = intersect(rect, clip);
+      if (box.right <= box.left || box.bottom <= box.top) continue;
+      const fullRect = fullRects.find(full => Math.abs(full.top - rect.top) < 0.5 &&
+        Math.abs(full.bottom - rect.bottom) < 0.5 && full.left <= rect.left && full.right >= rect.right);
+      const extent = intersect(fullRect ?? rect, clip);
+      const previous = boxes[boxes.length - 1];
+      if (previous && previousExtent && Math.abs(previous.top - box.top) < 0.5 &&
+          Math.abs(previous.bottom - box.bottom) < 0.5 &&
+          extent.left <= previousExtent.right + 0.5 && extent.right >= previousExtent.left - 0.5) {
+        previous.left = Math.min(previous.left, box.left);
+        previous.right = Math.max(previous.right, box.right);
+        previous.top = Math.min(previous.top, box.top);
+        previous.bottom = Math.max(previous.bottom, box.bottom);
+        previousExtent = {
+          left: Math.min(previousExtent.left, extent.left),
+          right: Math.max(previousExtent.right, extent.right),
+          top: Math.min(previousExtent.top, extent.top),
+          bottom: Math.max(previousExtent.bottom, extent.bottom),
+        };
+      } else {
+        boxes.push(box);
+        previousExtent = extent;
+      }
+    }
+  }
+  return boxes;
+}
+
 function resolveSourceGeometry(
   root: HTMLElement,
   refs: readonly DocxSourceRef[],
   cache: GeometryCache = createGeometryCache(),
-  expectedText?: string
+  expectedText?: string,
+  paragraphContent = false
 ): DocxBlockGeometry {
   const fragments: DocxBlockFragment[] = [];
   const unresolvedSourceIds: string[] = [];
@@ -267,11 +361,14 @@ function resolveSourceGeometry(
       foundElement = true;
       const box = cachedVisibleBox(element, surface, cache);
       if (!box) continue;
-      const range = ranged ? rangeBoxes(element, surface, ref, cache, expectedText) : undefined;
-      if (range?.mismatch) issues.push({ nodeId: ref.nodeId, reason: "range_text_mismatch" });
-      const boxes = range ? range.boxes : [box];
       const metrics = pageMetrics(surface, wrapper, cache);
       if (!metrics) continue;
+      const range = ranged ? rangeBoxes(element, surface, ref, cache, expectedText) : undefined;
+      if (range?.mismatch) issues.push({ nodeId: ref.nodeId, reason: "range_text_mismatch" });
+      const boxes = range ? range.boxes
+        : paragraphContent || element.matches("[data-docx-paragraph-host],[data-docx-section-paragraph-host],[data-docx-table-cell-paragraph-host],[data-docx-source-kind='paragraph']")
+          ? paragraphTextBoxes(element, surface, cache, metrics.xScale)
+        : [box];
       const { rect: page, pageWidth, pageHeight, pageIndex, xScale, yScale } = metrics;
       for (const box of boxes) {
       const boundingBox = {
@@ -333,7 +430,8 @@ export function resolveDocxBlockGeometries(
   return new Map(blocks.map((block) => [
     block.id,
     resolveSourceGeometry(root, block.sourceRefs, cache,
-      block.sourceRefs.length === 1 && block.sourceRefs[0].start !== undefined ? block.content : undefined),
+      block.sourceRefs.length === 1 && block.sourceRefs[0].start !== undefined ? block.content : undefined,
+      block.details.kind === "paragraph" || block.type === "heading" || block.type === "section_heading"),
   ]));
 }
 

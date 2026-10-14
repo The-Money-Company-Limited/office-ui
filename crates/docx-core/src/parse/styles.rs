@@ -2101,6 +2101,42 @@ pub fn parse_theme_colors(pkg: &OoxmlPackage) -> ThemeColorMap {
     colors
 }
 
+/// Font size Word uses when declared run defaults omit `w:sz`.
+const WORD_DECLARED_DEFAULT_FONT_SIZE_PT: f64 = 10.0;
+
+/// Supplies the defaults Word substitutes when a styles part omits
+/// `w:rPrDefault` or `w:pPrDefault`. Native controls on Word 16.106 show that
+/// absent run defaults resolve to the theme minor fonts (Aptos without a theme)
+/// at 12 pt, and absent paragraph defaults resolve to 1.15 auto line spacing
+/// with 8 pt after. Declared, even empty, defaults keep the OOXML semantics.
+fn with_word_application_defaults(doc_defaults_xml: &str, theme_fonts: &ThemeFontMap) -> String {
+    let declares_run_defaults = super::scan::contains_tag(doc_defaults_xml, "w:rPrDefault");
+    let declares_paragraph_defaults = super::scan::contains_tag(doc_defaults_xml, "w:pPrDefault");
+    if declares_run_defaults && declares_paragraph_defaults {
+        return doc_defaults_xml.to_string();
+    }
+    let mut supplied = String::new();
+    if !declares_run_defaults {
+        let fonts = if theme_fonts.minor_latin.is_some() {
+            r#"<w:rFonts w:asciiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia" w:hAnsiTheme="minorHAnsi" w:cstheme="minorBidi"/>"#
+        } else {
+            r#"<w:rFonts w:ascii="Aptos" w:hAnsi="Aptos"/>"#
+        };
+        supplied.push_str(&format!(
+            r#"<w:rPrDefault><w:rPr>{fonts}<w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:rPrDefault>"#
+        ));
+    }
+    if !declares_paragraph_defaults {
+        supplied.push_str(
+            r#"<w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>"#,
+        );
+    }
+    match doc_defaults_xml.rfind("</w:docDefaults>") {
+        Some(end) => format!("{}{}{}", &doc_defaults_xml[..end], supplied, &doc_defaults_xml[end..]),
+        None => format!("<w:docDefaults>{supplied}</w:docDefaults>"),
+    }
+}
+
 /// Mirrors TypeScript `parseStyleSheet`.
 pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
     let Some(styles_xml) = crate::package::related_document_part(pkg, "styles").map(|part| part.content.as_str()) else {
@@ -2109,10 +2145,13 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
 
     let theme_fonts = parse_theme_fonts(pkg);
     let theme_colors = parse_theme_colors(pkg);
-    let doc_defaults_xml = extract_balanced_tag_blocks(styles_xml, "w:docDefaults")
+    let declared_doc_defaults_xml = extract_balanced_tag_blocks(styles_xml, "w:docDefaults")
         .into_iter()
         .next()
         .unwrap_or_default();
+    let declares_run_defaults = super::scan::contains_tag(&declared_doc_defaults_xml, "w:rPrDefault");
+    let doc_defaults_xml =
+        with_word_application_defaults(&declared_doc_defaults_xml, &theme_fonts);
 
     let default_paragraph_style = {
         let paragraph_defaults = resolve_style_properties_block(&doc_defaults_xml, "w:pPr");
@@ -2194,8 +2233,27 @@ pub fn parse_style_sheet(pkg: &OoxmlPackage) -> ParsedStyleSheet {
         }
     };
 
-    let default_run_style =
+    let mut default_run_style =
         parse_text_style_from_xml(&resolve_style_properties_block(&doc_defaults_xml, "w:rPr"), &theme_fonts);
+    if declares_run_defaults {
+        // Declared run defaults without a size render at Word's 10 pt default.
+        match default_run_style.as_mut() {
+            Some(style) => {
+                if style.font_size_pt.is_none() {
+                    style.font_size_pt = Some(WORD_DECLARED_DEFAULT_FONT_SIZE_PT);
+                }
+                if style.font_size_cs_pt.is_none() {
+                    style.font_size_cs_pt = Some(WORD_DECLARED_DEFAULT_FONT_SIZE_PT);
+                }
+            }
+            None => {
+                default_run_style = parse_text_style_from_xml(
+                    r#"<w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>"#,
+                    &theme_fonts,
+                );
+            }
+        }
+    }
 
     let mut raw_styles_by_id = HashMap::new();
     let mut raw_table_styles_by_id = HashMap::new();

@@ -104,7 +104,13 @@ fn parse_css_length_pixels(style_token: Option<&str>) -> Option<f64> {
     css_length_to_pixels(style_token)
 }
 
-fn to_px_from_emu(value: Option<&str>) -> Option<f64> {
+fn parse_wrap_distance_px(value: Option<&str>) -> Option<f64> {
+    // Unsigned wrap distances can encode signed negative values.
+    if let Some(distance) = value.and_then(|raw| raw.trim().parse::<u32>().ok()) {
+        if distance > i32::MAX as u32 {
+            return Some(0.0);
+        }
+    }
     emu_to_pixels(value).map(|resolved| resolved.max(0.0))
 }
 
@@ -187,10 +193,10 @@ pub fn parse_floating_anchor_from_run_xml(run_xml: &str) -> Option<ImageFloating
         .map(str::to_ascii_lowercase);
     let horizontal_align = to_image_horizontal_align(horizontal_align_lower.as_deref());
     let vertical_align = to_image_vertical_align(vertical_align_lower.as_deref());
-    let dist_l_px = to_px_from_emu(dist_l_raw.as_deref());
-    let dist_r_px = to_px_from_emu(dist_r_raw.as_deref());
-    let dist_t_px = to_px_from_emu(dist_t_raw.as_deref());
-    let dist_b_px = to_px_from_emu(dist_b_raw.as_deref());
+    let dist_l_px = parse_wrap_distance_px(dist_l_raw.as_deref());
+    let dist_r_px = parse_wrap_distance_px(dist_r_raw.as_deref());
+    let dist_t_px = parse_wrap_distance_px(dist_t_raw.as_deref());
+    let dist_b_px = parse_wrap_distance_px(dist_b_raw.as_deref());
     let wrap_type_raw = wrap_tag.as_deref().and_then(|tag| {
         regex_capture(
             tag,

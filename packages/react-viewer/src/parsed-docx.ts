@@ -1,6 +1,7 @@
 import type { DocModel } from "@extend-ai/react-docx-doc-model";
 import type { OoxmlPackage } from "@extend-ai/react-docx-ooxml-core";
 import { invalidateFontMetrics } from "./font-metrics";
+import { fontTableEntries } from "./font-table";
 import {
   importDocxBuffer,
   type DocxImportOptions,
@@ -132,8 +133,6 @@ function embeddedFontDescriptors(pkg: OoxmlPackage): EmbeddedFontDescriptor[] {
 
   const relationships = parseRelationships(pkg, partName);
   const descriptors: EmbeddedFontDescriptor[] = [];
-  const fontPattern =
-    /<w:font\b[^>]*w:name="([^"]+)"[^>]*>([\s\S]*?)<\/w:font>/gi;
   const variants = [
     { tag: "embedRegular", style: "normal" as const, weight: "400" },
     { tag: "embedBold", style: "normal" as const, weight: "700" },
@@ -141,14 +140,7 @@ function embeddedFontDescriptors(pkg: OoxmlPackage): EmbeddedFontDescriptor[] {
     { tag: "embedBoldItalic", style: "italic" as const, weight: "700" },
   ];
 
-  let fontMatch: RegExpExecArray | null;
-  while ((fontMatch = fontPattern.exec(xml))) {
-    const family = fontMatch[1]?.trim();
-    const fontXml = fontMatch[2] ?? "";
-    if (!family) {
-      continue;
-    }
-
+  for (const { family, xml: fontXml } of fontTableEntries(xml)) {
     variants.forEach((variant) => {
       const tagXml =
         fontXml.match(new RegExp(`<w:${variant.tag}\\b[^>]*\\/?>`, "i"))?.[0] ??

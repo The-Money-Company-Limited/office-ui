@@ -1293,6 +1293,9 @@ function preparedCursorAtCodeUnitOffset(
       const graphemeIndex = graphemeCodeUnitOffsets(segment).indexOf(
         offset - segmentStart
       );
+      if (graphemeIndex > 0 && prepared.breakableFitAdvances[segmentIndex] === null) {
+        return undefined;
+      }
       return graphemeIndex >= 0 ? { segmentIndex, graphemeIndex } : undefined;
     }
     segmentStart += segment.length;
