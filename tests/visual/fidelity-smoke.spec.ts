@@ -122,7 +122,10 @@ test("preserves merged columns and rotated text across page fragments", async ({
   await anchor.click({ position: { x: 15, y: 20 } });
   const input = anchor.locator('[contenteditable="true"][data-docx-cell-key]');
   await expect(input).toBeVisible();
-  await input.fill("Updated vertical label");
+  const paragraph = input.locator('[data-docx-paragraph-host]').first();
+  await selectTextOffsets(paragraph, 0, "Vertical label".length);
+  await page.keyboard.insertText("Updated vertical label");
+  await expect(paragraph).toHaveText("Updated vertical label");
   await input.blur();
   await toggle.click();
   await expect(fragments.first()).toContainText("Updated vertical label");
@@ -245,13 +248,29 @@ test("keeps continued table paragraphs and following rows in flow", async ({ pag
         if (tables[index]!.getBoundingClientRect().bottom > table.getBoundingClientRect().top + 1) issues.push("table overlap");
       });
       for (const paragraph of surface.querySelectorAll('td [data-docx-paragraph-host]')) {
-        const cell = paragraph.closest('td')!;
-        if (paragraph.getBoundingClientRect().bottom > cell.getBoundingClientRect().bottom + 2) issues.push("cell overflow");
+        const cellRect = paragraph.closest('td')!.getBoundingClientRect();
+        const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          if (!walker.currentNode.textContent?.trim()) continue;
+          const range = document.createRange();
+          range.selectNodeContents(walker.currentNode);
+          for (const rect of range.getClientRects()) {
+            if (rect.width > 0 && rect.height > 0 &&
+              (rect.top < cellRect.top - 2 || rect.bottom > cellRect.bottom + 2)) {
+              issues.push("cell overflow");
+            }
+          }
+        }
       }
     }
     return issues;
   });
   expect(collisions).toEqual([]);
+  const renderedText = await page.locator(
+    'td[data-docx-row-index="0"][data-docx-cell-index="1"] [data-docx-paragraph-host]'
+  ).allTextContents();
+  const expectedText = Array.from({ length: 12 }, (_, i) => `${i + 1}. ${text}`).join("");
+  expect(renderedText.join("").replace(/\s+/g, "")).toBe(expectedText.replace(/\s+/g, ""));
 });
 
 test("keeps single-line table rows at the text and cell-padding height", async ({ page }) => {
