@@ -1,5 +1,15 @@
 # @extend-ai/react-docx
 
+## 0.11.0
+
+### Minor Changes
+
+- Add structured document blocks, stable source references, source inspection, and browser layout geometry for document and word citations. Preserve image occurrence order, inline field ranges, capitalization, symbols, and mathematical content through parsing and rendering.
+
+  Improve Word pagination fidelity for section numbering and blank pages, paragraph spacing, table grids and repeated headers, floating-image wrap distances, and mixed-script text. Recover layout failures caused by unsupported text cursors and unstable paragraph measurements.
+
+  Support Shift-click text selection across paragraphs and refine editing, text-box rendering, and structured-block previews. Expand Word parity validation with another 1,000 distinct documents; remaining count and page-boundary differences are documented in the parity report.
+
 ## 0.10.0
 
 ### Minor Changes
