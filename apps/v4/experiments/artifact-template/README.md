@@ -1,8 +1,8 @@
 # Office artifact template experiment
 
 This fork builds a static release for a Cool Computer artifact. Each release
-contains the viewer/editor bundle, one document, `artifact.json`, and
-`cool.json`. It runs in the browser without a computer VM or a RuntimeVM
+contains the viewer/editor bundle (with `template.json`, its version), one
+document, `artifact.json`, and `cool.json`. It runs in the browser without a computer VM or a RuntimeVM
 code change.
 
 For the build pipeline, Cloudflare request path, and later integration contract,
@@ -67,7 +67,8 @@ UI.
 
 ## RuntimeVM fit
 
-The current RuntimeVM artifact API accepts complete static file sets rather
-than a template identifier. A built-in upload feature would need RuntimeVM to
-keep a versioned bundle and combine it with the uploaded document before
-creating a release. This experiment leaves RuntimeVM untouched.
+RuntimeVM publishes complete static file sets; it has no template identifier.
+A release staged here is the composition a future template feature would do
+on the server: a versioned bundle (`template.json`) plus one document. See
+[ARCHITECTURE.md](./ARCHITECTURE.md#contract-for-a-later-artifact-template-feature).
+This experiment leaves RuntimeVM untouched.

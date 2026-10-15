@@ -42,6 +42,7 @@ if (!info.isFile() || info.size > 25 * 1024 * 1024) {
 }
 
 await stat(path.join(dist, "index.html"))
+await stat(path.join(dist, "template.json"))
 let createdOutput = false
 try {
   if (output !== dist) {
