@@ -966,9 +966,7 @@ function ParagraphStylePreviewCard({
         Style Preview
       </p>
       <div className="mt-2 rounded-sm border border-zinc-300 bg-white p-2.5 text-zinc-900">
-        <p style={paragraphStylePreviewStyle(option)}>
-          {option.name}
-        </p>
+        <p style={paragraphStylePreviewStyle(option)}>{option.name}</p>
         <p
           className="mt-1 text-[11px]"
           style={{
@@ -2384,6 +2382,27 @@ function DocxEditorContent({
     setLinkDraft(editor.selectedLink ?? "")
     setLinkEditorOpen(true)
   }
+
+  // Cmd/Ctrl+K in the page opens the link editor, as in Docs and Word.
+  const openLinkEditorFromShortcut = React.useEffectEvent(openLinkEditor)
+  React.useEffect(() => {
+    if (mode !== "editing") return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as Element | null
+      if (
+        event.key.toLowerCase() !== "k" ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey ||
+        !target?.closest("[data-docx-page-wrapper]")
+      )
+        return
+      event.preventDefault()
+      openLinkEditorFromShortcut()
+    }
+    document.addEventListener("keydown", handleKeyDown)
+    return () => document.removeEventListener("keydown", handleKeyDown)
+  }, [mode])
 
   function applyLink() {
     editor.setLink(linkDraft.trim() || undefined)
