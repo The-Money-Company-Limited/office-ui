@@ -1106,14 +1106,8 @@ const BASE_DOC_STYLE: React.CSSProperties = {
   transition: "box-shadow 0.2s ease",
 };
 
-const TRACKED_CHANGE_GUTTER_WIDTH_PX = 300;
-const TRACKED_CHANGE_GUTTER_CARD_LEFT_PX = 48;
-const TRACKED_CHANGE_GUTTER_CARD_RIGHT_PX = 12;
-const TRACKED_CHANGE_GUTTER_CARD_GAP_PX = 4;
-const TRACKED_CHANGE_GUTTER_CARD_MIN_HEIGHT_PX = 30;
-const TRACKED_CHANGE_GUTTER_BEND_OFFSET_PX = 8;
-const TRACKED_CHANGE_GUTTER_CONNECTOR_LANE_GAP_PX = 7;
-const TRACKED_CHANGE_GUTTER_CONNECTOR_LANE_COUNT = 5;
+const REVIEW_CARD_WIDTH_PX = 260;
+const REVIEW_CARD_GAP_PX = 6;
 const INITIAL_PAGINATION_STABILITY_IDLE_MS = 240;
 
 function scheduleDomWrite(callback: () => void): void {
@@ -1471,10 +1465,11 @@ export function resolveMeasuredPageContentHeightsPxForEditedModel(
 }
 
 // Rendered content that is not part of a paragraph's editable text: list
-// labels, images, and tracked deletions (shown struck through, but no longer
-// part of the text). Text offsets and edited text skip all of it.
+// labels, images, tracked deletions (shown struck through, but no longer
+// part of the text) and tracked paragraph marks. Text offsets and edited text
+// skip all of it.
 const NON_TEXT_CONTENT_SELECTOR =
-  "[data-docx-numbering-label='true'],[data-docx-image-location],[data-docx-tracked-deletion='true']";
+  "[data-docx-numbering-label='true'],[data-docx-image-location],[data-docx-tracked-deletion='true'],[data-docx-tracked-paragraph-mark='true']";
 
 function placeCaretInsideElementDom(element: HTMLElement): void {
   const selection = window.getSelection();
@@ -23080,6 +23075,34 @@ function renderParagraphRuns(
         : runsLeft
       : runs;
     appendTrackedDeletionSegments(trailingTarget, `${keyPrefix}-tail`);
+    // A tracked paragraph break has no text of its own; a pilcrow at the end
+    // of the paragraph shows it and opens its review card.
+    trackedMarkup?.changes.forEach((change) => {
+      if (
+        change.kind !== "paragraph-insertion" &&
+        change.kind !== "paragraph-deletion"
+      ) {
+        return;
+      }
+      trailingTarget.push(
+        <span
+          key={`${keyPrefix}-tracked-mark-${change.id}`}
+          data-docx-tracked-change={change.kind}
+          data-docx-tracked-change-id={change.id}
+          data-docx-tracked-paragraph-mark="true"
+          contentEditable={false}
+          style={{
+            color: trackedChangeAccentColor(change.kind, documentTheme),
+            cursor: "pointer",
+            userSelect: "none",
+            textDecoration:
+              change.kind === "paragraph-deletion" ? "line-through" : undefined,
+          }}
+        >
+          ¶
+        </span>
+      );
+    });
   }
 
   if (useCenterRightTabLayout) {
@@ -27880,12 +27903,6 @@ function commentHighlightStyle(
   };
 }
 
-function estimateCommentCardHeight(comment: DocxComment): number {
-  const snippet = comment.text || "Comment";
-  const lines = Math.min(2, Math.max(1, Math.ceil(snippet.length / 42)));
-  return Math.max(TRACKED_CHANGE_GUTTER_CARD_MIN_HEIGHT_PX, 24 + lines * 11);
-}
-
 function trackedChangeKindLabel(kind: DocxTrackedChangeKind): string {
   switch (kind) {
     case "insertion":
@@ -27944,73 +27961,6 @@ function trackedChangeAccentColor(
     default:
       return palette.format;
   }
-}
-
-function trackedChangeUsesGutterBalloon(change: DocxTrackedChange): boolean {
-  return change.kind !== "insertion" && change.kind !== "move-to";
-}
-
-function gutterAnnotationSortTuple(
-  location: DocxTextRangeLocation
-): [number, number, number, number] {
-  if (location.kind === "paragraph") {
-    return [location.nodeIndex, 0, 0, 0];
-  }
-
-  return [
-    location.tableIndex,
-    location.rowIndex,
-    location.cellIndex,
-    location.paragraphIndex,
-  ];
-}
-
-function trackedChangeBelongsToPageSegments(
-  location: DocxTextRangeLocation,
-  pageSegments: DocumentPageNodeSegment[]
-): boolean {
-  if (location.kind === "paragraph") {
-    return pageSegments.some(
-      (segment) => segment.nodeIndex === location.nodeIndex
-    );
-  }
-
-  return pageSegments.some((segment) => {
-    if (segment.nodeIndex !== location.tableIndex) {
-      return false;
-    }
-
-    if (!segment.tableRowRange) {
-      return true;
-    }
-
-    return (
-      location.rowIndex >= segment.tableRowRange.startRowIndex &&
-      location.rowIndex < segment.tableRowRange.endRowIndex
-    );
-  });
-}
-
-function resolveGutterAnnotationPageIndex(
-  location: DocxTextRangeLocation,
-  pageNodeSegmentsByPage: DocumentPageNodeSegment[][]
-): number {
-  for (
-    let pageIndex = 0;
-    pageIndex < pageNodeSegmentsByPage.length;
-    pageIndex += 1
-  ) {
-    if (
-      trackedChangeBelongsToPageSegments(
-        location,
-        pageNodeSegmentsByPage[pageIndex] ?? []
-      )
-    ) {
-      return pageIndex;
-    }
-  }
-
-  return -1;
 }
 
 function findTrackedChangeAnchorElementInPage(
@@ -28077,296 +28027,12 @@ function elementRectWithinContainer(
   };
 }
 
-interface TrackedChangeAnchorPoint {
-  x: number;
-  y: number;
-}
-
-/**
- * One entry in the page gutter: either a tracked change or a comment. Both
- * share the anchor/stacking pipeline so they interleave in document order.
- */
-interface DocxGutterAnnotation {
+/** One item on the review card: a tracked change or a comment. */
+interface DocxReviewAnnotation {
   id: string;
   location: DocxTextRangeLocation;
   trackedChange?: DocxTrackedChange;
   comment?: DocxComment;
-}
-
-function findFirstElementWithSpaceSeparatedDataValue(
-  rootElement: HTMLElement,
-  attributeName: string,
-  value: string
-): HTMLElement | undefined {
-  const candidateElements: HTMLElement[] = [];
-  if (rootElement.hasAttribute(attributeName)) {
-    candidateElements.push(rootElement);
-  }
-  candidateElements.push(
-    ...rootElement.querySelectorAll<HTMLElement>(`[${attributeName}]`)
-  );
-
-  for (const candidate of candidateElements) {
-    const rawValue = candidate.getAttribute(attributeName);
-    if (!rawValue) {
-      continue;
-    }
-
-    if (rawValue.split(/\s+/).includes(value)) {
-      return candidate;
-    }
-  }
-
-  return undefined;
-}
-
-function findGutterAnnotationScopeElementInPage(
-  pageElement: HTMLElement,
-  annotation: DocxGutterAnnotation
-): HTMLElement | undefined {
-  return findTrackedChangeAnchorElementInPage(pageElement, annotation.location);
-}
-
-function findGutterAnnotationDataAnchorInPage(
-  pageElement: HTMLElement,
-  annotation: DocxGutterAnnotation,
-  attributeName: string,
-  value: string
-): HTMLElement | undefined {
-  const scopedRoot = findGutterAnnotationScopeElementInPage(
-    pageElement,
-    annotation
-  );
-  if (scopedRoot) {
-    const scopedAnchor = findFirstElementWithSpaceSeparatedDataValue(
-      scopedRoot,
-      attributeName,
-      value
-    );
-    if (scopedAnchor) {
-      return scopedAnchor;
-    }
-  }
-
-  return findFirstElementWithSpaceSeparatedDataValue(
-    pageElement,
-    attributeName,
-    value
-  );
-}
-
-function findGutterAnnotationAnchorElementInPage(
-  pageElement: HTMLElement,
-  annotation: DocxGutterAnnotation
-): HTMLElement | undefined {
-  if (annotation.trackedChange) {
-    const trackedAnchor = findGutterAnnotationDataAnchorInPage(
-      pageElement,
-      annotation,
-      "data-docx-tracked-change-id",
-      annotation.trackedChange.id
-    );
-    if (trackedAnchor) {
-      return trackedAnchor;
-    }
-
-    const inlineAnchorId = annotation.trackedChange.inlineAnchorId;
-    if (inlineAnchorId && inlineAnchorId !== annotation.trackedChange.id) {
-      const inlineTrackedAnchor = findGutterAnnotationDataAnchorInPage(
-        pageElement,
-        annotation,
-        "data-docx-tracked-change-id",
-        inlineAnchorId
-      );
-      if (inlineTrackedAnchor) {
-        return inlineTrackedAnchor;
-      }
-    }
-  }
-
-  if (annotation.comment) {
-    const commentAnchor = findGutterAnnotationDataAnchorInPage(
-      pageElement,
-      annotation,
-      "data-docx-comment-ids",
-      String(annotation.comment.commentId)
-    );
-    if (commentAnchor) {
-      return commentAnchor;
-    }
-  }
-
-  return findTrackedChangeAnchorElementInPage(pageElement, annotation.location);
-}
-
-interface PositionedGutterAnnotation {
-  annotation: DocxGutterAnnotation;
-  anchorX: number;
-  anchorY: number;
-  top: number;
-  heightPx: number;
-  connectorLane: number;
-}
-
-function estimateTrackedChangeCardHeight(change: DocxTrackedChange): number {
-  const snippet =
-    normalizeTrackedChangeSnippet(change.text) ??
-    trackedChangeKindLabel(change.kind);
-  const lines = Math.min(2, Math.max(1, Math.ceil(snippet.length / 42)));
-  return Math.max(TRACKED_CHANGE_GUTTER_CARD_MIN_HEIGHT_PX, 22 + lines * 11);
-}
-
-function assignGutterConnectorLanes(
-  entries: PositionedGutterAnnotation[]
-): void {
-  if (entries.length <= 1) {
-    entries.forEach((entry) => {
-      entry.connectorLane = 0;
-    });
-    return;
-  }
-
-  const intervalPaddingPx = 3;
-  const laneEndY = Array.from(
-    { length: TRACKED_CHANGE_GUTTER_CONNECTOR_LANE_COUNT },
-    () => Number.NEGATIVE_INFINITY
-  );
-  const routedEntries = entries
-    .map((entry, index) => {
-      const cardCenterY = entry.top + entry.heightPx / 2;
-      return {
-        entry,
-        index,
-        startY: Math.min(entry.anchorY, cardCenterY) - intervalPaddingPx,
-        endY: Math.max(entry.anchorY, cardCenterY) + intervalPaddingPx,
-      };
-    })
-    .sort((left, right) => {
-      const startDelta = left.startY - right.startY;
-      if (startDelta !== 0) {
-        return startDelta;
-      }
-
-      const endDelta = left.endY - right.endY;
-      if (endDelta !== 0) {
-        return endDelta;
-      }
-
-      return left.index - right.index;
-    });
-
-  routedEntries.forEach((route) => {
-    let laneIndex = laneEndY.findIndex(
-      (laneEnd) => route.startY > laneEnd + intervalPaddingPx
-    );
-
-    if (laneIndex < 0) {
-      laneIndex = laneEndY.reduce(
-        (bestLane, laneEnd, index) =>
-          laneEnd < laneEndY[bestLane] ? index : bestLane,
-        0
-      );
-    }
-
-    route.entry.connectorLane = laneIndex;
-    laneEndY[laneIndex] = Math.max(laneEndY[laneIndex], route.endY);
-  });
-}
-
-function layoutTrackedChangesForPage(
-  annotations: DocxGutterAnnotation[],
-  anchorByChangeId: Map<string, TrackedChangeAnchorPoint>,
-  cardHeightsByChangeId: Map<string, number> | undefined,
-  pageWidthPx: number,
-  pageHeightPx: number
-): PositionedGutterAnnotation[] {
-  if (annotations.length === 0) {
-    return [];
-  }
-
-  const fallbackStride = Math.max(
-    18,
-    pageHeightPx / Math.max(1, annotations.length + 1)
-  );
-  const withAnchors = annotations.map((annotation, index) => {
-    const defaultAnchor = Math.min(
-      Math.max(10, Math.round((index + 1) * fallbackStride)),
-      Math.max(10, pageHeightPx - 10)
-    );
-    const anchorPoint = anchorByChangeId.get(annotation.id);
-    const anchorY = anchorPoint?.y ?? defaultAnchor;
-    const anchorX = anchorPoint?.x ?? Math.max(10, pageWidthPx - 10);
-    const measuredHeightPx = cardHeightsByChangeId?.get(annotation.id);
-    const estimatedHeightPx = annotation.trackedChange
-      ? estimateTrackedChangeCardHeight(annotation.trackedChange)
-      : annotation.comment
-      ? estimateCommentCardHeight(annotation.comment)
-      : TRACKED_CHANGE_GUTTER_CARD_MIN_HEIGHT_PX;
-    const heightPx =
-      Number.isFinite(measuredHeightPx) && (measuredHeightPx as number) > 0
-        ? Math.max(
-            TRACKED_CHANGE_GUTTER_CARD_MIN_HEIGHT_PX,
-            Math.round(measuredHeightPx as number)
-          )
-        : estimatedHeightPx;
-    return {
-      annotation,
-      anchorX: clampNumber(
-        Math.round(anchorX),
-        10,
-        Math.max(10, pageWidthPx - 10)
-      ),
-      anchorY: clampNumber(
-        Math.round(anchorY),
-        10,
-        Math.max(10, pageHeightPx - 10)
-      ),
-      top: 0,
-      heightPx,
-      connectorLane: 0,
-    };
-  });
-
-  withAnchors.sort((left, right) => {
-    const yDelta = left.anchorY - right.anchorY;
-    if (Math.abs(yDelta) > 2) {
-      return yDelta;
-    }
-
-    const xDelta = left.anchorX - right.anchorX;
-    if (xDelta !== 0) {
-      return xDelta;
-    }
-
-    return left.annotation.id.localeCompare(right.annotation.id);
-  });
-
-  const minTopPx = 8;
-  let cursorTopPx = minTopPx;
-  withAnchors.forEach((entry) => {
-    const desiredTop = entry.anchorY - 8;
-    entry.top = Math.max(desiredTop, cursorTopPx);
-    cursorTopPx =
-      entry.top + entry.heightPx + TRACKED_CHANGE_GUTTER_CARD_GAP_PX;
-  });
-
-  const maxBottom = Math.max(0, pageHeightPx - minTopPx);
-  const bottomAfterInitialPlacement =
-    cursorTopPx - TRACKED_CHANGE_GUTTER_CARD_GAP_PX;
-  const overflowPx = bottomAfterInitialPlacement - maxBottom;
-  if (overflowPx > 0) {
-    let shiftedCursorTopPx = minTopPx;
-    withAnchors.forEach((entry) => {
-      const desiredTop = entry.top - overflowPx;
-      entry.top = Math.max(desiredTop, shiftedCursorTopPx);
-      shiftedCursorTopPx =
-        entry.top + entry.heightPx + TRACKED_CHANGE_GUTTER_CARD_GAP_PX;
-    });
-  }
-
-  assignGutterConnectorLanes(withAnchors);
-
-  return withAnchors;
 }
 
 function sameParagraphLocation(
@@ -39081,12 +38747,7 @@ export function DocxEditorViewer({
   const isSuggesting = mode === "suggest";
   const trackedChangesEnabled =
     isSuggesting || (showTrackedChanges ?? editor.showTrackedChanges);
-  const hasTrackedChanges = editor.trackedChanges.length > 0;
   const commentsEnabled = showComments ?? editor.showComments;
-  const hasComments = editor.comments.length > 0;
-  // Comments share the tracked-change gutter: cards for both annotation kinds
-  // stack in the same margin column.
-  const showTrackedChangeGutter = trackedChangesEnabled || commentsEnabled;
   // Outside suggesting, visible tracked changes keep the document read-only:
   // a plain edit there would silently rewrite the marked-up text.
   const isReadOnly =
@@ -39211,9 +38872,6 @@ export function DocxEditorViewer({
   const pageElementsRef = React.useRef<Map<number, HTMLDivElement>>(new Map());
   const pageSurfaceRefCallbacksRef = React.useRef<
     Map<number, React.RefCallback<HTMLDivElement>>
-  >(new Map());
-  const trackedChangeCardElementsRef = React.useRef<
-    Map<string, HTMLDivElement>
   >(new Map());
   const initialPaginationStableSignatureRef = React.useRef<string | undefined>(
     undefined
@@ -41361,11 +41019,8 @@ export function DocxEditorViewer({
       width = Math.max(width, layout.pageWidthPx);
       height = Math.max(height, layout.pageHeightPx);
     });
-    if (showTrackedChangeGutter) {
-      width += TRACKED_CHANGE_GUTTER_WIDTH_PX;
-    }
     return { width, height };
-  }, [documentLayout, pageSectionInfoByIndex, showTrackedChangeGutter]);
+  }, [documentLayout, pageSectionInfoByIndex]);
   const onViewerZoomBridgeChange = React.useCallback(
     (bridge?: ViewerZoomBridge): void => {
       setViewerZoomBridge(editor, bridge);
@@ -42394,13 +42049,6 @@ export function DocxEditorViewer({
     visiblePageStartIndex,
   ]);
   const pageStackVirtualSpacers = React.useMemo(() => {
-    const pageWrapperWidthPxForIndex = (pageIndex: number): number => {
-      const pageLayout =
-        pageSectionInfoByIndex[pageIndex]?.layout ?? documentLayout;
-      return showTrackedChangeGutter
-        ? pageLayout.pageWidthPx + TRACKED_CHANGE_GUTTER_WIDTH_PX
-        : pageLayout.pageWidthPx;
-    };
     const summarizeSkippedPages = (
       startPageIndex: number,
       endPageIndex: number
@@ -42422,7 +42070,7 @@ export function DocxEditorViewer({
         const pageLayout =
           pageSectionInfoByIndex[pageIndex]?.layout ?? documentLayout;
         heightPx += Math.max(1, pageLayout.pageHeightPx);
-        widthPx = Math.max(widthPx, pageWrapperWidthPxForIndex(pageIndex));
+        widthPx = Math.max(widthPx, pageLayout.pageWidthPx);
       }
 
       const skippedPageCount = end - start + 1;
@@ -42438,7 +42086,6 @@ export function DocxEditorViewer({
     documentLayout,
     pageCount,
     pageSectionInfoByIndex,
-    showTrackedChangeGutter,
     visiblePageEndIndex,
     visiblePageStartIndex,
   ]);
@@ -42700,31 +42347,13 @@ export function DocxEditorViewer({
     stableReportedPageCount,
     visiblePageStartIndex,
   ]);
-  const trackedChangesByPage = React.useMemo(() => {
-    const pageBuckets = pageNodeSegmentsByPage.map(
-      () => [] as DocxGutterAnnotation[]
-    );
-
-    const placeAnnotation = (annotation: DocxGutterAnnotation): void => {
-      const pageIndex = resolveGutterAnnotationPageIndex(
-        annotation.location,
-        pageNodeSegmentsByPage
-      );
-      if (pageIndex < 0 || pageIndex >= pageBuckets.length) {
-        return;
-      }
-      pageBuckets[pageIndex].push(annotation);
-    };
-
+  // Tracked changes and comments show in the text; clicking one opens the
+  // review card under it on its page, so the page never gives up width.
+  const reviewAnnotations = React.useMemo(() => {
+    const annotations: DocxReviewAnnotation[] = [];
     if (trackedChangesEnabled) {
       editor.trackedChanges.forEach((change) => {
-        // Suggesting gives every change a card, so insertions can be
-        // accepted or rejected too.
-        if (!isSuggesting && !trackedChangeUsesGutterBalloon(change)) {
-          return;
-        }
-
-        placeAnnotation({
+        annotations.push({
           id: change.id,
           location: change.location,
           trackedChange: change,
@@ -42733,204 +42362,127 @@ export function DocxEditorViewer({
     }
     if (commentsEnabled) {
       editor.comments.forEach((comment) => {
-        placeAnnotation({
+        annotations.push({
           id: comment.id,
           location: comment.location,
           comment,
         });
       });
     }
-
-    pageBuckets.forEach((pageAnnotations) => {
-      pageAnnotations.sort((left, right) => {
-        const leftKey = gutterAnnotationSortTuple(left.location);
-        const rightKey = gutterAnnotationSortTuple(right.location);
-        for (let index = 0; index < leftKey.length; index += 1) {
-          if (leftKey[index] === rightKey[index]) {
-            continue;
-          }
-          return leftKey[index] - rightKey[index];
-        }
-        return left.id.localeCompare(right.id);
-      });
-    });
-
-    return pageBuckets;
+    return annotations;
   }, [
     commentsEnabled,
     editor.comments,
     editor.trackedChanges,
-    isSuggesting,
-    pageNodeSegmentsByPage,
     trackedChangesEnabled,
   ]);
-  const [trackedChangeAnchorByPage, setTrackedChangeAnchorByPage] =
-    React.useState<Array<Map<string, TrackedChangeAnchorPoint>>>([]);
+  const [reviewCard, setReviewCard] = React.useState<{
+    annotationIds: string[];
+    pageIndex: number;
+    left: number;
+    top: number;
+  }>();
+  const openReviewCardAt = React.useCallback(
+    (target: EventTarget, pageIndex: number): void => {
+      if (
+        !(target instanceof Element) ||
+        target.closest("[data-docx-review-card]")
+      ) {
+        return;
+      }
+      const pageElement = pageElementsRef.current.get(pageIndex);
+      const changeElement = target.closest<HTMLElement>(
+        "[data-docx-tracked-change-id]"
+      );
+      const commentElement = target.closest<HTMLElement>(
+        "[data-docx-comment-ids]"
+      );
+      const anchorElement = changeElement ?? commentElement;
+      if (!pageElement || !anchorElement || !pageElement.contains(anchorElement)) {
+        setReviewCard(undefined);
+        return;
+      }
+
+      // A change id is unique within its paragraph; a comment id within the
+      // document, and the card shows the comment with its replies.
+      const changeId = changeElement?.getAttribute(
+        "data-docx-tracked-change-id"
+      );
+      const commentIds =
+        commentElement?.getAttribute("data-docx-comment-ids")?.split(/\s+/) ??
+        [];
+      const annotations = changeElement
+        ? reviewAnnotations.filter(
+            ({ trackedChange, location }) =>
+              trackedChange &&
+              (trackedChange.inlineAnchorId ?? trackedChange.id) === changeId &&
+              findTrackedChangeAnchorElementInPage(
+                pageElement,
+                location
+              )?.contains(changeElement)
+          )
+        : reviewAnnotations.filter(
+            ({ comment }) =>
+              comment &&
+              [comment.commentId, comment.parentId].some((id) =>
+                commentIds.includes(String(id))
+              )
+          );
+      const anchorRect = elementRectWithinContainer(anchorElement, pageElement);
+      if (annotations.length === 0 || !anchorRect) {
+        setReviewCard(undefined);
+        return;
+      }
+
+      setReviewCard({
+        annotationIds: annotations.map((annotation) => annotation.id),
+        pageIndex,
+        left: clampNumber(
+          Math.round(anchorRect.left),
+          8,
+          Math.max(8, pageElement.offsetWidth - REVIEW_CARD_WIDTH_PX - 8)
+        ),
+        top: Math.round(anchorRect.top + anchorRect.height + REVIEW_CARD_GAP_PX),
+      });
+    },
+    [reviewAnnotations]
+  );
+  React.useEffect(() => {
+    if (!reviewCard) {
+      return;
+    }
+    // Clicks on a page open or close the card themselves.
+    const closeOutsidePages = (event: PointerEvent): void => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-docx-page-wrapper]")
+      ) {
+        return;
+      }
+      setReviewCard(undefined);
+    };
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setReviewCard(undefined);
+      }
+    };
+    document.addEventListener("pointerdown", closeOutsidePages);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutsidePages);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [reviewCard]);
+  const reviewCardAnnotations = reviewCard
+    ? reviewAnnotations.filter((annotation) =>
+        reviewCard.annotationIds.includes(annotation.id)
+      )
+    : [];
   const [headerBodyClearanceByPage, setHeaderBodyClearanceByPage] =
     React.useState<Record<number, number>>({});
   React.useEffect(() => {
     setHeaderBodyClearanceByPage({});
   }, [editor.documentLoadNonce]);
-  const [trackedChangeCardHeightsByPage, setTrackedChangeCardHeightsByPage] =
-    React.useState<Array<Map<string, number>>>([]);
-  React.useLayoutEffect(() => {
-    if (!showTrackedChangeGutter || trackedChangesByPage.length === 0) {
-      setTrackedChangeAnchorByPage((current) =>
-        current.length === 0 ? current : []
-      );
-      return;
-    }
-
-    const nextAnchorMaps = trackedChangesByPage.map(
-      (annotations, pageIndex) => {
-        const pageElement = pageElementsRef.current.get(pageIndex);
-        const anchorsByChangeId = new Map<string, TrackedChangeAnchorPoint>();
-        if (!pageElement || annotations.length === 0) {
-          return anchorsByChangeId;
-        }
-
-        const pageHeightPx = Math.max(1, pageElement.offsetHeight);
-        const pageWidthPx = Math.max(1, pageElement.offsetWidth);
-        annotations.forEach((annotation) => {
-          const anchorElement = findGutterAnnotationAnchorElementInPage(
-            pageElement,
-            annotation
-          );
-          if (!anchorElement) {
-            return;
-          }
-
-          const anchorRect = elementRectWithinContainer(
-            anchorElement,
-            pageElement
-          );
-          if (!anchorRect) {
-            return;
-          }
-
-          // The connector leaves from the bottom of the change, as in Word:
-          // drawn through the middle it would run across the rest of the
-          // line and read as a strikethrough of the text after the change.
-          const anchorY = clampNumber(
-            Math.round(anchorRect.top + anchorRect.height),
-            10,
-            Math.max(10, pageHeightPx - 10)
-          );
-          const anchorX = clampNumber(
-            Math.round(anchorRect.right),
-            10,
-            Math.max(10, pageWidthPx - 10)
-          );
-          anchorsByChangeId.set(annotation.id, { x: anchorX, y: anchorY });
-        });
-
-        return anchorsByChangeId;
-      }
-    );
-
-    setTrackedChangeAnchorByPage(nextAnchorMaps);
-  }, [
-    trackedChangesByPage,
-    showTrackedChangeGutter,
-    visiblePageEndIndex,
-    visiblePageStartIndex,
-  ]);
-  React.useLayoutEffect(() => {
-    if (!showTrackedChangeGutter || trackedChangesByPage.length === 0) {
-      setTrackedChangeCardHeightsByPage((current) =>
-        current.length === 0 ? current : []
-      );
-      return;
-    }
-
-    const rootElement = viewerRootRef.current;
-    const zoomScale = resolveViewerMeasurementZoomScale(rootElement, 1);
-    const nextHeightsByPage = trackedChangesByPage.map(
-      (annotations, pageIndex) => {
-        const pageHeights = new Map<string, number>();
-        annotations.forEach((annotation) => {
-          const cardElement = trackedChangeCardElementsRef.current.get(
-            `${pageIndex}:${annotation.id}`
-          );
-          if (!cardElement) {
-            return;
-          }
-
-          const measuredHeight = Math.round(
-            cardElement.getBoundingClientRect().height / zoomScale
-          );
-          if (!Number.isFinite(measuredHeight) || measuredHeight <= 0) {
-            return;
-          }
-
-          pageHeights.set(
-            annotation.id,
-            Math.max(TRACKED_CHANGE_GUTTER_CARD_MIN_HEIGHT_PX, measuredHeight)
-          );
-        });
-        return pageHeights;
-      }
-    );
-
-    setTrackedChangeCardHeightsByPage((current) => {
-      if (current.length === nextHeightsByPage.length) {
-        let equal = true;
-        for (
-          let pageIndex = 0;
-          pageIndex < nextHeightsByPage.length && equal;
-          pageIndex += 1
-        ) {
-          const currentPage = current[pageIndex] ?? new Map<string, number>();
-          const nextPage =
-            nextHeightsByPage[pageIndex] ?? new Map<string, number>();
-          if (currentPage.size !== nextPage.size) {
-            equal = false;
-            break;
-          }
-          for (const [changeId, nextHeight] of nextPage) {
-            const currentHeight = currentPage.get(changeId);
-            if (currentHeight !== nextHeight) {
-              equal = false;
-              break;
-            }
-          }
-        }
-        if (equal) {
-          return current;
-        }
-      }
-      return nextHeightsByPage;
-    });
-  }, [
-    showTrackedChangeGutter,
-    trackedChangesByPage,
-    visiblePageEndIndex,
-    visiblePageStartIndex,
-  ]);
-  const positionedTrackedChangesByPage = React.useMemo(() => {
-    return trackedChangesByPage.map((changes, pageIndex) => {
-      const pageLayout =
-        pageSectionInfoByIndex[pageIndex]?.layout ?? documentLayout;
-      const anchorsByChangeId =
-        trackedChangeAnchorByPage[pageIndex] ??
-        new Map<string, TrackedChangeAnchorPoint>();
-      const cardHeightsByChangeId =
-        trackedChangeCardHeightsByPage[pageIndex] ?? new Map<string, number>();
-      return layoutTrackedChangesForPage(
-        changes,
-        anchorsByChangeId,
-        cardHeightsByChangeId,
-        Math.max(1, pageLayout.pageWidthPx),
-        Math.max(1, pageLayout.pageHeightPx)
-      );
-    });
-  }, [
-    documentLayout,
-    pageSectionInfoByIndex,
-    trackedChangeAnchorByPage,
-    trackedChangeCardHeightsByPage,
-    trackedChangesByPage,
-  ]);
   const totalPagesForFieldResolution = React.useMemo(() => {
     if (editor.canUndo || editor.canRedo) {
       return pageCount;
@@ -64185,10 +63737,6 @@ export function DocxEditorViewer({
         const pageNodeSegments = pageNodeSegmentsByPage[pageIndex] ?? [];
         const pageInfo = pageSectionInfoByIndex[pageIndex];
         const pageLayout = pageInfo?.layout ?? documentLayout;
-        const pageWrapperWidthPx = showTrackedChangeGutter
-          ? pageLayout.pageWidthPx + TRACKED_CHANGE_GUTTER_WIDTH_PX
-          : pageLayout.pageWidthPx;
-
         const pageContentWidthPx = Math.max(
           120,
           pageLayout.pageWidthPx -
@@ -64362,32 +63910,12 @@ export function DocxEditorViewer({
                 zIndex: 0,
               }
             : undefined;
-        const pageTrackedChanges =
-          positionedTrackedChangesByPage[pageIndex] ?? [];
-        const pageGutterContentHeightPx =
-          showTrackedChangeGutter && pageTrackedChanges.length > 0
-            ? pageTrackedChanges.reduce((maxBottomPx, entry) => {
-                return Math.max(
-                  maxBottomPx,
-                  Math.ceil(
-                    entry.top +
-                      entry.heightPx +
-                      TRACKED_CHANGE_GUTTER_CARD_GAP_PX +
-                      8
-                  )
-                );
-              }, pageLayout.pageHeightPx)
-            : pageLayout.pageHeightPx;
-        const pageVisualHeightPx = Math.max(
-          pageLayout.pageHeightPx,
-          pageGutterContentHeightPx
-        );
         const pageSurfaceStyle: React.CSSProperties = {
           ...pageSurfaceBaseStyle,
           isolation: "isolate",
           width: pageLayout.pageWidthPx,
-          height: pageVisualHeightPx,
-          minHeight: pageVisualHeightPx,
+          height: pageLayout.pageHeightPx,
+          minHeight: pageLayout.pageHeightPx,
           backgroundColor: resolvedPageSurfaceBackgroundColor,
           position: "relative",
           ...pageMarginPaddingStyle(pageLayout.marginsPx),
@@ -64457,14 +63985,17 @@ export function DocxEditorViewer({
             data-docx-page-wrapper="true"
             data-docx-page-index={pageIndex}
             data-index={pageIndex}
+            onClick={(event) => openReviewCardAt(event.target, pageIndex)}
             style={{
               position: "relative",
-              width: pageWrapperWidthPx,
-              minHeight: pageVisualHeightPx,
+              // The review card may hang over the next page.
+              zIndex: reviewCard?.pageIndex === pageIndex ? 1 : undefined,
+              width: pageLayout.pageWidthPx,
+              minHeight: pageLayout.pageHeightPx,
               margin: "0 auto",
               // Isolate per-page layout/style recalculation so scrolling and
               // edits on one page don't force whole-document layout passes.
-              // (No paint containment: floats and gutter cards may overhang.)
+              // (No paint containment: floats and the review card may overhang.)
               contain: "layout style",
               visibility: hideDocumentUntilPaginationSettled
                 ? "hidden"
@@ -65908,157 +65439,23 @@ export function DocxEditorViewer({
               ) : null}
             </div>
 
-            {showTrackedChangeGutter ? (
+            {reviewCard?.pageIndex === pageIndex &&
+            reviewCardAnnotations.length > 0 ? (
               <div
+                data-docx-review-card="true"
                 style={{
                   position: "absolute",
-                  left: pageLayout.pageWidthPx,
-                  top: 0,
-                  width: TRACKED_CHANGE_GUTTER_WIDTH_PX,
-                  height: pageVisualHeightPx,
-                  backgroundColor: resolvedPageSurfaceBackgroundColor,
-                  pointerEvents: "none",
-                  overflow: "visible",
+                  left: reviewCard.left,
+                  top: reviewCard.top,
+                  width: REVIEW_CARD_WIDTH_PX,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
                 }}
               >
-                <span
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    bottom: 0,
-                    left: 0,
-                    width: 1,
-                    backgroundColor:
-                      editor.documentTheme === "dark" ? "#374151" : "#d1d5db",
-                  }}
-                />
-                <svg
-                  width={
-                    pageLayout.pageWidthPx + TRACKED_CHANGE_GUTTER_WIDTH_PX
-                  }
-                  height={pageVisualHeightPx}
-                  viewBox={`0 0 ${
-                    pageLayout.pageWidthPx + TRACKED_CHANGE_GUTTER_WIDTH_PX
-                  } ${pageVisualHeightPx}`}
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    left: -pageLayout.pageWidthPx,
-                    overflow: "visible",
-                  }}
-                >
-                  {pageTrackedChanges.map((entry) => {
-                    const trackedChange = entry.annotation.trackedChange;
-                    const comment = entry.annotation.comment;
-                    const accentColor = trackedChange
-                      ? trackedChangeAccentColor(
-                          trackedChange.kind,
-                          editor.documentTheme
-                        )
-                      : commentAccentColor(
-                          editor.documentTheme,
-                          comment?.commentId
-                        );
-                    const anchorY = clampNumber(
-                      Math.round(entry.anchorY),
-                      8,
-                      Math.max(8, pageLayout.pageHeightPx - 8)
-                    );
-                    const anchorX = clampNumber(
-                      Math.round(entry.anchorX),
-                      8,
-                      Math.max(8, pageLayout.pageWidthPx - 8)
-                    );
-                    const cardAttachX =
-                      pageLayout.pageWidthPx +
-                      TRACKED_CHANGE_GUTTER_CARD_LEFT_PX;
-                    const maxConnectorLaneOffset = Math.max(
-                      TRACKED_CHANGE_GUTTER_BEND_OFFSET_PX,
-                      TRACKED_CHANGE_GUTTER_CARD_LEFT_PX - 6
-                    );
-                    const connectorLaneOffset = Math.min(
-                      TRACKED_CHANGE_GUTTER_BEND_OFFSET_PX +
-                        Math.max(0, entry.connectorLane) *
-                          TRACKED_CHANGE_GUTTER_CONNECTOR_LANE_GAP_PX,
-                      maxConnectorLaneOffset
-                    );
-                    const gutterBendX =
-                      pageLayout.pageWidthPx + connectorLaneOffset;
-                    const cardCenterY = clampNumber(
-                      Math.round(entry.top + entry.heightPx / 2),
-                      8,
-                      Math.max(8, pageVisualHeightPx - 8)
-                    );
-                    const connectorPath =
-                      Math.abs(cardCenterY - anchorY) <= 2
-                        ? `M ${anchorX} ${anchorY} H ${cardAttachX}`
-                        : `M ${anchorX} ${anchorY} H ${gutterBendX} V ${cardCenterY} H ${cardAttachX}`;
-                    const revisionBarX = clampNumber(
-                      Math.round(pageLayout.marginsPx.left - 20),
-                      8,
-                      Math.max(8, pageLayout.pageWidthPx - 8)
-                    );
-                    return (
-                      <g
-                        key={`tracked-connector-${pageIndex}-${entry.annotation.id}`}
-                      >
-                        {trackedChange ? (
-                          <line
-                            x1={revisionBarX}
-                            y1={Math.max(8, anchorY - 16)}
-                            x2={revisionBarX}
-                            y2={Math.min(
-                              pageLayout.pageHeightPx - 8,
-                              anchorY + 16
-                            )}
-                            stroke={
-                              editor.documentTheme === "dark"
-                                ? "#94a3b8"
-                                : "#9ca3af"
-                            }
-                            strokeWidth={1.25}
-                            strokeLinecap="square"
-                          />
-                        ) : null}
-                        <path
-                          d={connectorPath}
-                          stroke={accentColor}
-                          strokeWidth={1.15}
-                          strokeOpacity={0.78}
-                          strokeDasharray="2 3"
-                          strokeLinejoin="round"
-                          strokeLinecap="round"
-                          fill="none"
-                        />
-                      </g>
-                    );
-                  })}
-                </svg>
-                {(!trackedChangesEnabled || !hasTrackedChanges) &&
-                (!commentsEnabled || !hasComments) &&
-                pageIndex === 0 ? (
-                  <p
-                    style={{
-                      position: "absolute",
-                      top: 8,
-                      left: TRACKED_CHANGE_GUTTER_CARD_LEFT_PX,
-                      right: TRACKED_CHANGE_GUTTER_CARD_RIGHT_PX,
-                      margin: 0,
-                      fontSize: 11,
-                      lineHeight: 1.35,
-                      color: "#94a3b8",
-                    }}
-                  >
-                    {trackedChangesEnabled && commentsEnabled
-                      ? "No edits or comments found"
-                      : commentsEnabled
-                      ? "No comments found"
-                      : "No edits found"}
-                  </p>
-                ) : null}
-                {pageTrackedChanges.map((entry) => {
-                  const trackedChange = entry.annotation.trackedChange;
-                  const comment = entry.annotation.comment;
+                {reviewCardAnnotations.map((annotation) => {
+                  const trackedChange = annotation.trackedChange;
+                  const comment = annotation.comment;
                   const accentColor = trackedChange
                     ? trackedChangeAccentColor(
                         trackedChange.kind,
@@ -66089,24 +65486,7 @@ export function DocxEditorViewer({
                         ? "Joined with the next paragraph"
                         : "Change")
                     : comment?.text || "Comment";
-                  const cardWidthPx = Math.max(
-                    140,
-                    TRACKED_CHANGE_GUTTER_WIDTH_PX -
-                      TRACKED_CHANGE_GUTTER_CARD_LEFT_PX -
-                      TRACKED_CHANGE_GUTTER_CARD_RIGHT_PX
-                  );
-                  const cardContainerStyle: React.CSSProperties = {
-                    position: "absolute",
-                    top: entry.top,
-                    left: TRACKED_CHANGE_GUTTER_CARD_LEFT_PX,
-                    width: cardWidthPx,
-                    minHeight: entry.heightPx,
-                    pointerEvents: "auto",
-                  };
-                  const cardStyle: React.CSSProperties = {
-                    width: "100%",
-                    minHeight: entry.heightPx,
-                  };
+                  const cardStyle: React.CSSProperties = { width: "100%" };
                   const defaultCard = (
                     <div
                       style={{
@@ -66308,28 +65688,10 @@ export function DocxEditorViewer({
                     : defaultCard;
                   return (
                     <div
-                      key={`tracked-card-${pageIndex}-${entry.annotation.id}`}
-                      data-docx-gutter-annotation={
+                      key={annotation.id}
+                      data-docx-review-annotation={
                         trackedChange ? "tracked-change" : "comment"
                       }
-                      data-docx-gutter-annotation-id={entry.annotation.id}
-                      data-docx-gutter-anchor-x={Math.round(entry.anchorX)}
-                      data-docx-gutter-anchor-y={Math.round(entry.anchorY)}
-                      data-docx-gutter-connector-lane={entry.connectorLane}
-                      ref={(element) => {
-                        const elementKey = `${pageIndex}:${entry.annotation.id}`;
-                        if (element) {
-                          trackedChangeCardElementsRef.current.set(
-                            elementKey,
-                            element
-                          );
-                        } else {
-                          trackedChangeCardElementsRef.current.delete(
-                            elementKey
-                          );
-                        }
-                      }}
-                      style={cardContainerStyle}
                     >
                       {renderedCard}
                     </div>

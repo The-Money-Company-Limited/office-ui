@@ -24,6 +24,7 @@ import {
   updateParagraphText,
 } from "@extend-ai/react-docx-editor-ops";
 import {
+  DocxEditorViewer,
   useDocxEditor,
   type DocxEditorController,
 } from "../../packages/react-viewer/src/editor";
@@ -641,5 +642,28 @@ describe("suggesting controller paragraph joins", () => {
     expect(editor.suggestionRefusalNonce).toBe(0);
     expect(editor.model.nodes).toHaveLength(1);
     expect(visible(editor.model)).toBe("Hello worldSecond");
+  });
+});
+
+describe("suggesting view", () => {
+  it("marks a tracked paragraph break with a pilcrow and opens no card until clicked", async () => {
+    const model = await load(
+      `<w:p><w:pPr><w:rPr><w:del w:id="9" w:author="Bob" w:date="${DATE}"/></w:rPr></w:pPr><w:r><w:t>One</w:t></w:r></w:p>` +
+        `<w:p><w:r><w:t>Two</w:t></w:r></w:p>`
+    );
+    const markup = renderToStaticMarkup(
+      React.createElement(function Suggesting(): React.JSX.Element {
+        const editor = useDocxEditor({ starterModel: model });
+        return React.createElement(DocxEditorViewer, {
+          editor,
+          mode: "suggest",
+        });
+      })
+    );
+
+    expect(markup).toMatch(
+      /data-docx-tracked-change="paragraph-deletion"[^>]*data-docx-tracked-paragraph-mark="true"[^>]*>¶</
+    );
+    expect(markup).not.toContain("data-docx-review-card");
   });
 });

@@ -76,7 +76,7 @@ function CommentsProbe({
 }
 
 describe("docx comments", () => {
-  it("collects anchored comments and renders gutter cards with highlights", () => {
+  it("collects anchored comments and highlights them, with no card until one is opened", () => {
     let collected: DocxComment[] = [];
     const markup = renderToStaticMarkup(
       React.createElement(CommentsProbe, {
@@ -96,12 +96,9 @@ describe("docx comments", () => {
     expect(comment.anchorText).toBe("annotated text");
     expect(comment.location).toEqual({ kind: "paragraph", nodeIndex: 0 });
 
-    // Gutter card with the comment body and author.
-    expect(markup).toContain("Please tighten this sentence.");
-    expect(markup).toContain("Ada Lovelace");
-    expect(markup).toContain('data-docx-gutter-annotation="comment"');
-    expect(markup).toContain("Comment · Resolved");
-    expect(markup).toContain(">Reopen</button>");
+    // No review column: the card opens only when the comment is clicked.
+    expect(markup).not.toContain("Please tighten this sentence.");
+    expect(markup).not.toContain("data-docx-review-card");
     // The commented run gets the inline highlight.
     expect(markup).toContain('data-docx-comment-ids="7"');
     expect(markup).toContain("rgba(143, 106, 200");
@@ -121,7 +118,6 @@ describe("docx comments", () => {
     );
 
     expect(markup).not.toContain("Please tighten this sentence.");
-    expect(markup).not.toContain('data-docx-gutter-annotation="comment"');
     expect(markup).not.toContain("data-docx-comment-ids");
     expect(markup).not.toContain("rgba(143, 106, 200");
     expect(hiddenComments).toHaveLength(1);
