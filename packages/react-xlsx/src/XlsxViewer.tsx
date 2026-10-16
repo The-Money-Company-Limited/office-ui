@@ -7625,17 +7625,19 @@ function XlsxGrid({
       : 1;
     const scrollDeltaX = paintedViewport.left - nextLiveViewport.left;
     const scrollDeltaY = paintedViewport.top - nextLiveViewport.top;
+    // The scroll extent is read only while zooming: reading it forces a layout, and this runs on
+    // every scroll.
     const resolveClampedLiveZoomAnchor = (
       scrollOffset: number,
       viewportSize: number,
-      scrollExtent: number,
+      readScrollExtent: () => number,
       gestureAnchor: number
     ) => {
       if (!isLiveZooming || liveZoomScale === 1) {
         return gestureAnchor;
       }
 
-      const targetScrollExtent = Math.max(viewportSize, scrollExtent * liveZoomScale);
+      const targetScrollExtent = Math.max(viewportSize, readScrollExtent() * liveZoomScale);
       const targetScrollOffset = clampValue(
         ((scrollOffset + gestureAnchor) * liveZoomScale) - gestureAnchor,
         0,
@@ -7647,13 +7649,13 @@ function XlsxGrid({
     const liveZoomAnchorX = resolveClampedLiveZoomAnchor(
       nextLiveViewport.left,
       nextLiveViewport.width,
-      scroller?.scrollWidth ?? nextLiveViewport.width,
+      () => scroller?.scrollWidth ?? nextLiveViewport.width,
       currentLiveGestureZoom?.anchor.x ?? 0
     );
     const liveZoomAnchorY = resolveClampedLiveZoomAnchor(
       nextLiveViewport.top,
       nextLiveViewport.height,
-      scroller?.scrollHeight ?? nextLiveViewport.height,
+      () => scroller?.scrollHeight ?? nextLiveViewport.height,
       currentLiveGestureZoom?.anchor.y ?? 0
     );
     const applyElementTransform = (
