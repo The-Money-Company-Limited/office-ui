@@ -80,3 +80,36 @@ describe("viewer night reader mode", () => {
     expect(html).toContain("color:#f3f4f6");
   });
 });
+
+describe("viewer dark editing colors", () => {
+  function coloredModel(color: string): DocModel {
+    const model = cloneDocModel(defaultStarterModel);
+    model.nodes = [
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Heading", style: { color } }],
+      },
+    ];
+    return model;
+  }
+
+  function editableDarkHtml(color: string): string {
+    return renderToStaticMarkup(
+      React.createElement(NightReaderViewer, {
+        model: coloredModel(color),
+        initialDocumentTheme: "dark",
+        mode: "edit",
+      })
+    );
+  }
+
+  it("lightens a dark run color and keeps its hue", () => {
+    const html = editableDarkHtml("#1F3864");
+    expect(html).not.toContain("color:#1F3864");
+    expect(html).toContain("color:#9eb6e1");
+  });
+
+  it("keeps a run color that already reads on the dark page", () => {
+    expect(editableDarkHtml("#ff0000")).toContain("color:#ff0000");
+  });
+});

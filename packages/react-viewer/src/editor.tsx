@@ -19080,6 +19080,14 @@ function tableCellParagraphBlockStyle(
   };
 }
 
+// On the dark page, a run color too dark to read keeps its hue and takes the
+// mirrored lightness, held between DARK_PAGE_MIN_LIGHTNESS and the page's own
+// text lightness: black reads like unstyled text, a navy heading as light
+// blue. Colors already light enough are kept.
+const DARK_PAGE_MIN_LIGHTNESS = 0.75;
+const DARK_PAGE_MAX_LIGHTNESS = 0.95;
+const DARK_PAGE_MIN_LUMINANCE = 0.18;
+
 function themedRunColor(
   color: string | undefined,
   documentTheme: DocxDocumentTheme
@@ -19087,25 +19095,73 @@ function themedRunColor(
   if (documentTheme !== "dark") {
     return color;
   }
-
   if (!color) {
     return "#f3f4f6";
   }
-
   const normalized = color.trim().toLowerCase();
-  if (
-    normalized === "#000" ||
-    normalized === "#000000" ||
-    normalized === "#111111" ||
-    normalized === "#111827" ||
-    normalized === "black" ||
-    normalized === "rgb(0,0,0)" ||
-    normalized === "rgb(0, 0, 0)"
-  ) {
-    return "#f3f4f6";
+  const rgb =
+    normalized === "black" ? [0, 0, 0] : parseHexRgb(normalized);
+  if (!rgb) {
+    return color;
   }
+  const [red, green, blue] = rgb.map((channel) => channel / 255);
+  const linear = (channel: number) =>
+    channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  const luminance =
+    0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue);
+  if (luminance >= DARK_PAGE_MIN_LUMINANCE) {
+    return color;
+  }
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const lightness = (max + min) / 2;
+  const chroma = max - min;
+  const saturation =
+    chroma === 0 ? 0 : chroma / (1 - Math.abs(2 * lightness - 1));
+  const hue =
+    chroma === 0
+      ? 0
+      : max === red
+      ? ((green - blue) / chroma + 6) % 6
+      : max === green
+      ? (blue - red) / chroma + 2
+      : (red - green) / chroma + 4;
+  const nextLightness = Math.min(
+    Math.max(1 - lightness, DARK_PAGE_MIN_LIGHTNESS),
+    DARK_PAGE_MAX_LIGHTNESS
+  );
+  const nextChroma = (1 - Math.abs(2 * nextLightness - 1)) * saturation;
+  const second = nextChroma * (1 - Math.abs((hue % 2) - 1));
+  const [r, g, b] =
+    hue < 1
+      ? [nextChroma, second, 0]
+      : hue < 2
+      ? [second, nextChroma, 0]
+      : hue < 3
+      ? [0, nextChroma, second]
+      : hue < 4
+      ? [0, second, nextChroma]
+      : hue < 5
+      ? [second, 0, nextChroma]
+      : [nextChroma, 0, second];
+  const offset = nextLightness - nextChroma / 2;
+  return `#${[r, g, b]
+    .map((channel) =>
+      Math.round((channel + offset) * 255)
+        .toString(16)
+        .padStart(2, "0")
+    )
+    .join("")}`;
+}
 
-  return color;
+function parseHexRgb(color: string): number[] | null {
+  const hex = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/.exec(color)?.[1];
+  if (!hex) {
+    return null;
+  }
+  const full =
+    hex.length === 3 ? [...hex].map((digit) => digit + digit).join("") : hex;
+  return [0, 2, 4].map((at) => parseInt(full.slice(at, at + 2), 16));
 }
 
 function cssFontFamily(fontFamily?: string): string | undefined {
