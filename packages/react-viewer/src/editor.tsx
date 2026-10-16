@@ -15784,6 +15784,10 @@ export function buildDocumentPageNodeSegments(
       node.type === "paragraph" &&
       paragraphActsAsTrailingRenderedPageBreakSpacer(model, nodeIndex, node)
     ) {
+      // The spacer adds no height to the flow, but it stays on the page:
+      // left off every page it could not be drawn, clicked or typed in, and
+      // Enter at the end of the page before it put the caret nowhere.
+      currentPageSegments.push({ nodeIndex });
       previousParagraphAfterPx = 0;
       continue;
     }

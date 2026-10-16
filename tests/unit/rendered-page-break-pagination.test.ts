@@ -230,6 +230,8 @@ describe("rendered page break pagination", () => {
       }
     );
 
-    expect(pages).toEqual([[{ nodeIndex: 0 }, { nodeIndex: 3 }]]);
+    // The blank paragraphs share the page instead of starting one of their
+    // own, and stay on it so they can be edited.
+    expect(pages).toEqual([[{ nodeIndex: 0 }, { nodeIndex: 1 }, { nodeIndex: 2 }, { nodeIndex: 3 }]]);
   });
 });
