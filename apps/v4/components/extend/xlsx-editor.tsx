@@ -2879,7 +2879,8 @@ function EditorFindBar({
     <div
       role="search"
       aria-label="Find in sheet"
-      className="flex items-center justify-end gap-2 border-t bg-background px-2 py-1"
+      data-slot="editor-find-bar"
+      className="absolute top-2 right-3 z-40 flex items-center gap-2 rounded-lg border bg-background p-2 shadow-lg"
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault()
@@ -3087,14 +3088,18 @@ export function XlsxEditorSurface({
         workbookIdentity={workbookIdentity}
       />
       {findOpen ? (
-        <EditorFindBar
+        // Floats under the toolbar's right end, as in Google Sheets, so the
+        // grid does not shift when it opens.
+        <div className="relative h-0">
+          <EditorFindBar
           inputRef={findInputRef}
           onNavigate={navigate}
           onClose={() => {
             setFindOpen(false)
             focusGrid()
           }}
-        />
+          />
+        </div>
       ) : null}
       {clipboardError ? (
         <div

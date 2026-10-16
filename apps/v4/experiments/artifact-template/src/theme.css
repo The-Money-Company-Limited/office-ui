@@ -298,12 +298,14 @@ html:has(.artifact-editor) {
   background: var(--background);
 }
 
-/* Portals are children of the page, outside their editor's chrome. */
+/* Portals are children of the page, outside their editor's chrome. The find
+   bars float over the document like them. */
 .artifact-page
   :is(
     [data-slot="dropdown-menu-content"],
     [data-slot="select-popup"],
-    [data-slot="popover-popup"]
+    [data-slot="popover-popup"],
+    [data-slot="editor-find-bar"]
   ) {
   border-radius: var(--radius-card);
   border-color: var(--surface-rim);

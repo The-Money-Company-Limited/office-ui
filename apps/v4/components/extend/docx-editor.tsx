@@ -2573,6 +2573,7 @@ function DocxEditorContent({
             <div
               role="search"
               aria-label="Find in document"
+              data-slot="editor-find-bar"
               className="pointer-events-auto sticky top-16 h-fit w-[min(460px,100%)] rounded-lg border bg-background p-2 shadow-lg"
               onKeyDown={(event) => {
                 if (
