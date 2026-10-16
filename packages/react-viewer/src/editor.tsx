@@ -56,21 +56,27 @@ import {
   type TextRunNode,
 } from "@extend-ai/react-docx-doc-model";
 import {
+  acceptAllRevisions as acceptAllRevisionsInModel,
   acceptParagraphRevision,
   createParagraphComment,
+  deleteComment as deleteCommentInModel,
   planTableGridColumnDeletion,
   planTableGridColumnInsertion,
+  rejectAllRevisions as rejectAllRevisionsInModel,
   rejectParagraphRevision,
+  replyToComment as replyToCommentInModel,
   setCommentResolved as setCommentResolvedInModel,
   splitParagraphChildrenAtTextOffsets,
   tableCellPhysicalGridRange,
   tableCellsIntersectingGridRange,
   tablePhysicalGridColumnCount,
+  trackModelTextEdits,
   updateParagraphText,
   updateTableCellParagraphTextRecursive,
   updateTableCellParagraphText,
   updateTableCellText,
   type AnnotationMutationFailureReason,
+  type ParagraphRevisionTarget,
 } from "@extend-ai/react-docx-editor-ops";
 import { type OoxmlPackage } from "@extend-ai/react-docx-ooxml-core";
 import {
@@ -1462,6 +1468,12 @@ export function resolveMeasuredPageContentHeightsPxForEditedModel(
     : measuredPageContentHeightsPxByPageIndex.slice(0, validPageCount);
 }
 
+// Rendered content that is not part of a paragraph's editable text: list
+// labels, images, and tracked deletions (shown struck through, but no longer
+// part of the text). Text offsets and edited text skip all of it.
+const NON_TEXT_CONTENT_SELECTOR =
+  "[data-docx-numbering-label='true'],[data-docx-image-location],[data-docx-tracked-deletion='true']";
+
 function placeCaretInsideElementDom(element: HTMLElement): void {
   const selection = window.getSelection();
   if (!selection) {
@@ -1495,7 +1507,7 @@ function selectionOffsetsWithinElementDom(
     const textLengthWithoutNumberingLabels = (range: Range): number => {
       const fragment = range.cloneContents();
       fragment
-        .querySelectorAll("[data-docx-numbering-label='true'],[data-docx-image-location]")
+        .querySelectorAll(NON_TEXT_CONTENT_SELECTOR)
         .forEach((label) => {
           label.remove();
         });
@@ -1542,7 +1554,7 @@ function staticRangeOffsetsWithinElementDom(
     const textLengthWithoutNumberingLabels = (range: Range): number => {
       const fragment = range.cloneContents();
       fragment
-        .querySelectorAll("[data-docx-numbering-label='true'],[data-docx-image-location]")
+        .querySelectorAll(NON_TEXT_CONTENT_SELECTOR)
         .forEach((label) => {
           label.remove();
         });
@@ -1595,7 +1607,7 @@ function setSelectionWithinElementByTextOffsetsDom(
       if (
         currentTextNode instanceof Text &&
         currentTextNode.parentElement?.closest(
-          "[data-docx-numbering-label='true'],[data-docx-image-location]"
+          NON_TEXT_CONTENT_SELECTOR
         )
       ) {
         currentTextNode = walker.nextNode();
@@ -4018,7 +4030,7 @@ function tableSelectionCoversWholeTable(
 function textLengthFromRange(range: Range): number {
   const fragment = range.cloneContents();
   fragment
-    .querySelectorAll("[data-docx-numbering-label='true'],[data-docx-image-location]")
+    .querySelectorAll(NON_TEXT_CONTENT_SELECTOR)
     .forEach((label) => {
       label.remove();
     });
@@ -4141,6 +4153,11 @@ interface DocxEditorTransactionPatch
   clearSelectedFormField?: boolean;
   pushHistory?: boolean;
   textInput?: boolean;
+  /**
+   * Set by commands that edit revisions and comments themselves (accept,
+   * reject, comment). Suggesting tracks every other model change.
+   */
+  annotation?: boolean;
 }
 
 type ParagraphLocation = DocxTextRangeLocation;
@@ -4344,7 +4361,20 @@ export interface UseDocxEditorOptions {
    * @defaultValue `false`
    */
   initialShowComments?: boolean;
+  /**
+   * Author recorded on tracked changes made in suggesting mode
+   * (`DocxEditorViewer` `mode="suggest"`) and on comment replies.
+   *
+   * @defaultValue `"Anonymous"`
+   */
+  author?: string;
 }
+
+export type DocxRevisionBatchCommandResult = {
+  ok: true;
+  /** Top-level paragraphs whose revision markup could not be resolved and was left as is. */
+  remainingNodeIndexes: number[];
+};
 
 /**
  * Controller returned by `useDocxEditor`.
@@ -4434,6 +4464,29 @@ export interface DocxEditorController {
     comment: DocxComment,
     resolved: boolean
   ) => DocxAnnotationCommandResult;
+  /** Accepts every insertion/deletion carrying this OOXML `w:id` (one undo step). */
+  acceptRevision: (revisionId: string | number) => DocxAnnotationCommandResult;
+  /** Rejects every insertion/deletion carrying this OOXML `w:id` (one undo step). */
+  rejectRevision: (revisionId: string | number) => DocxAnnotationCommandResult;
+  /** Accepts every run-level insertion and deletion in body paragraphs. */
+  acceptAllRevisions: () => DocxRevisionBatchCommandResult;
+  /** Rejects every run-level insertion and deletion in body paragraphs. */
+  rejectAllRevisions: () => DocxRevisionBatchCommandResult;
+  /** Adds a reply by `author` to the comment's thread. */
+  replyToComment: (
+    commentId: number,
+    text: string
+  ) => DocxCommentCreationCommandResult;
+  /** Deletes a comment; deleting a thread's root deletes its replies. */
+  deleteComment: (commentId: number) => DocxAnnotationCommandResult;
+  /**
+   * @internal Used by `DocxEditorViewer` `mode="suggest"`: while registered,
+   * model edits are recorded as tracked changes or refused. Returns the
+   * unregister function.
+   */
+  registerSuggestingMode: () => () => void;
+  /** @internal Increments whenever suggesting refuses an edit it cannot track. */
+  suggestionRefusalNonce: number;
   importDocxFile: (file: File) => Promise<void>;
   newDocument: () => void;
   exportDocx: () => void;
@@ -5021,15 +5074,23 @@ export interface DocxCommentCardRenderProps {
   style: React.CSSProperties;
   /** Mark the comment resolved or reopen it. */
   setResolved: (resolved: boolean) => DocxAnnotationCommandResult;
+  /** Reply to the comment's thread as `useDocxEditor({ author })`. */
+  reply: (text: string) => DocxCommentCreationCommandResult;
+  /** Delete the comment (and its replies, when it is a thread's root). */
+  remove: () => DocxAnnotationCommandResult;
 }
 
 /**
  * Viewer interaction mode.
  *
  * - `"edit"` allows editing when the document state permits it.
+ * - `"suggest"` shows tracked changes inline and records the user's typing,
+ *   deleting and pasting as tracked changes by `useDocxEditor({ author })`.
+ *   Edits that cannot be tracked (splitting or merging paragraphs,
+ *   formatting, tables, headers and footers) are refused.
  * - `"read-only"` disables editing affordances while preserving navigation.
  */
-export type DocxEditorViewerMode = "edit" | "read-only";
+export type DocxEditorViewerMode = "edit" | "suggest" | "read-only";
 
 export interface UseDocxDocumentThemeResult {
   documentTheme: DocxDocumentTheme;
@@ -5645,7 +5706,7 @@ function editableTextFromElement(element: HTMLElement): string {
   const clone = element.cloneNode(true) as HTMLElement;
   replaceTabLayoutMarkersWithTabText(clone);
   clone
-    .querySelectorAll("[data-docx-numbering-label='true'],[data-docx-image-location]")
+    .querySelectorAll(NON_TEXT_CONTENT_SELECTOR)
     .forEach((label) => {
       label.remove();
     });
@@ -21744,6 +21805,8 @@ function renderParagraphRuns(
           key={`${keySeed}-tracked-del-${trackedVisibleChildCursor}-${segmentIndex}`}
           data-docx-tracked-change="deletion"
           data-docx-tracked-change-id={segment.change.id}
+          data-docx-tracked-deletion="true"
+          contentEditable={false}
           title={
             segment.change.author
               ? `${segment.change.author} deleted`
@@ -29907,6 +29970,20 @@ export function useDocxEditor(
   const [showComments, setShowCommentsState] = React.useState<boolean>(
     options.initialShowComments ?? false
   );
+  const author = options.author?.trim() || "Anonymous";
+  const authorRef = React.useRef(author);
+  authorRef.current = author;
+  const suggestingRef = React.useRef(false);
+  const [suggestionRefusalNonce, bumpSuggestionRefusalNonce] = React.useReducer(
+    (value: number) => value + 1,
+    0
+  );
+  const registerSuggestingMode = React.useCallback((): (() => void) => {
+    suggestingRef.current = true;
+    return () => {
+      suggestingRef.current = false;
+    };
+  }, []);
   const [paginationInfo, setPaginationInfo] =
     React.useState<DocxPaginationInfo>({
       currentPage: 1,
@@ -30488,7 +30565,7 @@ export function useDocxEditor(
         currentState.pendingRunStyle
       );
 
-      const patch = resolver({
+      let patch = resolver({
         model: currentModel,
         selection: currentSelection,
         activeTextRange: currentRange,
@@ -30496,6 +30573,34 @@ export function useDocxEditor(
       });
       if (!patch) {
         return false;
+      }
+      if (
+        suggestingRef.current &&
+        !patch.annotation &&
+        patch.model !== undefined &&
+        patch.model !== currentModel
+      ) {
+        const tracked = trackModelTextEdits(currentModel, patch.model, {
+          author: authorRef.current,
+          date: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+        });
+        if (!tracked.ok) {
+          // The DOM may already show the refused edit: the viewer re-renders
+          // paragraphs from the model and the caret goes back where it was.
+          const nextNonce = historyRestoreNonceRef.current + 1;
+          historyRestoreNonceRef.current = nextNonce;
+          setHistoryRestoreRequest({
+            nonce: nextNonce,
+            selection: currentSelection,
+            activeTextRange: currentRange,
+          });
+          bumpSuggestionRefusalNonce();
+          setStatus(
+            "Suggesting can only track text changes within a paragraph; this edit was not applied"
+          );
+          return false;
+        }
+        patch = { ...patch, model: tracked.model };
       }
 
       const hasExplicitRangePatch = Object.prototype.hasOwnProperty.call(
@@ -30694,6 +30799,7 @@ export function useDocxEditor(
           model: mutation.model,
           status: action === "accept" ? "Accepted change" : "Rejected change",
           clearSelectedFormField: true,
+          annotation: true,
         };
       });
       return outcome;
@@ -30762,6 +30868,7 @@ export function useDocxEditor(
           model: mutation.model,
           status: "Added comment",
           clearSelectedFormField: true,
+          annotation: true,
         };
       });
       if (outcome.ok) {
@@ -30843,6 +30950,178 @@ export function useDocxEditor(
         return {
           model: mutation.model,
           status: resolved ? "Resolved comment" : "Reopened comment",
+          annotation: true,
+        };
+      });
+      return outcome;
+    },
+    [annotationFailureStatus, dispatchEditorTransaction]
+  );
+
+  const runRevisionIdCommand = React.useCallback(
+    (
+      action: "accept" | "reject",
+      revisionId: string | number
+    ): DocxAnnotationCommandResult => {
+      const label = action === "accept" ? "Accept change" : "Reject change";
+      const id = String(revisionId).trim();
+      let outcome: DocxAnnotationCommandResult = { ok: false, reason: "stale" };
+      dispatchEditorTransaction((current) => {
+        const targets = new Map<string, ParagraphRevisionTarget>();
+        collectTrackedChangesFromModel(
+          current.model,
+          documentLoadNonceRef.current
+        ).forEach((change) => {
+          if (
+            change.revisionId === id &&
+            change.location.kind === "paragraph" &&
+            (change.kind === "insertion" || change.kind === "deletion")
+          ) {
+            const target = {
+              nodeIndex: change.location.nodeIndex,
+              revisionId: id,
+              kind: change.kind,
+            };
+            targets.set(`${target.nodeIndex}:${target.kind}`, target);
+          }
+        });
+        if (targets.size === 0) {
+          outcome = { ok: false, reason: "stale" };
+          return {
+            status: annotationFailureStatus(label, "stale"),
+            pushHistory: false,
+          };
+        }
+        let model = current.model;
+        for (const target of targets.values()) {
+          const mutation =
+            action === "accept"
+              ? acceptParagraphRevision(model, target)
+              : rejectParagraphRevision(model, target);
+          if (!mutation.ok) {
+            outcome = mutation;
+            return {
+              status: annotationFailureStatus(label, mutation.reason),
+              pushHistory: false,
+            };
+          }
+          model = mutation.model;
+        }
+        outcome = { ok: true };
+        return {
+          model,
+          status: action === "accept" ? "Accepted change" : "Rejected change",
+          clearSelectedFormField: true,
+          annotation: true,
+        };
+      });
+      return outcome;
+    },
+    [annotationFailureStatus, dispatchEditorTransaction]
+  );
+
+  const acceptRevision = React.useCallback(
+    (revisionId: string | number): DocxAnnotationCommandResult =>
+      runRevisionIdCommand("accept", revisionId),
+    [runRevisionIdCommand]
+  );
+
+  const rejectRevision = React.useCallback(
+    (revisionId: string | number): DocxAnnotationCommandResult =>
+      runRevisionIdCommand("reject", revisionId),
+    [runRevisionIdCommand]
+  );
+
+  const runAllRevisionsCommand = React.useCallback(
+    (action: "accept" | "reject"): DocxRevisionBatchCommandResult => {
+      let remainingNodeIndexes: number[] = [];
+      dispatchEditorTransaction((current) => {
+        const batch =
+          action === "accept"
+            ? acceptAllRevisionsInModel(current.model)
+            : rejectAllRevisionsInModel(current.model);
+        remainingNodeIndexes = batch.remainingNodeIndexes;
+        if (
+          batch.model.nodes.every(
+            (node, index) => node === current.model.nodes[index]
+          )
+        ) {
+          return undefined;
+        }
+        return {
+          model: batch.model,
+          status:
+            action === "accept"
+              ? "Accepted all changes"
+              : "Rejected all changes",
+          clearSelectedFormField: true,
+          annotation: true,
+        };
+      });
+      return { ok: true, remainingNodeIndexes };
+    },
+    [dispatchEditorTransaction]
+  );
+
+  const acceptAllRevisions = React.useCallback(
+    (): DocxRevisionBatchCommandResult => runAllRevisionsCommand("accept"),
+    [runAllRevisionsCommand]
+  );
+
+  const rejectAllRevisions = React.useCallback(
+    (): DocxRevisionBatchCommandResult => runAllRevisionsCommand("reject"),
+    [runAllRevisionsCommand]
+  );
+
+  const replyToComment = React.useCallback(
+    (commentId: number, text: string): DocxCommentCreationCommandResult => {
+      let outcome: DocxCommentCreationCommandResult = {
+        ok: false,
+        reason: "stale",
+      };
+      dispatchEditorTransaction((current) => {
+        const mutation = replyToCommentInModel(current.model, {
+          commentId,
+          text,
+          author: authorRef.current,
+          date: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+        });
+        if (!mutation.ok) {
+          outcome = mutation;
+          return {
+            status: annotationFailureStatus("Reply", mutation.reason),
+            pushHistory: false,
+          };
+        }
+        outcome = { ok: true, commentId: mutation.commentId };
+        return {
+          model: mutation.model,
+          status: "Replied to comment",
+          annotation: true,
+        };
+      });
+      return outcome;
+    },
+    [annotationFailureStatus, dispatchEditorTransaction]
+  );
+
+  const deleteComment = React.useCallback(
+    (commentId: number): DocxAnnotationCommandResult => {
+      let outcome: DocxAnnotationCommandResult = { ok: false, reason: "stale" };
+      dispatchEditorTransaction((current) => {
+        const mutation = deleteCommentInModel(current.model, commentId);
+        if (!mutation.ok) {
+          outcome = mutation;
+          return {
+            status: annotationFailureStatus("Delete comment", mutation.reason),
+            pushHistory: false,
+          };
+        }
+        outcome = { ok: true };
+        return {
+          model: mutation.model,
+          status: "Deleted comment",
+          annotation: true,
         };
       });
       return outcome;
@@ -35121,6 +35400,14 @@ export function useDocxEditor(
     rejectTrackedChange,
     createComment,
     setCommentResolved,
+    acceptRevision,
+    rejectRevision,
+    acceptAllRevisions,
+    rejectAllRevisions,
+    replyToComment,
+    deleteComment,
+    registerSuggestingMode,
+    suggestionRefusalNonce,
     importDocxFile,
     newDocument,
     exportDocx,
@@ -38692,14 +38979,19 @@ export function DocxEditorViewer({
     getServerFontMetricsRevision
   );
   const pageSurfaceRegistryOwner = docxViewerPageSurfaceRegistryOwner(editor);
-  const trackedChangesEnabled = showTrackedChanges ?? editor.showTrackedChanges;
+  const isSuggesting = mode === "suggest";
+  const trackedChangesEnabled =
+    isSuggesting || (showTrackedChanges ?? editor.showTrackedChanges);
   const hasTrackedChanges = editor.trackedChanges.length > 0;
   const commentsEnabled = showComments ?? editor.showComments;
   const hasComments = editor.comments.length > 0;
   // Comments share the tracked-change gutter: cards for both annotation kinds
   // stack in the same margin column.
   const showTrackedChangeGutter = trackedChangesEnabled || commentsEnabled;
-  const isReadOnly = mode === "read-only" || trackedChangesEnabled;
+  // Outside suggesting, visible tracked changes keep the document read-only:
+  // a plain edit there would silently rewrite the marked-up text.
+  const isReadOnly =
+    mode === "read-only" || (trackedChangesEnabled && !isSuggesting);
   const isNightReaderMode = isReadOnly && editor.documentTheme === "dark";
   const documentContentTheme: DocxDocumentTheme = isNightReaderMode
     ? "light"
@@ -38707,7 +38999,7 @@ export function DocxEditorViewer({
   const documentContentFilter = isNightReaderMode
     ? NIGHT_READER_INVERSION_FILTER
     : undefined;
-  const canReplaceDocumentByDrop = mode !== "read-only";
+  const canReplaceDocumentByDrop = mode === "edit";
   const formFieldLocationKey = React.useCallback(
     (location: DocxFormFieldLocation): string => {
       return location.kind === "paragraph"
@@ -39337,6 +39629,18 @@ export function DocxEditorViewer({
   );
   const [paragraphStructureEpoch, bumpParagraphStructureEpoch] =
     React.useReducer((value: number) => value + 1, 0);
+  const registerSuggestingMode = editor.registerSuggestingMode;
+  React.useEffect(
+    () => (isSuggesting ? registerSuggestingMode() : undefined),
+    [isSuggesting, registerSuggestingMode]
+  );
+  // A refused suggestion may have reached the DOM through native input;
+  // re-render paragraphs from the model so the page shows what was kept.
+  React.useEffect(() => {
+    if (editor.suggestionRefusalNonce > 0) {
+      bumpParagraphStructureEpoch();
+    }
+  }, [editor.suggestionRefusalNonce]);
   const [paginationMeasurementEpoch, bumpPaginationMeasurementEpoch] =
     React.useReducer((value: number) => value + 1, 0);
   // Rendered wrap bands (page-body-local, zoom-normalized) captured after each
@@ -42310,7 +42614,9 @@ export function DocxEditorViewer({
 
     if (trackedChangesEnabled) {
       editor.trackedChanges.forEach((change) => {
-        if (!trackedChangeUsesGutterBalloon(change)) {
+        // Suggesting gives every change a card, so insertions can be
+        // accepted or rejected too.
+        if (!isSuggesting && !trackedChangeUsesGutterBalloon(change)) {
           return;
         }
 
@@ -42350,6 +42656,7 @@ export function DocxEditorViewer({
     commentsEnabled,
     editor.comments,
     editor.trackedChanges,
+    isSuggesting,
     pageNodeSegmentsByPage,
     trackedChangesEnabled,
   ]);
@@ -44458,7 +44765,7 @@ export function DocxEditorViewer({
         while (node) {
           if (
             node instanceof Text &&
-            node.parentElement?.closest("[data-docx-numbering-label='true'],[data-docx-image-location]")
+            node.parentElement?.closest(NON_TEXT_CONTENT_SELECTOR)
           ) {
             node = walker.nextNode();
             continue;
@@ -44669,7 +44976,7 @@ export function DocxEditorViewer({
           if (
             currentTextNode instanceof Text &&
             currentTextNode.parentElement?.closest(
-              "[data-docx-numbering-label='true'],[data-docx-image-location]"
+              NON_TEXT_CONTENT_SELECTOR
             )
           ) {
             currentTextNode = walker.nextNode();
@@ -44822,7 +45129,7 @@ export function DocxEditorViewer({
         if (
           currentTextNode instanceof Text &&
           currentTextNode.parentElement?.closest(
-            "[data-docx-numbering-label='true'],[data-docx-image-location]"
+            NON_TEXT_CONTENT_SELECTOR
           )
         ) {
           currentTextNode = walker.nextNode();
@@ -49210,7 +49517,7 @@ export function DocxEditorViewer({
         const textLengthWithoutNumberingLabels = (range: Range): number => {
           const fragment = range.cloneContents();
           fragment
-            .querySelectorAll("[data-docx-numbering-label='true'],[data-docx-image-location]")
+            .querySelectorAll(NON_TEXT_CONTENT_SELECTOR)
             .forEach((label) => {
               label.remove();
             });
@@ -65881,6 +66188,9 @@ export function DocxEditorViewer({
                         style: cardStyle,
                         setResolved: (resolved) =>
                           editor.setCommentResolved(comment, resolved),
+                        reply: (text) =>
+                          editor.replyToComment(comment.commentId, text),
+                        remove: () => editor.deleteComment(comment.commentId),
                       })
                     : defaultCard;
                   return (
