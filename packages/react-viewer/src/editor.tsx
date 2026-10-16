@@ -4846,6 +4846,14 @@ export interface DocxEditorViewerProps {
    */
   editor: DocxEditorController;
   /**
+   * When set, gives each page the DOM id `<prefix>page-<n>` (1-based) and each
+   * body paragraph `<prefix>p-<w14:paraId>` (or `<prefix>p-n<index>` when the
+   * paragraph has no `w14:paraId`), so tools outside the viewer, such as a
+   * comment layer, can anchor to them across edits and reflow. Leave it unset
+   * when the same document is rendered more than once on a page.
+   */
+  anchorIdPrefix?: string;
+  /**
    * CSS class applied to the outer viewer root.
    */
   className?: string;
@@ -38628,8 +38636,22 @@ function renderHeaderNode(
   );
 }
 
+const PARAGRAPH_PARA_ID = /^<w:p\b[^>]*?\bw14:paraId="([0-9A-Fa-f]{1,8})"/;
+
+// paragraphAnchorId is a body paragraph's DOM id under anchorIdPrefix: Word's
+// w14:paraId when the paragraph has one, else its index in the body.
+function paragraphAnchorId(
+  prefix: string,
+  node: { sourceXml?: string },
+  nodeIndex: number
+): string {
+  const paraId = node.sourceXml?.match(PARAGRAPH_PARA_ID)?.[1];
+  return paraId ? `${prefix}p-${paraId.toUpperCase()}` : `${prefix}p-n${nodeIndex}`;
+}
+
 export function DocxEditorViewer({
   editor,
+  anchorIdPrefix,
   className,
   style,
   zoom,
@@ -52680,7 +52702,7 @@ export function DocxEditorViewer({
       return (
         <span
           key={key}
-          contentEditable={false}
+          contentEditable={isReadOnly ? undefined : false}
           style={{
             display: "inline-block",
             width: 0,
@@ -52695,7 +52717,7 @@ export function DocxEditorViewer({
           }}
         >
           <span
-            contentEditable={false}
+            contentEditable={isReadOnly ? undefined : false}
             data-docx-image-drop-zone="true"
             data-docx-target-kind={target.kind}
             data-docx-child-index={target.childIndex}
@@ -53263,7 +53285,7 @@ export function DocxEditorViewer({
       <span
         data-docx-wrapped-paragraph-root="true"
         data-docx-wrapped-paragraph-location-key={locationKey}
-        contentEditable={false}
+        contentEditable={isReadOnly ? undefined : false}
         onCopy={copyReadOnlyWrappedSelection}
         onCut={copyReadOnlyWrappedSelection}
         ref={(element) => {
@@ -53528,7 +53550,7 @@ export function DocxEditorViewer({
           {selectionRects.map((rect, index) => (
             <span
               key={`${keyPrefix}-sel-${index}`}
-              contentEditable={false}
+              contentEditable={isReadOnly ? undefined : false}
               {...{ [DOCX_THUMBNAIL_EXCLUDE_ATTRIBUTE]: "true" }}
               style={{
                 position: "absolute",
@@ -53549,7 +53571,7 @@ export function DocxEditorViewer({
           )}
           {activeSession && caretRect ? (
             <span
-              contentEditable={false}
+              contentEditable={isReadOnly ? undefined : false}
               {...{ [DOCX_THUMBNAIL_EXCLUDE_ATTRIBUTE]: "true" }}
               style={{
                 position: "absolute",
@@ -54928,7 +54950,7 @@ export function DocxEditorViewer({
           return (
             <span
               key={`${keyPrefix}-manual-image-${geometry.imageIndex}`}
-              contentEditable={false}
+              contentEditable={isReadOnly ? undefined : false}
               data-docx-source-id={manualImage.blockId}
               data-docx-image-location={manualImageKey}
               style={{
@@ -55132,7 +55154,7 @@ export function DocxEditorViewer({
                   ].map((handle) => (
                     <span
                       key={`${keyPrefix}-dual-${geometry.imageIndex}-${handle.key}`}
-                      contentEditable={false}
+                      contentEditable={isReadOnly ? undefined : false}
                       data-image-resize-handle="true"
                       style={{
                         position: "absolute",
@@ -55241,7 +55263,7 @@ export function DocxEditorViewer({
           return (
             <span
               key={`${keyPrefix}-manual-fixed-wrap-image-${geometry.imageIndex}`}
-              contentEditable={false}
+              contentEditable={isReadOnly ? undefined : false}
               data-docx-source-id={manualImage.blockId}
               data-docx-image-location={manualImageKey}
               style={{
@@ -55388,7 +55410,7 @@ export function DocxEditorViewer({
                   ].map((handle) => (
                     <span
                       key={`${keyPrefix}-manual-fixed-wrap-${geometry.imageIndex}-${handle.key}`}
-                      contentEditable={false}
+                      contentEditable={isReadOnly ? undefined : false}
                       data-image-resize-handle="true"
                       style={{
                         position: "absolute",
@@ -55495,7 +55517,7 @@ export function DocxEditorViewer({
           return (
             <span
               key={`${keyPrefix}-manual-absolute-${childIndex}`}
-              contentEditable={false}
+              contentEditable={isReadOnly ? undefined : false}
               data-docx-source-id={manualImage.blockId}
               ref={(element) =>
                 applyMixedAbsoluteFloatingImageOrigin(
@@ -55650,7 +55672,7 @@ export function DocxEditorViewer({
                   ].map((handle) => (
                     <span
                       key={`${keyPrefix}-manual-absolute-${childIndex}-${handle.key}`}
-                      contentEditable={false}
+                      contentEditable={isReadOnly ? undefined : false}
                       data-image-resize-handle="true"
                       style={{
                         position: "absolute",
@@ -55796,7 +55818,7 @@ export function DocxEditorViewer({
         nodes.push(
           <span
             key={`${keyPrefix}-numbering`}
-            contentEditable={false}
+            contentEditable={isReadOnly ? undefined : false}
             data-docx-numbering-label="true"
             style={numberingMarkerStyle(
               paragraph,
@@ -55845,7 +55867,7 @@ export function DocxEditorViewer({
       previewParagraph.children.forEach((child, childIndex) => {
         const runKey = `${keyPrefix}-run-${childIndex}`;
         if (child.type === "image" && child.mathMl) {
-          nodes.push(<span key={runKey} data-docx-source-id={child.blockId} role="math" aria-label={child.alt} contentEditable={false} style={{ display: "inline-block", verticalAlign: "middle" }}>{mathContent(child)}</span>);
+          nodes.push(<span key={runKey} data-docx-source-id={child.blockId} role="math" aria-label={child.alt} contentEditable={isReadOnly ? undefined : false} style={{ display: "inline-block", verticalAlign: "middle" }}>{mathContent(child)}</span>);
           return;
         }
 
@@ -56057,7 +56079,7 @@ export function DocxEditorViewer({
             nodes.push(
               <span
                 key={`${runKey}-dual-left-wrap`}
-                contentEditable={false}
+                contentEditable={isReadOnly ? undefined : false}
                 aria-hidden="true"
                 style={dualWrapExclusionLayout.leftSpacerStyle}
               />
@@ -56065,7 +56087,7 @@ export function DocxEditorViewer({
             nodes.push(
               <span
                 key={`${runKey}-dual-right-wrap`}
-                contentEditable={false}
+                contentEditable={isReadOnly ? undefined : false}
                 aria-hidden="true"
                 style={dualWrapExclusionLayout.rightSpacerStyle}
               />
@@ -56075,7 +56097,7 @@ export function DocxEditorViewer({
           nodes.push(
             <span
               key={runKey}
-              contentEditable={false}
+              contentEditable={isReadOnly ? undefined : false}
               ref={(element) =>
                 applyMixedAbsoluteFloatingImageOrigin(
                   element,
@@ -56463,7 +56485,7 @@ export function DocxEditorViewer({
                   {resizeHandles.map((handle) => (
                     <span
                       key={`${runKey}-${handle.key}`}
-                      contentEditable={false}
+                      contentEditable={isReadOnly ? undefined : false}
                       data-image-resize-handle="true"
                       style={{
                         position: "absolute",
@@ -56525,7 +56547,7 @@ export function DocxEditorViewer({
             nodes.push(
               <span
                 key={`${runKey}-hit-target`}
-                contentEditable={false}
+                contentEditable={isReadOnly ? undefined : false}
                 aria-hidden="true"
                 style={{
                   ...imageFrameStyle,
@@ -56583,7 +56605,7 @@ export function DocxEditorViewer({
                   ? resizeHandles.map((handle) => (
                       <span
                         key={`${runKey}-hit-${handle.key}`}
-                        contentEditable={false}
+                        contentEditable={isReadOnly ? undefined : false}
                         data-image-resize-handle="true"
                         style={{
                           position: "absolute",
@@ -56714,7 +56736,7 @@ export function DocxEditorViewer({
             nodes.push(
               <span
                 key={runKey}
-                contentEditable={false}
+                contentEditable={isReadOnly ? undefined : false}
                 data-docx-source-id={paragraph.blockId ? `${paragraph.blockId}/child/${childIndex}` : undefined}
                 data-docx-form-field="true"
                 data-docx-form-field-child-index={childIndex}
@@ -56797,7 +56819,7 @@ export function DocxEditorViewer({
             nodes.push(
               <select
                 key={runKey}
-                contentEditable={false}
+                contentEditable={isReadOnly ? undefined : false}
                 data-docx-source-id={paragraph.blockId ? `${paragraph.blockId}/child/${childIndex}` : undefined}
                 data-docx-form-field="true"
                 data-docx-form-field-child-index={childIndex}
@@ -56858,7 +56880,7 @@ export function DocxEditorViewer({
               nodes.push(
                 <input
                   key={runKey}
-                  contentEditable={false}
+                  contentEditable={isReadOnly ? undefined : false}
                   data-docx-source-id={paragraph.blockId ? `${paragraph.blockId}/child/${childIndex}` : undefined}
                 data-docx-form-field="true"
                   data-docx-form-field-child-index={childIndex}
@@ -56902,7 +56924,7 @@ export function DocxEditorViewer({
               nodes.push(
                 <input
                   key={runKey}
-                  contentEditable={false}
+                  contentEditable={isReadOnly ? undefined : false}
                   data-docx-source-id={paragraph.blockId ? `${paragraph.blockId}/child/${childIndex}` : undefined}
                 data-docx-form-field="true"
                   data-docx-form-field-child-index={childIndex}
@@ -56948,7 +56970,7 @@ export function DocxEditorViewer({
             nodes.push(
               <input
                 key={runKey}
-                contentEditable={false}
+                contentEditable={isReadOnly ? undefined : false}
                 data-docx-source-id={paragraph.blockId ? `${paragraph.blockId}/child/${childIndex}` : undefined}
                 data-docx-form-field="true"
                 data-docx-form-field-child-index={childIndex}
@@ -57129,7 +57151,7 @@ export function DocxEditorViewer({
         nodes.push(
           <span
             key={`${keyPrefix}-dual-wrap-clear`}
-            contentEditable={false}
+            contentEditable={isReadOnly ? undefined : false}
             aria-hidden="true"
             style={{
               display: "block",
@@ -57990,7 +58012,7 @@ export function DocxEditorViewer({
       Number.isFinite(pretextSegmentNumberingMarkerBoxWidthPx) ? (
         <span
           key={`table-cell-${tableIndex}-${rowIndex}-${cellIndex}-${paragraphIndex}-numbering-marker-${paragraphSegmentStartLine}`}
-          contentEditable={false}
+          contentEditable={isReadOnly ? undefined : false}
           data-docx-numbering-label="true"
           style={{
             ...numberingMarkerStyle(
@@ -58394,7 +58416,7 @@ export function DocxEditorViewer({
         Number.isFinite(pretextSegmentNumberingMarkerBoxWidthPx) ? (
           <span
             key={`node-${nodeIndex}-numbering-marker-${paragraphSegmentStartLine}`}
-            contentEditable={false}
+            contentEditable={isReadOnly ? undefined : false}
             data-docx-numbering-label="true"
             style={{
               ...numberingMarkerStyle(
@@ -58786,6 +58808,15 @@ export function DocxEditorViewer({
                     : ""
                 }`
           }
+          id={
+            anchorIdPrefix === undefined || options?.syntheticKeySuffix
+              ? undefined
+              : `${paragraphAnchorId(anchorIdPrefix, node, nodeIndex)}${
+                  paragraphSegmentStartLine > 0
+                    ? `-l${paragraphSegmentStartLine}`
+                    : ""
+                }`
+          }
           data-docx-paragraph-host="true"
           data-docx-source-id={node.blockId}
           data-docx-paragraph-kind="paragraph"
@@ -58917,7 +58948,7 @@ export function DocxEditorViewer({
               flushActiveRangeFromSelection
             );
           }}
-          contentEditable={editable}
+          contentEditable={editable || undefined}
           suppressContentEditableWarning
           onMouseUp={(event) => {
             if (!editable) {
@@ -59854,7 +59885,7 @@ export function DocxEditorViewer({
               {showTableHandles ? (
                 <>
                   <span
-                    contentEditable={false}
+                    contentEditable={isReadOnly ? undefined : false}
                     data-docx-pagination-ignore="true"
                     style={{
                       position: "absolute",
@@ -59873,7 +59904,7 @@ export function DocxEditorViewer({
                     }
                   />
                   <span
-                    contentEditable={false}
+                    contentEditable={isReadOnly ? undefined : false}
                     data-docx-pagination-ignore="true"
                     style={{
                       position: "absolute",
@@ -59899,7 +59930,7 @@ export function DocxEditorViewer({
               ) : null}
               {showTableMoveHandle ? (
                 <span
-                  contentEditable={false}
+                  contentEditable={isReadOnly ? undefined : false}
                   data-docx-table-move-handle="true"
                   title="Select or drag to move table"
                   style={{
@@ -60305,7 +60336,7 @@ export function DocxEditorViewer({
                                     return (
                                       <div
                                         key={`active-cell-nested-${nodeIndex}-${rowIndex}-${cellIndex}-${contentIndex}`}
-                                        contentEditable={false}
+                                        contentEditable={isReadOnly ? undefined : false}
                                         suppressContentEditableWarning
                                       >
                                         {renderHeaderNode(
@@ -62037,7 +62068,7 @@ export function DocxEditorViewer({
                       return (
                         <span
                           key={`column-border-${nodeIndex}-${boundaryColumnIndex}`}
-                          contentEditable={false}
+                          contentEditable={isReadOnly ? undefined : false}
                           style={{
                             position: "absolute",
                             top: 0,
@@ -62176,7 +62207,7 @@ export function DocxEditorViewer({
                       return (
                         <span
                           key={`row-border-${nodeIndex}-${boundaryRowIndex}`}
-                          contentEditable={false}
+                          contentEditable={isReadOnly ? undefined : false}
                           style={{
                             position: "absolute",
                             left: 0,
@@ -62306,7 +62337,7 @@ export function DocxEditorViewer({
                 : null}
               {showTableHandles && !isSplitTableSegment ? (
                 <span
-                  contentEditable={false}
+                  contentEditable={isReadOnly ? undefined : false}
                   style={{
                     position: "absolute",
                     left: `${Math.max(
@@ -62832,7 +62863,7 @@ export function DocxEditorViewer({
                   <span
                     data-docx-drop-cap="true"
                     data-docx-drop-cap-node-index={nodeIndex}
-                    contentEditable={false}
+                    contentEditable={isReadOnly ? undefined : false}
                     style={{
                       float: floatRight ? "right" : "left",
                       marginTop: movedTopPx,
@@ -62937,7 +62968,7 @@ export function DocxEditorViewer({
                     />
                     {showDropCapHandles ? (
                       <span
-                        contentEditable={false}
+                        contentEditable={isReadOnly ? undefined : false}
                         data-docx-table-move-handle="true"
                         title="Move drop cap"
                         style={{
@@ -62985,7 +63016,7 @@ export function DocxEditorViewer({
                     ) : null}
                     {showDropCapHandles ? (
                       <span
-                        contentEditable={false}
+                        contentEditable={isReadOnly ? undefined : false}
                         data-image-resize-handle="true"
                         title="Resize drop cap"
                         style={{
@@ -63068,7 +63099,7 @@ export function DocxEditorViewer({
                             <span
                               data-docx-drop-cap="true"
                               data-docx-drop-cap-node-index={nodeIndex}
-                              contentEditable={false}
+                              contentEditable={isReadOnly ? undefined : false}
                               style={{
                                 position: "absolute",
                                 left: movedLeftPx,
@@ -63160,7 +63191,7 @@ export function DocxEditorViewer({
                               />
                               {showDropCapHandles ? (
                                 <span
-                                  contentEditable={false}
+                                  contentEditable={isReadOnly ? undefined : false}
                                   data-docx-table-move-handle="true"
                                   title="Move drop cap"
                                   style={{
@@ -63204,7 +63235,7 @@ export function DocxEditorViewer({
                               ) : null}
                               {showDropCapHandles ? (
                                 <span
-                                  contentEditable={false}
+                                  contentEditable={isReadOnly ? undefined : false}
                                   data-image-resize-handle="true"
                                   title="Resize drop cap"
                                   style={{
@@ -64001,6 +64032,11 @@ export function DocxEditorViewer({
         return (
           <div
             key={`page-${pageIndex}`}
+            id={
+              anchorIdPrefix === undefined
+                ? undefined
+                : `${anchorIdPrefix}page-${pageIndex + 1}`
+            }
             data-docx-page-wrapper="true"
             data-docx-page-index={pageIndex}
             data-index={pageIndex}
