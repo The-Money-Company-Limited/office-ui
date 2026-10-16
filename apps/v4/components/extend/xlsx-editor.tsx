@@ -2,11 +2,14 @@
 
 import * as React from "react"
 import {
+  useXlsxFormulaAssist,
   useXlsxViewer,
   useXlsxViewerController,
   useXlsxViewerEditing,
+  useXlsxViewerPalette,
   useXlsxViewerSelection,
   useXlsxViewerZoom,
+  XlsxFormulaAssistPopup,
   XlsxViewer,
   XlsxViewerProvider,
   type XlsxCellAlignmentInput,
@@ -1357,6 +1360,13 @@ function EditorToolbar({
     useXlsxViewerZoom()
   const [formulaDraft, setFormulaDraft] = React.useState("")
   const [formulaFocused, setFormulaFocused] = React.useState(false)
+  const formulaInputRef = React.useRef<HTMLInputElement>(null)
+  const formulaAssist = useXlsxFormulaAssist(
+    formulaDraft,
+    setFormulaDraft,
+    formulaInputRef
+  )
+  const viewerPalette = useXlsxViewerPalette()
   const [fontFamily, setFontFamily] = React.useState(DEFAULT_FONT_FAMILY)
   const [fontSize, setFontSize] = React.useState(11)
   const [textColor, setTextColor] = React.useState(DEFAULT_TEXT_COLOR)
@@ -2368,7 +2378,7 @@ function EditorToolbar({
             </Select>
           </div>
         </ToolbarOverflow>
-        <div className="xlsx-editor-formula border-t bg-background px-2 py-1">
+        <div className="xlsx-editor-formula relative border-t bg-background px-2 py-1">
           <Group className="w-full">
             <Input
               className={cn(
@@ -2388,8 +2398,10 @@ function EditorToolbar({
                 "h-8 flex-1",
                 XLSX_EDITOR_FORMULA_INPUT_CHROME_CLASS
               )}
+              ref={formulaInputRef}
               disabled={!hasActiveCell || readOnly}
               value={formulaFocused ? formulaDraft : selectedCellInputValue}
+              onSelect={formulaAssist.onSelect}
               onBlur={() => {
                 commitFormula()
                 setFormulaFocused(false)
@@ -2402,6 +2414,7 @@ function EditorToolbar({
                 setFormulaFocused(true)
               }}
               onKeyDown={(event) => {
+                if (formulaAssist.handleKeyDown(event)) return
                 if (event.key === "Enter") {
                   event.preventDefault()
                   commitFormula()
@@ -2411,6 +2424,13 @@ function EditorToolbar({
               placeholder="Select a cell, then enter a value or formula"
             />
           </Group>
+          {formulaFocused ? (
+            <XlsxFormulaAssistPopup
+              palette={viewerPalette}
+              state={formulaAssist}
+              style={{ left: 140, marginTop: 4, top: "100%" }}
+            />
+          ) : null}
         </div>
       </TooltipProvider>
     </div>
@@ -2690,16 +2710,8 @@ export function XlsxEditorSurface({
   workbookIdentity: string
 }) {
   const { activeSheet, error } = useXlsxViewer()
-  const { activeCell, selectCell } = useXlsxViewerSelection()
+  const { activeCell } = useXlsxViewerSelection()
   const { addSheet, readOnly } = useXlsxViewerEditing()
-  // A sheet opens with A1 selected, as in Excel and Sheets, so the name box
-  // and formula bar always say where typing goes.
-  const activeSheetName = activeSheet?.name
-  React.useEffect(() => {
-    if (activeSheetName !== undefined && !activeCell) {
-      selectCell({ col: 0, row: 0 })
-    }
-  }, [activeCell, activeSheetName, selectCell])
   const toolbarRef = React.useRef<HTMLDivElement>(null)
   const toolbarHeight = useElementHeight(toolbarRef)
   const [commentTarget, setCommentTarget] =
