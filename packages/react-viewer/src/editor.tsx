@@ -1,3 +1,4 @@
+import { useSearchHighlights } from "./search-highlights";
 import { mathContent } from "./math-content";
 import { createClippedBodyRectReader } from "./body-measurement";
 import { tableRowHasWholeMergeGeometry } from "./table-row-measurement";
@@ -66,6 +67,8 @@ import {
   rejectAllRevisions as rejectAllRevisionsInModel,
   readParagraphMarkRevisions,
   rejectParagraphRevision,
+  replaceParagraphTextRange,
+  replaceParagraphTextTracked,
   replyToComment as replyToCommentInModel,
   setCommentResolved as setCommentResolvedInModel,
   splitParagraphChildrenAtTextOffsets,
@@ -3731,6 +3734,10 @@ export interface DocxTextRangeBoundary {
   offset: number;
 }
 
+export interface DocxFindOptions {
+  matchCase?: boolean;
+}
+
 export interface DocxTextRange {
   start: DocxTextRangeBoundary;
   end: DocxTextRangeBoundary;
@@ -4403,6 +4410,10 @@ export interface DocxParagraphTextCommit {
  * ```
  */
 export interface DocxEditorController {
+  /** Finds nonoverlapping literal matches in body and table paragraphs, in model order. */
+  findText: (query: string, options?: DocxFindOptions) => DocxTextRange[];
+  /** Replaces a snapshot of matches atomically, as one undo step. */
+  replaceText: (ranges: DocxTextRange[], text: string) => number;
   model: DocModel;
   documentLoadNonce: number;
   fileName: string;
@@ -4986,6 +4997,10 @@ export interface DocxEditorViewerProps {
    * If omitted, the internal virtualizer scrolls the page into view.
    */
   onRequestPageReveal?: (pageIndex: number) => void;
+  /** Model ranges to highlight on every mounted page. */
+  findMatches?: readonly DocxTextRange[];
+  /** Reveals and selects this match without taking focus from the find input. */
+  activeFindMatch?: DocxTextRange;
   /**
    * Overrides visual styles for heading levels.
    */
@@ -28122,7 +28137,7 @@ interface DocxReviewAnnotation {
   comment?: DocxComment;
 }
 
-function sameParagraphLocation(
+export function sameParagraphLocation(
   a: ParagraphLocation,
   b: ParagraphLocation
 ): boolean {
@@ -31017,6 +31032,104 @@ export function useDocxEditor(
       return outcome;
     },
     [annotationFailureStatus, dispatchEditorTransaction]
+  );
+
+  const findText = React.useCallback(
+    (query: string, options?: DocxFindOptions): DocxTextRange[] => {
+      if (!query) return [];
+      const expression = new RegExp(
+        query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        options?.matchCase ? "gu" : "giu"
+      );
+      const current = canonicalEditorStateRef.current.model;
+      const matches: DocxTextRange[] = [];
+      let location = firstParagraphLocationInDocument(current);
+      while (location) {
+        const paragraph = getParagraphAtLocation(current, location).paragraph;
+        if (paragraph) {
+          for (const match of paragraphText(paragraph).matchAll(expression)) {
+            matches.push({
+              start: { location, offset: match.index },
+              end: { location, offset: match.index + match[0].length },
+            });
+          }
+        }
+        location = nextParagraphLocation(current, location);
+      }
+      return matches;
+    },
+    [model]
+  );
+  const replaceText = React.useCallback(
+    (ranges: DocxTextRange[], text: string): number => {
+      const ordered = [...ranges].sort((a, b) => compareTextRangeBoundaries(a.start, b.start));
+      let replaced = 0;
+      const committed = dispatchEditorTransaction((current) => {
+        for (let index = 0; index < ordered.length; index += 1) {
+          const range = ordered[index]!;
+          const paragraph = getParagraphAtLocation(current.model, range.start.location).paragraph;
+          const previous = ordered[index - 1];
+          if (!paragraph || !sameParagraphLocation(range.start.location, range.end.location) ||
+              !Number.isInteger(range.start.offset) || !Number.isInteger(range.end.offset) ||
+              range.start.offset < 0 || range.end.offset <= range.start.offset ||
+              range.end.offset > paragraphText(paragraph).length ||
+              (previous && compareTextRangeBoundaries(previous.end, range.start) > 0)) {
+            return undefined;
+          }
+        }
+        let next = current.model;
+        const suggesting = suggestingViewerCountRef.current > 0;
+        const replacement = text.replace(/\r\n?/g, "\n");
+        for (const range of ordered.reverse()) {
+          const paragraph = getParagraphAtLocation(next, range.start.location).paragraph!;
+          const before = paragraphText(paragraph);
+          const after = before.slice(0, range.start.offset) + replacement + before.slice(range.end.offset);
+          if (before === after) continue;
+          let updated: ParagraphNode;
+          if (suggesting) {
+            // Keep the whole model in scope for globally unique revision IDs.
+            const nodeIndex = range.start.location.kind === "paragraph"
+              ? range.start.location.nodeIndex : next.nodes.length;
+            const tracked = replaceParagraphTextTracked(
+              nodeIndex === next.nodes.length ? { ...next, nodes: [...next.nodes, paragraph] } : next,
+              {
+                nodeIndex,
+                startOffset: range.start.offset,
+                endOffset: range.end.offset,
+                text: replacement,
+                author: authorRef.current,
+                date: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+              }
+            );
+            if (!tracked.ok) continue;
+            updated = tracked.model.nodes[nodeIndex] as ParagraphNode;
+          } else {
+            updated = replaceParagraphTextRange(paragraph, range.start.offset, range.end.offset, replacement);
+          }
+          if (paragraphText(updated) === before) continue;
+          next = copyModelForParagraphEdits(next, [range.start.location]);
+          const target = getParagraphAtLocation(next, range.start.location);
+          Object.assign(target.paragraph!, updated);
+          if (target.tableNode) {
+            target.tableNode.sourceXml = undefined;
+            target.tableNode.sourceTextPatches = undefined;
+          }
+          replaced += 1;
+        }
+        if (next === current.model) return undefined;
+        return {
+          model: next,
+          annotation: suggesting,
+          activeTextRange: undefined,
+          clearSelectedFormField: true,
+          status: `Replaced ${replaced} match${replaced === 1 ? "" : "es"}`,
+        };
+      });
+      // Find commands keep focus in the search controls after the transaction.
+      if (committed) setHistoryRestoreRequest(undefined);
+      return committed ? replaced : 0;
+    },
+    [dispatchEditorTransaction]
   );
 
   const applyModelChange = React.useCallback(
@@ -35326,6 +35439,8 @@ export function useDocxEditor(
   }, [syncPaginationInfo]);
 
   const controller: DocxEditorController = {
+    findText,
+    replaceText,
     model,
     documentLoadNonce,
     fileName,
@@ -38915,6 +39030,8 @@ export function DocxEditorViewer({
   pageIndexes,
   onPageCountChange,
   onRequestPageReveal,
+  findMatches,
+  activeFindMatch,
   headingStyles,
   showTrackedChanges,
   renderTrackedChangeCard,
@@ -42740,23 +42857,16 @@ export function DocxEditorViewer({
       pageCount,
     ]
   );
-  React.useEffect(() => {
-    const root = viewerRootRef.current;
-    if (!root) return;
-    const reveal = (event: Event) => {
-      const detail = (event as CustomEvent<{ nodeId: string; start?: number; end?: number }>).detail;
-      const nodeId = detail?.nodeId;
-      if (!nodeId) return;
-      const nodeIndex = editor.model.nodes.findIndex(node => node.blockId && (nodeId === node.blockId || nodeId.startsWith(`${node.blockId}/`)));
+  const revealSourceLocation = React.useCallback((
+    nodeIndex: number, rowIndex = Number.NaN, start?: number, end?: number, afterPageIndex = -1
+  ): number | undefined => {
       const sourceNode = editor.model.nodes[nodeIndex];
-      const suffix = sourceNode?.blockId ? nodeId.slice(sourceNode.blockId.length) : "";
-      const rowIndex = sourceNode?.type === "table" ? Number(/^\/row\/(\d+)/.exec(suffix)?.[1]) : Number.NaN;
-      let pageIndex = pageNodeSegmentsByPage.findIndex(segments => segments.some(segment =>
+      let pageIndex = pageNodeSegmentsByPage.findIndex((segments, index) => index > afterPageIndex && segments.some(segment =>
         segment.nodeIndex === nodeIndex && (!Number.isFinite(rowIndex) || !segment.tableRowRange ||
           rowIndex >= segment.tableRowRange.startRowIndex && rowIndex < segment.tableRowRange.endRowIndex)));
-      if (sourceNode?.type === "paragraph" && suffix === "" &&
-          Number.isInteger(detail.start) && Number.isInteger(detail.end) &&
-          detail.start! >= 0 && detail.end! > detail.start!) {
+      if (afterPageIndex < 0 && sourceNode?.type === "paragraph" &&
+          Number.isInteger(start) && Number.isInteger(end) &&
+          start! >= 0 && end! > start!) {
         const firstRange = pageNodeSegmentsByPage[pageIndex]?.find(segment => segment.nodeIndex === nodeIndex)?.paragraphLineRange;
         const source = firstRange ? buildParagraphPretextLayoutSource(sourceNode, { allowExplicitLineBreakText: true }, typography) : undefined;
         const layout = source && firstRange ? layoutParagraphPretextSource(
@@ -42770,18 +42880,47 @@ export function DocxEditorViewer({
             if (segment.nodeIndex !== nodeIndex || !segment.paragraphLineRange) return false;
             const range = segment.paragraphLineRange;
             return layout.lines.slice(range.startLineIndex, range.endLineIndex).some(line => line.fragments.some(fragment =>
-              pretextBlockTextOffset(source, fragment.startOffset) < detail.end! &&
-              pretextBlockTextOffset(source, fragment.endOffset) > detail.start!
+              pretextBlockTextOffset(source, fragment.startOffset) < end! &&
+              pretextBlockTextOffset(source, fragment.endOffset) > start!
             ));
           }));
           if (rangePageIndex >= 0) pageIndex = rangePageIndex;
         }
       }
-      if (pageIndex >= 0) requestPageReveal(pageIndex);
+      if (pageIndex < 0) return undefined;
+      requestPageReveal(pageIndex);
+      return pageIndex;
+  }, [editor.model, pageNodeSegmentsByPage, requestPageReveal, pageContentWidthPxByNodeIndex, documentLayout, docGridLinePitchPxByNodeIndex, typography]);
+  useSearchHighlights({
+    rootRef: viewerRootRef,
+    matches: findMatches,
+    activeMatch: activeFindMatch,
+    revealMatch: (match, afterPageIndex) => revealSourceLocation(
+      nodeIndexFromParagraphLocation(match.start.location),
+      match.start.location.kind === "table-cell" ? match.start.location.rowIndex : undefined,
+      match.start.offset,
+      match.end.offset,
+      afterPageIndex
+    ),
+    selectMatch: editor.setActiveTextRange,
+    ignoredContent: NON_TEXT_CONTENT_SELECTOR,
+  });
+  React.useEffect(() => {
+    const root = viewerRootRef.current;
+    if (!root) return;
+    const reveal = (event: Event) => {
+      const detail = (event as CustomEvent<{ nodeId: string; start?: number; end?: number }>).detail;
+      const nodeId = detail?.nodeId;
+      if (!nodeId) return;
+      const nodeIndex = editor.model.nodes.findIndex(node => node.blockId && (nodeId === node.blockId || nodeId.startsWith(`${node.blockId}/`)));
+      const sourceNode = editor.model.nodes[nodeIndex];
+      const suffix = sourceNode?.blockId ? nodeId.slice(sourceNode.blockId.length) : "";
+      const rowIndex = sourceNode?.type === "table" ? Number(/^\/row\/(\d+)/.exec(suffix)?.[1]) : Number.NaN;
+      revealSourceLocation(nodeIndex, rowIndex, suffix === "" ? detail.start : undefined, suffix === "" ? detail.end : undefined);
     };
     root.addEventListener("docx-reveal-source", reveal);
     return () => root.removeEventListener("docx-reveal-source", reveal);
-  }, [editor.model, pageNodeSegmentsByPage, requestPageReveal, pageContentWidthPxByNodeIndex, documentLayout, docGridLinePitchPxByNodeIndex, typography]);
+  }, [editor.model, revealSourceLocation]);
 
   const scrollToBookmark = React.useCallback(
     (bookmarkName: string): boolean => {

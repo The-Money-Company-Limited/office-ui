@@ -42,6 +42,7 @@ import {
   insertionIndexAt,
   textItemOffsets,
   visibleText,
+  type ParagraphSource,
   type SourceItem,
 } from "./paragraph-source";
 
@@ -421,11 +422,26 @@ function annotatedParagraphWithText(
   const current = visibleText(parsed.items);
   const prefix = commonPrefixLength(current, text);
   const suffix = commonSuffixLength(current, text, prefix);
-  const start = prefix;
-  const end = current.length - suffix;
-  const insertedText = text.slice(prefix, text.length - suffix);
+  return paragraphWithTextRange(
+    source,
+    parsed,
+    prefix,
+    current.length - suffix,
+    text.slice(prefix, text.length - suffix),
+    prefix
+  );
+}
+
+function paragraphWithTextRange(
+  source: ParagraphNode,
+  parsed: ParagraphSource,
+  start: number,
+  end: number,
+  insertedText: string,
+  anchorOffset: number
+): ParagraphNode {
   const items = splitItemsAt(splitItemsAt(parsed.items, start), end);
-  const anchor = formattingAnchorAt(items, start);
+  const anchor = formattingAnchorAt(items, anchorOffset);
   const insertAt = insertionIndexAt(items, start);
   const inserted: SourceItem[] =
     insertedText && anchor
@@ -466,6 +482,47 @@ function annotatedParagraphWithText(
     next.push(...inserted);
   }
   return paragraphWithSource(source, { ...parsed, items: next });
+}
+
+/** Replaces the given offsets without inferring a range from repeated text. */
+export function replaceParagraphTextRange(
+  source: ParagraphNode,
+  start: number,
+  end: number,
+  text: string
+): ParagraphNode {
+  const before = textRuns(source).map(run => run.text).join("");
+  if (
+    !Number.isInteger(start) || !Number.isInteger(end) ||
+    start < 0 || end <= start || end > before.length
+  ) return source;
+  const after = before.slice(0, start) + text + before.slice(end);
+  if (before === after || paragraphTextEditIsFailClosed(source, after)) return source;
+  const parsed = paragraphSourceForModel(source);
+  if (parsed) return paragraphWithTextRange(source, parsed, start, end, text, start + 1);
+
+  const children: ParagraphNode["children"] = [];
+  let offset = 0;
+  for (const child of source.children) {
+    if (child.type !== "text") {
+      children.push(child);
+      continue;
+    }
+    const childStart = offset;
+    offset += child.text.length;
+    if (offset <= start || childStart >= end) {
+      children.push(child);
+      continue;
+    }
+    const prefix = child.text.slice(0, Math.max(0, start - childStart));
+    const suffix = child.text.slice(Math.max(0, end - childStart));
+    const replacement = childStart <= start ? text : "";
+    if (prefix || replacement || suffix) {
+      children.push({ ...child, text: prefix + replacement + suffix });
+    }
+  }
+  if (!children.length) children.push({ type: "text", text: "" });
+  return { ...source, children, sourceXml: undefined, sourceTextPatch: undefined };
 }
 
 function updatedParagraphNodeText(
