@@ -2770,14 +2770,16 @@ export function XlsxEditorSurface({
   return (
     <div
       className={cn(
+        // As wide as the sheet, so the toolbar and sheet tabs can stay at
+        // the window's left edge while the page scrolls sideways.
         scrollsWindow
-          ? "xlsx-editor-surface flex min-h-dvh flex-col bg-background"
+          ? "xlsx-editor-surface flex min-h-dvh w-max min-w-full flex-col bg-background"
           : "xlsx-editor-surface flex h-[640px] min-h-0 flex-col overflow-hidden bg-background",
         className
       )}
     >
       {scrollsWindow ? (
-        <div ref={toolbarRef} className="sticky top-0 z-30">
+        <div ref={toolbarRef} className="sticky top-0 left-0 z-30 w-screen">
           {toolbar}
         </div>
       ) : (
@@ -2838,7 +2840,9 @@ export function XlsxEditorSurface({
           ) : null}
         </div>
         {scrollsWindow ? (
-          <div className="sticky bottom-0 z-30 bg-background">{sheetTabs}</div>
+          <div className="sticky bottom-0 left-0 z-30 w-screen bg-background">
+            {sheetTabs}
+          </div>
         ) : (
           sheetTabs
         )}
