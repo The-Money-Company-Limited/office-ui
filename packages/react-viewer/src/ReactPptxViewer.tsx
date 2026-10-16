@@ -15,6 +15,7 @@ import { PptxFontManager } from './fonts';
 import { NormalizedPresentationViewer } from './normalized-viewer';
 import { parsePresentation } from './parse';
 import { performanceMeasurement, performanceNow } from './performance';
+import { isWindowScroller } from './scroll-target';
 import type {
   ParsedPresentation,
   PptxViewerController,
@@ -163,7 +164,9 @@ async function createAdapter(
     },
   };
 
-  const normalized = new NormalizedPresentationViewer(target, parsed.document, callbacks);
+  const normalized = new NormalizedPresentationViewer(target, parsed.document, callbacks, {
+    slideIdPrefix: props.slideIdPrefix ?? '',
+  });
   return {
     async render(mode, slideIndex) {
       const startedAt = performanceNow();
@@ -280,6 +283,7 @@ export const ReactPptxViewer = forwardRef<PptxViewerController, ReactPptxViewerP
       width,
       height,
       virtualization,
+      slideIdPrefix,
       fonts,
       parseOptions,
       renderLoading,
@@ -331,6 +335,11 @@ export const ReactPptxViewer = forwardRef<PptxViewerController, ReactPptxViewerP
     const overscanViewport = virtualizationOptions.overscanViewport ?? 1.5;
     const batchSize = virtualizationOptions.batchSize ?? 3;
     const scrollElement = virtualizationOptions.scrollElement ?? null;
+    const scrollOwner = !scrollElement
+      ? 'internal'
+      : isWindowScroller(scrollElement)
+        ? 'window'
+        : 'external';
     const parseFormatHint = parseOptions?.formatHint;
     const parseMaxInputBytes = parseOptions?.maxInputBytes;
     const parseFetchInit = parseOptions?.fetchInit;
@@ -603,6 +612,7 @@ export const ReactPptxViewer = forwardRef<PptxViewerController, ReactPptxViewerP
       overscanViewport,
       batchSize,
       scrollElement,
+      slideIdPrefix,
       publishZoomChange,
     ]);
 
@@ -658,7 +668,7 @@ export const ReactPptxViewer = forwardRef<PptxViewerController, ReactPptxViewerP
         {...divProps}
         className={['rpv-root', className].filter(Boolean).join(' ')}
         style={{ ...viewerShellStyle(height), ...(width !== undefined ? { width } : {}), ...style }}
-        data-rpv-scroll-owner={scrollElement ? 'external' : 'internal'}
+        data-rpv-scroll-owner={scrollOwner}
       >
         {showToolbar && parsed ? (
           <div
@@ -776,7 +786,7 @@ export const ReactPptxViewer = forwardRef<PptxViewerController, ReactPptxViewerP
               className={['rpv-viewport', viewportClassName].filter(Boolean).join(' ')}
               style={viewportStyle}
               data-testid="pptx-viewport"
-              data-rpv-scroll-owner={scrollElement ? 'external' : 'internal'}
+              data-rpv-scroll-owner={scrollOwner}
               aria-live="polite"
             />
             {showSlideLabels && parsed ? (

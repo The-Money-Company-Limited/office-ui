@@ -176,6 +176,19 @@ return (
 );
 ```
 
+To scroll with the page itself, pass `window` (or `document.scrollingElement`). Slides then
+virtualize against `window.scrollY` and the window size, and fit-width follows the viewer's own
+width. No ancestor of the viewer may clip or scroll (`overflow: hidden`, `auto` or `scroll`), or
+the page never scrolls the slides.
+
+```tsx
+<ReactPptxViewer source={file} virtualization={{ scrollElement: window }} />
+```
+
+Each main-view slide wrapper (`[data-rpv-slide-wrapper]`) has the stable id
+`${slideIdPrefix}slide-${n}`, with `n` counted from 1 (`slide-1`, `slide-2`, …). Give each viewer
+on one page its own `slideIdPrefix` (characters `[A-Za-z0-9_-]`). Thumbnails carry no id.
+
 `usePptxPresentation` (`usePptxModel` alias) separates parsing from rendering, while
 `usePptxViewer` exposes the reactive navigation/search/zoom controller. `onViewportReady`
 provides the internal slide surface for advanced integrations and test harnesses.

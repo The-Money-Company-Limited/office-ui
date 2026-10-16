@@ -79,6 +79,84 @@ describe('normalized viewer scrolling', () => {
     container.remove();
   });
 
+  it('scrolls with the window and fits width to the viewer, not the window', async () => {
+    for (const scrollElement of [window, document.documentElement]) {
+      const container = document.createElement('div');
+      document.body.append(container);
+      Object.defineProperty(container, 'clientWidth', { configurable: true, value: 480 });
+      // jsdom lays nothing out; give the page room to scroll.
+      vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockReturnValue(10_000);
+      let scrollY = 0;
+      vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => scrollY);
+      const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(((
+        options: ScrollToOptions,
+      ) => {
+        scrollY = options.top ?? scrollY;
+      }) as typeof window.scrollTo);
+      const windowListeners: string[] = [];
+      const addEventListener = window.addEventListener.bind(window);
+      vi.spyOn(window, 'addEventListener').mockImplementation(((
+        type: string,
+        ...rest: [never, never?]
+      ) => {
+        windowListeners.push(type);
+        return addEventListener(type, ...rest);
+      }) as typeof window.addEventListener);
+      const viewer = new NormalizedPresentationViewer(container, presentationWithSlides(6));
+
+      await viewer.setZoom('fit-width');
+      await viewer.renderList({ enabled: true, scrollElement });
+
+      expect(windowListeners).toEqual(expect.arrayContaining(['scroll', 'resize']));
+      // 960px natural width fits the 480px viewer, not the 1024px window.
+      expect(viewer.resolvedZoomPercent).toBe(50);
+      // Slides are 360px tall with a 24px gap (stride 384px); slide 2 has the
+      // largest overlap with the 768px-tall window.
+      scrollY = 2 * 384 - 40;
+      window.dispatchEvent(new Event('scroll'));
+      await Promise.resolve();
+      expect(viewer.currentSlideIndex).toBe(2);
+
+      await viewer.goToSlide(4);
+      expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 4 * 384 }));
+      expect(scrollY).toBe(4 * 384);
+      viewer.destroy();
+      container.remove();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('gives main-view slide wrappers stable prefixed ids and thumbnails none', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const viewer = new NormalizedPresentationViewer(
+      container,
+      presentationWithSlides(2),
+      {},
+      { slideIdPrefix: 'deck-' },
+    );
+
+    await viewer.renderList({ enabled: false });
+    expect(
+      [...container.querySelectorAll('[data-rpv-slide-wrapper]')].map((wrapper) => wrapper.id),
+    ).toEqual(['deck-slide-1', 'deck-slide-2']);
+
+    const thumbnail = document.createElement('div');
+    viewer.renderThumbnailToContainer(1, thumbnail);
+    expect(thumbnail.querySelector('[data-rpv-slide-wrapper]')?.id).toBe('');
+
+    await viewer.renderSlide(1);
+    expect(container.querySelector('[data-rpv-slide-wrapper]')?.id).toBe('deck-slide-2');
+    viewer.destroy();
+    container.remove();
+
+    const plain = document.createElement('div');
+    const plainViewer = new NormalizedPresentationViewer(plain, presentationWithSlides(1));
+    await plainViewer.renderSlide(0);
+    expect(plain.querySelector('[data-rpv-slide-wrapper]')?.id).toBe('slide-1');
+    plainViewer.destroy();
+  });
+
   it('resolves responsive zoom from external and viewer content-box padding', async () => {
     const hostScrollArea = document.createElement('div');
     const container = document.createElement('div');

@@ -22,6 +22,7 @@ import type {
 import { Virtualizer } from '@tanstack/virtual-core';
 import { OFFICE_FONT_FALLBACKS } from './fonts';
 import { renderEmfToDataUrl, renderWmfToDataUrl } from './metafile-renderer';
+import { createScrollTarget, type ScrollTarget } from './scroll-target';
 import {
   MAX_VIEWER_ZOOM,
   MIN_VIEWER_ZOOM,
@@ -49,6 +50,11 @@ interface NormalizedViewerCallbacks {
   onSlideRendered?: (index: number, element: HTMLElement) => void;
   onSlideUnmounted?: (index: number) => void;
   onNodeError?: (nodeId: string, error: unknown) => void;
+}
+
+interface NormalizedViewerOptions {
+  /** Prepended to each main-view slide wrapper id (`${prefix}slide-${n}`). */
+  slideIdPrefix?: string;
 }
 
 interface DisposableHandle {
@@ -845,8 +851,8 @@ export class NormalizedPresentationViewer {
   private zoomLevel: ViewerZoomLevel = 'automatic';
   private resolvedZoom = 100;
   private readonly assetCache: PresentationAssetCache;
-  private resizeObserver: ResizeObserver | undefined;
-  private activeViewport: HTMLElement | undefined;
+  private stopObservingViewport: (() => void) | undefined;
+  private activeViewport: ScrollTarget | undefined;
   private listCleanup: (() => void) | undefined;
   private highlight: HTMLElement | undefined;
   private activeMountResources: Set<Promise<void>> | undefined;
@@ -867,6 +873,7 @@ export class NormalizedPresentationViewer {
     private readonly container: HTMLElement,
     readonly presentation: PresentationDocument,
     private readonly callbacks: NormalizedViewerCallbacks = {},
+    private readonly options: NormalizedViewerOptions = {},
   ) {
     this.assetCache = acquirePresentationAssetCache(presentation);
   }
@@ -900,15 +907,22 @@ export class NormalizedPresentationViewer {
     return Number.isFinite(height) && height > 0 ? height : 1;
   }
 
-  private viewportSize(viewport: HTMLElement): { width: number; height: number } {
-    const rect = viewport.getBoundingClientRect();
-    let width = viewport.clientWidth || rect.width;
-    let height = viewport.clientHeight || rect.height;
+  private viewportSize(viewport: ScrollTarget): { width: number; height: number } {
+    const rect = viewport.rect();
+    const client = viewport.clientSize();
+    // The window spans more than the viewer, so fit-width follows the list
+    // container's width while fit-page still uses the window's height.
+    let width = viewport.element
+      ? client.width || rect.width
+      : this.container.clientWidth || this.container.getBoundingClientRect().width;
+    let height = client.height || rect.height;
     if (typeof getComputedStyle === 'function') {
-      const viewportStyle = getComputedStyle(viewport);
-      width -= pixelValue(viewportStyle.paddingLeft) + pixelValue(viewportStyle.paddingRight);
-      height -= pixelValue(viewportStyle.paddingTop) + pixelValue(viewportStyle.paddingBottom);
-      if (viewport !== this.container) {
+      if (viewport.element) {
+        const viewportStyle = getComputedStyle(viewport.element);
+        width -= pixelValue(viewportStyle.paddingLeft) + pixelValue(viewportStyle.paddingRight);
+        height -= pixelValue(viewportStyle.paddingTop) + pixelValue(viewportStyle.paddingBottom);
+      }
+      if (viewport.element !== this.container) {
         const containerStyle = getComputedStyle(this.container);
         width -= pixelValue(containerStyle.paddingLeft) + pixelValue(containerStyle.paddingRight);
         height -= pixelValue(containerStyle.paddingTop) + pixelValue(containerStyle.paddingBottom);
@@ -917,7 +931,10 @@ export class NormalizedPresentationViewer {
     return { width: Math.max(0, width), height: Math.max(0, height) };
   }
 
-  resolveZoom(level: ViewerZoomLevel, viewport = this.activeViewport ?? this.container): number {
+  resolveZoom(
+    level: ViewerZoomLevel,
+    viewport = this.activeViewport ?? createScrollTarget(this.container),
+  ): number {
     const size = this.viewportSize(viewport);
     return resolveViewerZoom(
       level,
@@ -928,7 +945,7 @@ export class NormalizedPresentationViewer {
     );
   }
 
-  private scaleForViewport(viewport: HTMLElement): number {
+  private scaleForViewport(viewport: ScrollTarget): number {
     return this.resolveZoom(this.zoomLevel, viewport) / 100;
   }
 
@@ -945,18 +962,14 @@ export class NormalizedPresentationViewer {
     this.callbacks.onZoomChange?.(state);
   }
 
-  private observeViewport(viewport: HTMLElement): void {
-    if (this.activeViewport === viewport && this.resizeObserver) return;
-    this.resizeObserver?.disconnect();
-    this.resizeObserver = undefined;
+  private observeViewport(viewport: ScrollTarget): void {
+    if (this.activeViewport?.scroller === viewport.scroller && this.stopObservingViewport) return;
+    this.stopObservingViewport?.();
     this.activeViewport = viewport;
-    if (typeof ResizeObserver === 'undefined') return;
-    this.resizeObserver = new ResizeObserver(() => {
+    this.stopObservingViewport = viewport.onResize(this.container, () => {
       if (this.destroyed || typeof this.zoomLevel === 'number') return;
       void this.updateRenderedScale();
     });
-    this.resizeObserver.observe(viewport);
-    if (viewport !== this.container) this.resizeObserver.observe(this.container);
   }
 
   private isRenderActive(generation: number): boolean {
@@ -969,8 +982,8 @@ export class NormalizedPresentationViewer {
     this.navigationGeneration += 1;
     this.listCleanup?.();
     this.listCleanup = undefined;
-    this.resizeObserver?.disconnect();
-    this.resizeObserver = undefined;
+    this.stopObservingViewport?.();
+    this.stopObservingViewport = undefined;
     this.activeViewport = undefined;
     this.listState = undefined;
     this.clearSearchHighlights();
@@ -1582,7 +1595,17 @@ export class NormalizedPresentationViewer {
     };
   }
 
-  private mount(index: number, target: HTMLElement, scale?: number): DisposableHandle {
+  /** Stable 1-based element id of a main-view slide wrapper; thumbnails have none. */
+  private slideElementId(index: number): string {
+    return `${this.options.slideIdPrefix ?? ''}slide-${index + 1}`;
+  }
+
+  private mount(
+    index: number,
+    target: HTMLElement,
+    scale: number | undefined,
+    elementId?: string,
+  ): DisposableHandle {
     if (this.destroyed) return this.emptyHandle(target);
     this.handlesByTarget.get(target)?.dispose();
     const resources = new Set<Promise<void>>();
@@ -1594,9 +1617,10 @@ export class NormalizedPresentationViewer {
     } finally {
       this.activeMountResources = previousResources;
     }
-    const effectiveScale = scale ?? this.scaleForViewport(target);
+    const effectiveScale = scale ?? this.scaleForViewport(createScrollTarget(target));
     const wrapper = document.createElement('div');
     wrapper.dataset.rpvSlideWrapper = String(index);
+    if (elementId) wrapper.id = elementId;
     wrapper.style.position = 'relative';
     wrapper.style.margin = '0 auto';
     slide.style.transformOrigin = 'top left';
@@ -1699,17 +1723,23 @@ export class NormalizedPresentationViewer {
     this.renderState = { mode: 'single' };
     const generation = this.beginRender();
     if (generation === undefined) return;
-    this.observeViewport(this.container);
+    const viewport = createScrollTarget(this.container);
+    this.observeViewport(viewport);
     this.current = Math.max(0, Math.min(this.slideCount - 1, index));
     this.disposeContainerSlides();
     this.container.replaceChildren();
     if (this.slideCount === 0) return;
-    const handle = this.mount(this.current, this.container);
+    const handle = this.mount(
+      this.current,
+      this.container,
+      undefined,
+      this.slideElementId(this.current),
+    );
     await handle.ready;
     if (!this.isRenderActive(generation) || this.handlesByTarget.get(this.container) !== handle) {
       return;
     }
-    this.publishZoom(this.scaleForViewport(this.container) * 100);
+    this.publishZoom(this.scaleForViewport(viewport) * 100);
     this.notifySlideChange(this.current);
   }
 
@@ -1728,7 +1758,7 @@ export class NormalizedPresentationViewer {
       if (!isActive()) return Promise.resolve();
       if (handle) return handle.ready;
       if (mountPromise) return mountPromise;
-      const nextHandle = this.mount(index, item, effectiveScale);
+      const nextHandle = this.mount(index, item, effectiveScale, this.slideElementId(index));
       handle = nextHandle;
       const pending = nextHandle.ready
         .then(() => {
@@ -1780,7 +1810,7 @@ export class NormalizedPresentationViewer {
       0,
       Math.min(this.slideCount - 1, options.initialSlideIndex ?? this.current),
     );
-    const scroller = options.scrollElement ?? this.container;
+    const scroller = createScrollTarget(options.scrollElement ?? this.container);
     this.observeViewport(scroller);
     let effectiveScale = this.scaleForViewport(scroller);
     let slideHeight = this.naturalSlideHeight * effectiveScale;
@@ -1800,16 +1830,14 @@ export class NormalizedPresentationViewer {
       state.updateScale = () => {
         if (!this.isRenderActive(generation) || this.listState !== state) return;
         const previousScale = effectiveScale;
-        const previousScrollLeft = scroller.scrollLeft;
+        const previousScrollLeft = scroller.getLeft();
         const previousStride = itemStride;
         const previousSlideHeight = slideHeight;
         const listStart =
-          scroller === this.container
+          scroller.element === this.container
             ? 0
-            : this.container.getBoundingClientRect().top -
-              scroller.getBoundingClientRect().top +
-              scroller.scrollTop;
-        const listOffset = scroller.scrollTop - listStart;
+            : this.container.getBoundingClientRect().top - scroller.clientTop() + scroller.getTop();
+        const listOffset = scroller.getTop() - listStart;
         const anchorIndex = Math.max(
           0,
           Math.min(this.slideCount - 1, Math.floor(listOffset / previousStride)),
@@ -1823,7 +1851,7 @@ export class NormalizedPresentationViewer {
           placeholder.setScale(effectiveScale);
         });
         if (previousScale > 0 && previousScrollLeft > 0) {
-          scroller.scrollLeft = previousScrollLeft * (effectiveScale / previousScale);
+          scroller.setLeft(previousScrollLeft * (effectiveScale / previousScale));
         }
         this.publishZoom(effectiveScale * 100);
         // Resizing content that is entirely below an external viewport must
@@ -1834,7 +1862,7 @@ export class NormalizedPresentationViewer {
           previousSlideHeight,
           slideHeight,
         );
-        scroller.scrollTop = Math.max(0, listStart + anchorIndex * itemStride + nextAnchorOffset);
+        scroller.setTop(Math.max(0, listStart + anchorIndex * itemStride + nextAnchorOffset));
       };
       this.listState = state;
       await this.mountInBatches(
@@ -1903,11 +1931,10 @@ export class NormalizedPresentationViewer {
     };
 
     const measureViewportRect = () => {
-      const rect = scroller.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) return { width: rect.width, height: rect.height };
-      if (scroller.clientHeight > 0) {
-        return { width: scroller.clientWidth, height: scroller.clientHeight };
-      }
+      const rect = scroller.rect();
+      if (rect.width > 0 && rect.height > 0) return rect;
+      const client = scroller.clientSize();
+      if (client.height > 0) return client;
       return { ...FALLBACK_VIEWPORT_RECT };
     };
     const initialRect = measureViewportRect();
@@ -1918,7 +1945,7 @@ export class NormalizedPresentationViewer {
     // Content rendered above the slide list (inside the same scroller) offsets
     // every virtual position; re-measured whenever the layout settles.
     const measureScrollMargin = () =>
-      sizer.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      sizer.getBoundingClientRect().top - scroller.clientTop() + scroller.getTop();
     let scrollMargin = measureScrollMargin();
     // When the container is still collapsed while the document loads, the
     // initial alignment lands wrong; repeat it once real layout arrives as
@@ -1927,14 +1954,10 @@ export class NormalizedPresentationViewer {
     let lastProgrammaticTop: number | undefined;
     const writeScrollTop = (top: number, behavior?: ScrollBehavior): void => {
       lastProgrammaticTop = top;
-      if (typeof scroller.scrollTo === 'function') {
-        scroller.scrollTo(behavior ? { top, behavior } : { top });
-      } else {
-        scroller.scrollTop = top;
-      }
+      scroller.scrollTo(top, behavior);
     };
 
-    const reconcile = (instance: Virtualizer<HTMLElement, HTMLElement>): void => {
+    const reconcile = (instance: Virtualizer<HTMLElement | Window, HTMLElement>): void => {
       if (!isActive()) return;
       const windowed = new Set(instance.getVirtualItems().map((item) => item.index));
       virtualWindow = windowed;
@@ -1968,9 +1991,9 @@ export class NormalizedPresentationViewer {
       }
     };
 
-    const virtualizer = new Virtualizer<HTMLElement, HTMLElement>({
+    const virtualizer = new Virtualizer<HTMLElement | Window, HTMLElement>({
       count: this.slideCount,
-      getScrollElement: () => scroller,
+      getScrollElement: () => scroller.scroller,
       estimateSize: () => slideHeight,
       gap: LIST_ITEM_GAP,
       overscan,
@@ -1986,26 +2009,21 @@ export class NormalizedPresentationViewer {
             instance.setOptions({ ...instance.options, scrollMargin: nextMargin });
             instance.measure();
           }
-          if (needsSettleAlignment && scroller.clientHeight > 0) {
+          if (needsSettleAlignment && scroller.clientSize().height > 0) {
             needsSettleAlignment = false;
+            const top = scroller.getTop();
             const undisturbed =
-              scroller.scrollTop === 0 ||
-              (lastProgrammaticTop !== undefined &&
-                Math.abs(scroller.scrollTop - lastProgrammaticTop) <= 2);
+              top === 0 ||
+              (lastProgrammaticTop !== undefined && Math.abs(top - lastProgrammaticTop) <= 2);
             if (undisturbed) state.scrollToIndex?.(initialIndex);
           }
         };
         publish();
-        if (typeof ResizeObserver === 'undefined') return;
-        const observer = new ResizeObserver(publish);
-        observer.observe(scroller);
-        return () => observer.disconnect();
+        return scroller.onResize(this.container, publish);
       },
       observeElementOffset: (_instance, callback) => {
-        const onScroll = () => callback(scroller.scrollTop, true);
-        callback(scroller.scrollTop, false);
-        scroller.addEventListener('scroll', onScroll, { passive: true });
-        return () => scroller.removeEventListener('scroll', onScroll);
+        callback(scroller.getTop(), false);
+        return scroller.onScroll(() => callback(scroller.getTop(), true));
       },
       scrollToFn: (offset, { adjustments, behavior }) => {
         const top = offset + (adjustments ?? 0);
@@ -2030,11 +2048,11 @@ export class NormalizedPresentationViewer {
     state.updateScale = () => {
       if (!isActive()) return;
       const previousScale = effectiveScale;
-      const previousScrollLeft = scroller.scrollLeft;
+      const previousScrollLeft = scroller.getLeft();
       const previousStride = itemStride;
       const previousSlideHeight = slideHeight;
       const anchorIndex = this.current;
-      const observedScrollTop = virtualizer.scrollOffset ?? scroller.scrollTop;
+      const observedScrollTop = virtualizer.scrollOffset ?? scroller.getTop();
       const observedIndex = Math.floor((observedScrollTop - scrollMargin) / previousStride);
       const intendedIndex =
         lastProgrammaticTop === undefined
@@ -2062,7 +2080,7 @@ export class NormalizedPresentationViewer {
         placeholder.setScale(effectiveScale);
       });
       if (previousScale > 0 && previousScrollLeft > 0) {
-        scroller.scrollLeft = previousScrollLeft * (effectiveScale / previousScale);
+        scroller.setLeft(previousScrollLeft * (effectiveScale / previousScale));
       }
 
       const nextAnchorOffset = scaleListAnchorOffset(
@@ -2157,15 +2175,15 @@ export class NormalizedPresentationViewer {
     } else if (this.renderState) {
       const handle = this.handlesByTarget.get(this.container);
       if (handle) {
-        const viewport = this.activeViewport ?? this.container;
+        const viewport = this.activeViewport ?? createScrollTarget(this.container);
         const previousScale = this.resolvedZoom / 100;
-        const previousScrollTop = viewport.scrollTop;
-        const previousScrollLeft = viewport.scrollLeft;
+        const previousScrollTop = viewport.getTop();
+        const previousScrollLeft = viewport.getLeft();
         const nextScale = this.scaleForViewport(viewport);
         handle.setScale(nextScale);
         if (previousScale > 0) {
-          viewport.scrollTop = previousScrollTop * (nextScale / previousScale);
-          viewport.scrollLeft = previousScrollLeft * (nextScale / previousScale);
+          viewport.setTop(previousScrollTop * (nextScale / previousScale));
+          viewport.setLeft(previousScrollLeft * (nextScale / previousScale));
         }
         this.publishZoom(nextScale * 100);
       } else await this.renderSlide(this.current);
@@ -2275,8 +2293,8 @@ export class NormalizedPresentationViewer {
     this.navigationGeneration += 1;
     this.listCleanup?.();
     this.listCleanup = undefined;
-    this.resizeObserver?.disconnect();
-    this.resizeObserver = undefined;
+    this.stopObservingViewport?.();
+    this.stopObservingViewport = undefined;
     this.activeViewport = undefined;
     this.listState = undefined;
     this.clearSearchHighlights();

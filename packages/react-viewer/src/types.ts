@@ -73,9 +73,13 @@ export interface VirtualizationOptions {
   batchSize?: number;
   /**
    * Scroll viewport owned by the host application. Pass the viewport element
-   * from Radix, Base UI, coss, or another custom scroll-area implementation.
+   * from Radix, Base UI, coss, or another custom scroll-area implementation,
+   * or `window` (equivalently `document.scrollingElement`) to scroll the page
+   * itself. With the window, no ancestor of the viewer may clip or scroll
+   * (`overflow: hidden | auto | scroll`) and fit-width follows the viewer's
+   * width.
    */
-  scrollElement?: HTMLElement | null;
+  scrollElement?: HTMLElement | Window | null;
 }
 
 export interface PptxFontSource {
@@ -324,6 +328,13 @@ export interface ReactPptxViewerProps extends Omit<
   showDiagnostics?: boolean;
   showSlideLabels?: boolean;
   virtualization?: boolean | VirtualizationOptions;
+  /**
+   * Prefix for the stable id of each main-view slide wrapper,
+   * `${slideIdPrefix}slide-${n}` with `n` 1-based (default `''`, giving
+   * `slide-1`). Give each viewer on one page its own prefix. Use only
+   * `[A-Za-z0-9_-]`. Thumbnails carry no id.
+   */
+  slideIdPrefix?: string;
   /** Font loading, substitution, and missing-font diagnostics. */
   fonts?: PptxFontOptions;
   parseOptions?: ParsePresentationOptions;
