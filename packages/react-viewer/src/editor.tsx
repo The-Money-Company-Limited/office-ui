@@ -12,6 +12,7 @@ import {
   type TextareaInputHint,
 } from "./wrapped-textarea";
 import { startObjectDrag, type ObjectDragFrame } from "./pointer-drag";
+import { usePageVirtualizer, useWindowPageVirtualizer } from "./page-virtualizer";
 import {
   type ViewerZoomBridge,
   type ViewerZoomLevel,
@@ -21,7 +22,6 @@ import {
 } from "./viewer-zoom";
 import { copyModelForParagraphEdits, imageDropPositionAtTextOffset, insertImageAtDropPosition } from "./image-drop";
 import { renderToStaticMarkup } from "react-dom/server";
-import { useVirtualizer, useWindowVirtualizer } from "@tanstack/react-virtual";
 import {
   allocateBlockId,
   bodyParagraphIds,
@@ -41564,7 +41564,7 @@ export function DocxEditorViewer({
     paginationMeasurementSuspendUntilRef.current =
       Date.now() + PAGE_SCROLL_MEASUREMENT_SUSPEND_MS;
   }, []);
-  const internalElementPageVirtualizer = useVirtualizer({
+  const internalElementPageVirtualizer = usePageVirtualizer({
     count: Math.max(1, pageCount),
     getScrollElement: () =>
       internalElementPageVirtualizationEnabled
@@ -41573,7 +41573,7 @@ export function DocxEditorViewer({
     estimateSize: estimateVirtualPageSize,
     overscan: pageVirtualizationOverscan,
   });
-  const internalWindowPageVirtualizer = useWindowVirtualizer({
+  const internalWindowPageVirtualizer = useWindowPageVirtualizer({
     count: Math.max(1, pageCount),
     getScrollElement: () =>
       internalWindowPageVirtualizationEnabled && typeof window !== "undefined"
