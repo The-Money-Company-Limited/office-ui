@@ -35,9 +35,9 @@ against the published demos. Status: ✅ works, 🔧 fixed (commit), ❌ missing
 | Cmd+B/I/U | 🔧 react-docx `Cmd/Ctrl+B, I and U format the selection` |
 | Cmd+K link | 🔧 office-ui |
 | Cmd+Z undo, Cmd+A select all | ✅ |
-| `- `, `* `, `1. ` at a line start begin a list | ❌ |
-| Tab / Shift+Tab change list level | unchecked |
-| Cmd+F find | unchecked |
+| `- `, `* `, `1. ` at a line start begin a list | 🔧 react-docx (COD-1457) |
+| Tab / Shift+Tab change list level; Enter on an empty item outdents / ends | 🔧 react-docx (COD-1457) |
+| Cmd+F find and replace | ❌ COD-1458 |
 | One toolbar row, page fits narrow windows, Viewing hides formatting | 🔧 office-ui |
 
 ## Slides (PPTX)
