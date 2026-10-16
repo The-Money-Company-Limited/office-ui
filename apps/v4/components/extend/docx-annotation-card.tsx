@@ -25,6 +25,7 @@ function trackedChangeBadgeVariant(
   switch (kind) {
     case "insertion":
     case "move-to":
+    case "paragraph-insertion":
       return "success"
     case "deletion":
     case "move-from":
