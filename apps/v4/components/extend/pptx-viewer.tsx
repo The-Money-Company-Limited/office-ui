@@ -13,6 +13,7 @@ import {
   type ViewerZoomLevel,
   type ViewerZoomState,
 } from "@extend-ai/react-pptx"
+import { flushSync } from "react-dom"
 
 import "@extend-ai/react-pptx/styles.css"
 
@@ -60,7 +61,6 @@ const PPTX_THUMBNAIL_WIDTH = 112
 const PPTX_THUMBNAIL_LIST_PADDING = 12
 const PPTX_THUMBNAIL_ROW_ESTIMATE = 112
 const PPTX_THUMBNAIL_PREFETCH_ROWS = 0
-const PPTX_THUMBNAIL_FOLLOW_DELAY_MS = 250
 const PPTX_SCROLL_TOP_EPSILON_PX = 24
 const PPTX_INSTANT_NAVIGATION_TIMEOUT_MS = 250
 const PPTX_SMOOTH_NAVIGATION_TIMEOUT_MS = 1_000
@@ -184,18 +184,6 @@ function useDelayedLoadingIndicator(isLoading: boolean, delayMs: number) {
   }, [delayMs, isLoading])
 
   return isLoading && showSpinner
-}
-
-function useDebouncedValue<TValue>(value: TValue, delayMs: number) {
-  const [debouncedValue, setDebouncedValue] = React.useState(value)
-
-  React.useEffect(() => {
-    const timeoutId = window.setTimeout(() => setDebouncedValue(value), delayMs)
-
-    return () => window.clearTimeout(timeoutId)
-  }, [delayMs, value])
-
-  return debouncedValue
 }
 
 function ViewerLoadingSurface({
@@ -387,6 +375,7 @@ function PptxToolbar({
   controlsDisabled,
   isPreparingDownload,
   onDownload,
+  onPresent,
   onSlideChange,
   onToggleSidebar,
   onUploadClick,
@@ -402,6 +391,7 @@ function PptxToolbar({
   controlsDisabled: boolean
   isPreparingDownload: boolean
   onDownload: () => void
+  onPresent: () => void
   onSlideChange: (slideIndex: number) => void
   onToggleSidebar: () => void
   onUploadClick: () => void
@@ -567,6 +557,23 @@ function PptxToolbar({
               </Button>
             </ToolbarTooltip>
           </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={controlsDisabled || !slideCount}
+            onClick={onPresent}
+          >
+            <IconPlaceholder
+              lucide="Play"
+              tabler="IconPlayerPlay"
+              hugeicons="PlayIcon"
+              phosphor="PlayIcon"
+              remixicon="RiPlayLine"
+              className="size-4"
+            />
+            Present
+          </Button>
           {toolbarActions ? (
             <>
               <Separator
@@ -670,6 +677,8 @@ function PptxThumbnailSidebarList({
     getItemKey: (index) => visibleThumbnails[index]?.slide.id ?? index,
     getScrollElement: () => viewportRef.current,
     overscan: 0,
+    paddingStart: PPTX_THUMBNAIL_LIST_PADDING,
+    paddingEnd: PPTX_THUMBNAIL_LIST_PADDING,
   })
   const virtualItems = virtualizer.getVirtualItems()
   const renderWindowSignature = virtualItems
@@ -730,7 +739,7 @@ function PptxThumbnailSidebarList({
   ])
 
   React.useEffect(() => {
-    if (!sidebarOpen || !visibleThumbnails.length) return
+    if (!sidebarOpen || isLoading || !visibleThumbnails.length) return
 
     const frameId = window.requestAnimationFrame(() => {
       virtualizer.scrollToIndex(
@@ -740,23 +749,24 @@ function PptxThumbnailSidebarList({
     })
 
     return () => window.cancelAnimationFrame(frameId)
-  }, [activeSlideIndex, sidebarOpen, virtualizer, visibleThumbnails.length])
+  }, [
+    activeSlideIndex,
+    isLoading,
+    sidebarOpen,
+    virtualizer,
+    visibleThumbnails.length,
+  ])
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       if (slideCount < 1) return
 
-      let nextSlideIndex: number | null = null
-
-      if (event.key === "ArrowDown") {
-        nextSlideIndex = Math.min(slideCount - 1, activeSlideIndex + 1)
-      } else if (event.key === "ArrowUp") {
-        nextSlideIndex = Math.max(0, activeSlideIndex - 1)
-      } else if (event.key === "Home") {
-        nextSlideIndex = 0
-      } else if (event.key === "End") {
-        nextSlideIndex = slideCount - 1
-      }
+      if (event.altKey || event.ctrlKey || event.metaKey) return
+      const nextSlideIndex = slideIndexForKey(
+        event.key,
+        activeSlideIndex,
+        slideCount
+      )
 
       if (nextSlideIndex === null) return
 
@@ -777,6 +787,7 @@ function PptxThumbnailSidebarList({
         "aria-label": "PowerPoint slides",
         onKeyDown: handleKeyDown,
         onMouseDown: (event) => {
+          event.preventDefault()
           event.currentTarget.focus({ preventScroll: true })
         },
         role: "listbox",
@@ -795,8 +806,7 @@ function PptxThumbnailSidebarList({
         <div
           className="relative"
           style={{
-            height:
-              virtualizer.getTotalSize() + PPTX_THUMBNAIL_LIST_PADDING * 2,
+            height: virtualizer.getTotalSize(),
           }}
         >
           {virtualItems.map((virtualRow) => {
@@ -815,9 +825,7 @@ function PptxThumbnailSidebarList({
                   isActive && "z-10"
                 )}
                 style={{
-                  transform: `translateY(${
-                    virtualRow.start + PPTX_THUMBNAIL_LIST_PADDING
-                  }px)`,
+                  transform: `translateY(${virtualRow.start}px)`,
                 }}
               >
                 <div
@@ -924,29 +932,101 @@ function PptxThumbnailSidebarContent({
   )
 }
 
-function isViewerScrollKey(key: string) {
+function slideIndexForKey(key: string, index: number, count: number) {
+  switch (key) {
+    case "ArrowDown":
+    case "ArrowRight":
+    case "PageDown":
+    case " ":
+      return Math.min(count - 1, index + 1)
+    case "ArrowUp":
+    case "ArrowLeft":
+    case "PageUp":
+      return Math.max(0, index - 1)
+    case "Home":
+      return 0
+    case "End":
+      return count - 1
+    default:
+      return null
+  }
+}
+
+function isInteractiveElement(target: EventTarget | null) {
   return (
-    key === "ArrowDown" ||
-    key === "ArrowUp" ||
-    key === "End" ||
-    key === "Home" ||
-    key === "PageDown" ||
-    key === "PageUp" ||
-    key === " " ||
-    key === "Spacebar"
+    target instanceof Element &&
+    Boolean(
+      target.closest(
+        'input, textarea, select, button, a, [contenteditable]:not([contenteditable="false"]), [role="combobox"], [role="menu"], [role="slider"]'
+      )
+    )
   )
 }
 
-function isTextEntryElement(element: Element | null) {
-  if (!(element instanceof HTMLElement)) return false
+function PptxSlideshow({
+  containerRef,
+  initialSlide,
+  onExit,
+  presentation,
+}: {
+  containerRef: React.RefObject<HTMLDivElement | null>
+  initialSlide: number
+  onExit: () => void
+  presentation: ParsedPresentation
+}) {
+  const [slideIndex, setSlideIndex] = React.useState(initialSlide)
+  const slideCount = presentation.document.slides.length
+
   return (
-    element.isContentEditable ||
-    element instanceof HTMLTextAreaElement ||
-    element instanceof HTMLSelectElement ||
-    (element instanceof HTMLInputElement &&
-      !["button", "checkbox", "radio", "range", "reset", "submit"].includes(
-        element.type
-      ))
+    <div
+      ref={containerRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="PowerPoint slideshow"
+      tabIndex={-1}
+      className="fixed inset-0 z-50 bg-black text-white outline-none"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault()
+          onExit()
+          return
+        }
+        if (
+          event.altKey ||
+          event.ctrlKey ||
+          event.metaKey ||
+          isInteractiveElement(event.target)
+        )
+          return
+        const nextSlide = slideIndexForKey(event.key, slideIndex, slideCount)
+        if (nextSlide === null) return
+        event.preventDefault()
+        event.stopPropagation()
+        setSlideIndex(nextSlide)
+      }}
+      onClick={(event) => {
+        if (isInteractiveElement(event.target)) return
+        setSlideIndex((index) => Math.min(slideCount - 1, index + 1))
+      }}
+    >
+      <ReactPptxViewer
+        source={presentation}
+        mode="slide"
+        slideIndex={slideIndex}
+        zoom="fit-page"
+        height="100dvh"
+        slideIdPrefix="slideshow-"
+        className="!border-0 !bg-black [&_.rpv-stage]:!bg-black [&_.rpv-status]:!bg-black [&_.rpv-status]:text-white"
+        viewportClassName="!flex !items-center !justify-center !overflow-hidden !p-0"
+      />
+      <button
+        type="button"
+        className="absolute top-3 right-3 rounded bg-black/70 px-3 py-2 text-sm text-white focus-visible:outline-2"
+        onClick={onExit}
+      >
+        Exit presentation
+      </button>
+    </div>
   )
 }
 
@@ -987,6 +1067,18 @@ export function PptxViewerPreview({
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const rootRef = React.useRef<HTMLDivElement>(null)
   const toolbarRef = React.useRef<HTMLDivElement>(null)
+  const fullscreenRef = React.useRef<HTMLDivElement>(null)
+  const [presentation, setPresentation] =
+    React.useState<ParsedPresentation | null>(null)
+  const [isPresenting, setIsPresenting] = React.useState(false)
+  const [presentationError, setPresentationError] = React.useState<string>()
+  const returnPositionRef = React.useRef<{
+    focus: HTMLElement | null
+    windowX: number
+    windowY: number
+    viewportX: number
+    viewportY: number
+  } | null>(null)
   const [viewerShellRef, viewerShellWidth] = useElementWidth<HTMLDivElement>()
   const requestedInitialSlideIndex = Math.max(0, Math.round(initialSlide) - 1)
   const [viewportElement, setViewportElement] =
@@ -1029,10 +1121,6 @@ export function PptxViewerPreview({
     [activeUploadedPresentation?.file.name, fileName, src]
   )
   const thumbnailSidebarVisible = Boolean(sidebarOpen && hasPresentation)
-  const sidebarActiveSlideIndex = useDebouncedValue(
-    activeSlideIndex,
-    PPTX_THUMBNAIL_FOLLOW_DELAY_MS
-  )
   const controlsDisabled = !hasPresentation || isLoading || Boolean(loadError)
   const shouldShowLoadingSpinner = useDelayedLoadingIndicator(
     isLoading,
@@ -1085,6 +1173,8 @@ export function PptxViewerPreview({
   ) {
     setPreviousSource({ sourceIdentity, defaultZoom })
     setSlideCount(0)
+    setIsPresenting(false)
+    setPresentationError(undefined)
     setZoomLevel(defaultZoom)
     setResolvedZoom(
       typeof defaultZoom === "number" ? defaultZoom : DEFAULT_ZOOM
@@ -1204,6 +1294,7 @@ export function PptxViewerPreview({
   )
   const handleViewerSlideChange = React.useCallback(
     (nextSlideIndex: number) => {
+      if (returnPositionRef.current) return
       const pendingNavigation = pendingSlideNavigationRef.current
 
       if (pendingNavigation) {
@@ -1233,7 +1324,11 @@ export function PptxViewerPreview({
   )
   const syncFirstSlideAtViewportTop = React.useCallback(
     (viewport: HTMLDivElement) => {
-      if (getViewportScrollTop(viewport) > PPTX_SCROLL_TOP_EPSILON_PX) return
+      if (
+        returnPositionRef.current ||
+        getViewportScrollTop(viewport) > PPTX_SCROLL_TOP_EPSILON_PX
+      )
+        return
 
       setActiveSlideIndex((currentSlideIndex) =>
         currentSlideIndex === 0 ? currentSlideIndex : 0
@@ -1250,6 +1345,7 @@ export function PptxViewerPreview({
   )
   const interruptViewerScroll = React.useCallback(
     (viewport: HTMLDivElement) => {
+      if (returnPositionRef.current) return
       const scroller = scrollsWindow ? window : viewport
 
       // Stop an in-flight native smooth scroll before manual wheel, touch,
@@ -1276,35 +1372,57 @@ export function PptxViewerPreview({
     },
     [syncFirstSlideAtViewportTop]
   )
-  const handleViewerKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (isViewerScrollKey(event.key)) handleViewerUserScrollIntent(event)
-    },
-    [handleViewerUserScrollIntent]
-  )
-
-  // In window mode the page scrolls the slides, so scroll input and the
-  // scroll keys are observed on the window instead of a scroll container.
-  React.useEffect(() => {
-    if (!scrollsWindow || !viewportElement) return
-
-    const handleIntent = () => interruptViewerScroll(viewportElement)
-    const handleScroll = () => {
-      if (pendingSlideNavigationRef.current) return
-      syncFirstSlideAtViewportTop(viewportElement)
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
+  const handleNavigationKey = React.useCallback(
+    (event: KeyboardEvent | React.KeyboardEvent<HTMLDivElement>) => {
       if (
+        controlsDisabled ||
+        !slideCount ||
+        returnPositionRef.current ||
         event.defaultPrevented ||
         event.altKey ||
         event.ctrlKey ||
         event.metaKey ||
-        !isViewerScrollKey(event.key) ||
-        isTextEntryElement(document.activeElement)
-      ) {
+        isInteractiveElement(event.target)
+      )
         return
+      const nextSlideIndex = slideIndexForKey(
+        event.key,
+        activeSlideIndex,
+        slideCount
+      )
+      if (nextSlideIndex === null) return
+      event.preventDefault()
+      navigateToSlide(nextSlideIndex, "instant")
+    },
+    [activeSlideIndex, controlsDisabled, navigateToSlide, slideCount]
+  )
+
+  React.useEffect(() => {
+    if (!scrollsWindow || !viewportElement) return
+
+    const handleIntent = (event: Event) => {
+      if (returnPositionRef.current) return
+      // Scrolling the thumbnail strip must not interrupt slide navigation.
+      if (
+        event.target instanceof Node &&
+        viewportElement.contains(event.target)
+      ) {
+        interruptViewerScroll(viewportElement)
       }
-      handleIntent()
+    }
+    const handleScroll = () => {
+      if (returnPositionRef.current || pendingSlideNavigationRef.current) return
+      syncFirstSlideAtViewportTop(viewportElement)
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.target instanceof Node &&
+        event.target !== document.body &&
+        event.target !== document.documentElement &&
+        !rootRef.current?.contains(event.target)
+      )
+        return
+      handleNavigationKey(event)
     }
 
     window.addEventListener("keydown", handleKeyDown)
@@ -1318,13 +1436,79 @@ export function PptxViewerPreview({
       window.removeEventListener("wheel", handleIntent)
     }
   }, [
+    handleNavigationKey,
     interruptViewerScroll,
     scrollsWindow,
     syncFirstSlideAtViewportTop,
     viewportElement,
   ])
 
+  React.useEffect(() => {
+    if (!isPresenting) return
+    const handleFullscreenChange = () => {
+      if (document.fullscreenElement !== fullscreenRef.current)
+        setIsPresenting(false)
+    }
+    document.addEventListener("fullscreenchange", handleFullscreenChange)
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange)
+      const position = returnPositionRef.current
+      if (!position) return
+      position.focus?.focus({ preventScroll: true })
+      window.scrollTo({
+        left: position.windowX,
+        top: position.windowY,
+        behavior: "instant",
+      })
+      viewportElement?.scrollTo({
+        left: position.viewportX,
+        top: position.viewportY,
+        behavior: "instant",
+      })
+      returnPositionRef.current = null
+    }
+  }, [isPresenting, viewportElement])
+
+  const handlePresent = async () => {
+    if (!presentation || controlsDisabled || !slideCount) return
+    setPresentationError(undefined)
+    cancelPendingSlideNavigation()
+    returnPositionRef.current = {
+      focus:
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null,
+      windowX: window.scrollX,
+      windowY: window.scrollY,
+      viewportX: viewportElement?.scrollLeft ?? 0,
+      viewportY: viewportElement?.scrollTop ?? 0,
+    }
+    // Mount the fullscreen target within the click's user activation.
+    flushSync(() => setIsPresenting(true))
+    try {
+      await fullscreenRef.current!.requestFullscreen()
+      fullscreenRef.current?.focus({ preventScroll: true })
+    } catch {
+      setIsPresenting(false)
+      setPresentationError(
+        "Unable to enter full screen. Please try presenting again."
+      )
+    }
+  }
+  const handleExitPresentation = () => {
+    if (document.fullscreenElement === fullscreenRef.current) {
+      void document.exitFullscreen().catch(() => {
+        setPresentationError(
+          "Unable to exit full screen. Press Escape to exit."
+        )
+      })
+    } else {
+      setIsPresenting(false)
+    }
+  }
+
   const handleLoad = React.useCallback((presentation: ParsedPresentation) => {
+    setPresentation(presentation)
     const nextSlideCount = presentation.document.slides.length
 
     setSlideCount(nextSlideCount)
@@ -1391,6 +1575,7 @@ export function PptxViewerPreview({
       controlsDisabled={controlsDisabled}
       isPreparingDownload={isPreparingDownload}
       onDownload={handleDownload}
+      onPresent={handlePresent}
       onSlideChange={handleSlideChange}
       onToggleSidebar={() => setSidebarChoice(!sidebarOpen)}
       onUploadClick={() => fileInputRef.current?.click()}
@@ -1481,6 +1666,20 @@ export function PptxViewerPreview({
         className
       )}
     >
+      {isPresenting && presentation ? (
+        <PptxSlideshow
+          key={sourceIdentity}
+          containerRef={fullscreenRef}
+          initialSlide={activeSlideIndex}
+          onExit={handleExitPresentation}
+          presentation={presentation}
+        />
+      ) : null}
+      {presentationError ? (
+        <div role="alert" className="p-3 text-sm text-destructive">
+          {presentationError}
+        </div>
+      ) : null}
       <input
         ref={fileInputRef}
         type="file"
@@ -1516,7 +1715,7 @@ export function PptxViewerPreview({
         >
           {thumbnailSidebarMounted && hasPresentation ? (
             <PptxThumbnailSidebarContent
-              activeSlideIndex={sidebarActiveSlideIndex}
+              activeSlideIndex={activeSlideIndex}
               controller={controller}
               displayFileName={displayFileName}
               isLoading={isLoading}
@@ -1541,7 +1740,7 @@ export function PptxViewerPreview({
             viewportClassName="p-0"
             viewportProps={{
               "aria-label": "PowerPoint presentation",
-              onKeyDown: handleViewerKeyDown,
+              onKeyDown: handleNavigationKey,
               onPointerDown: handleViewerUserScrollIntent,
               onScroll: handleViewerScroll,
               onTouchStart: handleViewerUserScrollIntent,

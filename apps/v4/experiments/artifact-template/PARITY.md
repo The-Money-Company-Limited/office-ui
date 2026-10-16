@@ -40,7 +40,29 @@ against the published demos. Status: ✅ works, 🔧 fixed (commit), ❌ missing
 | Cmd+F find | unchecked |
 | One toolbar row, page fits narrow windows, Viewing hides formatting | 🔧 office-ui |
 
-## Slides (PPTX) and PDF
+## Slides (PPTX)
 
-Not yet checked item by item: arrow keys between slides, thumbnails,
-present full screen; PDF page keys, Cmd+F, text selection and copy.
+| Behaviour | Status |
+| --- | --- |
+| Slide strip open beside the slides on wide windows, grey canvas | 🔧 office-ui |
+| Click a thumbnail jumps to the slide | ✅ |
+| Strip keeps the active thumbnail in view | 🔧 office-ui |
+| Arrows / PageDown / Space / Home / End change slide | 🔧 office-ui |
+| Present full screen | 🔧 office-ui |
+
+## PDF
+
+| Behaviour | Status |
+| --- | --- |
+| One toolbar row, mode dropdown, tools only outside View | 🔧 office-ui |
+| PageDown / scrolling, page counter | ✅ |
+| Cmd+F search | ✅ |
+
+## Engine decision (Sheets)
+
+Insert/delete rows and columns, rename and reorder sheets need structural
+edits inside duke-sheets (Rust): shifting cells, styles, merges, comments,
+charts and rewriting formula references across sheets. Codex Astra's
+recommendation: add them to a fork in Rust and offer them upstream, about one
+to two weeks for a prototype, six to twelve for a hardened release; emulating
+them in JavaScript would amount to a second engine.
