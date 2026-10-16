@@ -1,5 +1,13 @@
 export { useXlsxViewerController, XlsxFileSizeLimitExceededError } from "./controller";
 export { parseXlsxRange } from "./range-reference";
+export { SUGGESTION_MARKER, formatSuggestionText, parseSuggestionText } from "./comments";
+export type {
+  XlsxComment,
+  XlsxCommentThread,
+  XlsxSuggestion,
+  XlsxSuggestionStatus,
+  XlsxSuggestionValue
+} from "./comments";
 export { initWasm, setWasmSource, type XlsxWasmSource } from "./wasm";
 export {
   DefaultXlsxToolbar,
@@ -35,6 +43,7 @@ export type {
   XlsxCellNumberFormatInput,
   XlsxCellProtectionInput,
   XlsxCellRange,
+  XlsxCommentIndicatorRenderProps,
   XlsxParsedRange,
   XlsxScrollTarget,
   XlsxHighlightRangeOptions,

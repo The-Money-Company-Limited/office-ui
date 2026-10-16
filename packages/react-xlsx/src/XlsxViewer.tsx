@@ -11,6 +11,7 @@ import { createWindowScrollViewport, createWindowVirtualizerObservers, type Scro
 import { expandHighlightedRange, getHighlightAxisExtent, getHighlightScrollOffset } from "./range-highlight";
 import { XLSX_MAX_COLUMNS, XLSX_MAX_ROWS } from "./range-reference";
 import { resolveWorkbookColor, resolveWorkbookFillStyle } from "./colors";
+import { parseCellRef, type XlsxSuggestion } from "./comments";
 import { useXlsxViewerController, XlsxFileSizeLimitExceededError } from "./controller";
 import { MemoChartSvg } from "./chart-renderer";
 import {
@@ -30,6 +31,7 @@ import type {
   XlsxChartElementSelection,
   XlsxChartsheet,
   XlsxCellAddress,
+  XlsxCommentIndicatorRenderProps,
   XlsxCellRange,
   XlsxConditionalFormatValueObject,
   XlsxFormControl,
@@ -7164,6 +7166,31 @@ const MemoGridRow = React.memo(GridRow, (prev, next) => {
   return true;
 });
 
+function DefaultCommentIndicator({ suggestion, thread, zoomFactor }: XlsxCommentIndicatorRenderProps & { zoomFactor: number }) {
+  const size = Math.max(5, Math.round(7 * zoomFactor));
+  const color = thread.resolved ? "#a19f9d" : thread.legacy ? "#d13438" : "#8764b8";
+  const title = suggestion
+    ? [`Suggested: ${typeof suggestion.value === "string" ? suggestion.value : JSON.stringify(suggestion.value)}`, suggestion.note].filter(Boolean).join("\n")
+    : thread.comments[0]?.text ?? "";
+  return (
+    <div
+      aria-label={suggestion ? "Suggestion" : "Comment"}
+      title={title}
+      style={{
+        borderLeft: `${size}px solid transparent`,
+        borderTop: `${size}px solid ${color}`,
+        cursor: "pointer",
+        height: 0,
+        pointerEvents: "auto",
+        position: "absolute",
+        right: 0,
+        top: 0,
+        width: 0
+      }}
+    />
+  );
+}
+
 function XlsxGrid({
   allowResizeInReadOnly = false,
   controller,
@@ -7184,6 +7211,8 @@ function XlsxGrid({
   renderImageSelection,
   renderTableHeaderMenu,
   renderActiveCellOverlay,
+  renderCommentIndicator,
+  onCommentClick,
   renderScroller,
   enableGestureZoom = true,
   experimentalCanvas = true,
@@ -7195,7 +7224,7 @@ function XlsxGrid({
   stickyTop = 0
 }: Pick<
   XlsxViewerProps,
-  "allowResizeInReadOnly" | "emptyState" | "enableCanvasSelectionAnimation" | "enableGestureZoom" | "errorState" | "experimentalCanvas" | "fileTooLargeState" | "getCellStyle" | "highlightClassName" | "loadingComponent" | "loadingState" | "onFormControlAction" | "onFormControlChange" | "renderChartLoading" | "renderFormControl" | "renderImage" | "renderImageSelection" | "renderScroller" | "renderTableHeaderMenu" | "renderActiveCellOverlay" | "scrollTarget" | "selectionColor" | "selectionFillColor" | "selectionHeaderColor" | "showImages" | "stickyTop"
+  "allowResizeInReadOnly" | "emptyState" | "enableCanvasSelectionAnimation" | "enableGestureZoom" | "errorState" | "experimentalCanvas" | "fileTooLargeState" | "getCellStyle" | "highlightClassName" | "loadingComponent" | "loadingState" | "onFormControlAction" | "onFormControlChange" | "renderChartLoading" | "renderFormControl" | "renderImage" | "renderImageSelection" | "renderScroller" | "renderTableHeaderMenu" | "renderActiveCellOverlay" | "renderCommentIndicator" | "onCommentClick" | "scrollTarget" | "selectionColor" | "selectionFillColor" | "selectionHeaderColor" | "showImages" | "stickyTop"
 > & {
   controller: XlsxViewerController;
   palette: ViewerPalette;
@@ -7229,8 +7258,10 @@ function XlsxGrid({
     getClipboardData,
     getCellDisplayValue: getControllerCellDisplayValue,
     getFormControlItems,
+    commentThreads,
     highlightedRanges,
     images,
+    suggestions,
     shapes,
     isLoadDeferred,
     isLoading,
@@ -7595,6 +7626,10 @@ function XlsxGrid({
       ? [{ highlight, index, range: expandHighlightedRange(highlight.range, activeSheet?.mergedRanges ?? mergedRegions) }]
       : []),
     [activeSheet?.mergedRanges, activeSheet?.workbookSheetIndex, highlightedRanges, mergedRegions]
+  );
+  const suggestionsByThreadId = React.useMemo(
+    () => new Map<string, XlsxSuggestion>(suggestions.map((suggestion) => [suggestion.threadId, suggestion])),
+    [suggestions]
   );
   const normalizedSelection = React.useMemo(() => (selection ? normalizeRange(selection) : null), [selection]);
   const zoomFactor = React.useMemo(() => Math.max(0.1, zoomScale / 100), [zoomScale]);
@@ -16126,7 +16161,27 @@ function XlsxGrid({
       }}
     />
   ] : []);
-  const drawingOverlayPanes = (experimentalCanvas && hasCanvasDomDrawingOverlays) || rangeHighlightNodes.length > 0 ? (
+  const commentIndicatorNodes = activeSheet ? commentThreads.flatMap((thread) => {
+    const position = thread.sheet === activeSheet.name ? parseCellRef(thread.ref) : null;
+    const cell = position ? resolveMergeAnchorCell(position) : null;
+    const rect = cell ? resolveCellDisplayRect(cell) : null;
+    if (!cell || !rect || rect.width <= 0 || rect.height <= 0) {
+      return [];
+    }
+    const props = { cell, rect, suggestion: suggestionsByThreadId.get(thread.id) ?? null, thread };
+    const content = renderCommentIndicator ? renderCommentIndicator(props) : <DefaultCommentIndicator {...props} zoomFactor={zoomFactor} />;
+    return content == null ? [] : [
+      <div
+        key={thread.id}
+        data-xlsx-comment={thread.ref}
+        onClick={onCommentClick ? () => onCommentClick(props) : undefined}
+        style={{ ...rect, pointerEvents: "none", position: "absolute", zIndex: maxDrawingOverlayZIndex + 2 }}
+      >
+        {content}
+      </div>
+    ];
+  }) : [];
+  const drawingOverlayPanes = (experimentalCanvas && hasCanvasDomDrawingOverlays) || rangeHighlightNodes.length > 0 || commentIndicatorNodes.length > 0 ? (
     <div style={{ ...canvasBodyViewportLayerStyle, zIndex: experimentalCanvas ? 23 : 34 }}>
       {([
         { pane: "scroll", style: canvasScrollOverlayPaneStyle, ref: canvasScrollOverlayContentRef, left: -drawingViewport.left - frozenPaneRight, top: -drawingViewport.top - frozenPaneBottom },
@@ -16150,6 +16205,7 @@ function XlsxGrid({
           >
             {experimentalCanvas ? paneDrawingNodes[pane] : null}
             {rangeHighlightNodes}
+            {commentIndicatorNodes}
           </div>
         </div>
       ))}
@@ -16701,6 +16757,8 @@ function XlsxViewerInner({
   renderScroller,
   renderTableHeaderMenu,
   renderActiveCellOverlay,
+  renderCommentIndicator,
+  onCommentClick,
   rounded = true,
   scrollTarget = "element",
   selectionColor,
@@ -16809,6 +16867,8 @@ function XlsxViewerInner({
                 renderScroller={renderScroller}
                 renderTableHeaderMenu={renderTableHeaderMenu}
                 renderActiveCellOverlay={renderActiveCellOverlay}
+                renderCommentIndicator={renderCommentIndicator}
+                onCommentClick={onCommentClick}
                 scrollTarget={scrollTarget}
                 selectionColor={selectionColor}
                 selectionFillColor={selectionFillColor}

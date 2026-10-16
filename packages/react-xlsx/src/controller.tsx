@@ -46,6 +46,19 @@ import {
   type WorkbookImageAssets,
   type WorkbookImageSheetOrigin
 } from "./images";
+import {
+  addCommentThread,
+  applyCommentThreads,
+  closeSuggestion,
+  DEFAULT_REVIEWER,
+  listSuggestions,
+  readCommentThreads,
+  removeCommentThread,
+  replyToCommentThread,
+  requireOpenSuggestion,
+  setCommentThreadResolved,
+  type XlsxCommentThread
+} from "./comments";
 import { safeCalculate, tryRecalculate } from "./safe-calculate";
 import { parseXlsxRange } from "./range-reference";
 import { canUseConfiguredWasmSourceInWorker, getSheetsWasmModule } from "./wasm";
@@ -1925,6 +1938,9 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   const deferredBufferRef = React.useRef<ArrayBuffer | null>(null);
   const [deferredLoadFileSize, setDeferredLoadFileSize] = React.useState<number | null>(null);
   const imageAssetsRef = React.useRef<WorkbookImageAssets | null>(null);
+  // Null until a workbook's package is parsed; saving then leaves comment parts to the engine.
+  const commentThreadsRef = React.useRef<XlsxCommentThread[] | null>(null);
+  const [commentThreads, setCommentThreadsState] = React.useState<XlsxCommentThread[]>([]);
   const chartAssetsRef = React.useRef<WorkbookChartAssets | null>(null);
   const chartLoadRequestTokenRef = React.useRef(0);
   const chartDisplayFallbackCleanupRef = React.useRef<(() => void) | null>(null);
@@ -1957,14 +1973,20 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     return workerClientRef.current;
   }, []);
 
+  const setCommentThreads = React.useCallback((threads: XlsxCommentThread[] | null) => {
+    commentThreadsRef.current = threads;
+    setCommentThreadsState(threads ?? []);
+  }, []);
+
   const clearImageAssets = React.useCallback(() => {
     revokeWorkbookImageAssets(imageAssetsRef.current);
     imageAssetsRef.current = null;
+    setCommentThreads(null);
     sheetOriginsRef.current = [];
     setFormControlsByWorkbookSheetIndex([]);
     setImagesByWorkbookSheetIndex([]);
     setShapesByWorkbookSheetIndex([]);
-  }, []);
+  }, [setCommentThreads]);
 
   const clearChartAssets = React.useCallback(() => {
     chartLoadRequestTokenRef.current += 1;
@@ -1980,11 +2002,13 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   const setImageAssets = React.useCallback((assets: WorkbookImageAssets | null) => {
     revokeWorkbookImageAssets(imageAssetsRef.current);
     imageAssetsRef.current = assets;
+    // Every load and snapshot restore passes through here, so comments follow undo/redo.
+    setCommentThreads(assets?.archive["xl/workbook.xml"] ? readCommentThreads(assets.archive) : null);
     sheetOriginsRef.current = assets?.sheetOrigins.slice() ?? [];
     setFormControlsByWorkbookSheetIndex(assets?.formControlsByWorkbookSheetIndex ?? []);
     setImagesByWorkbookSheetIndex(assets?.imagesByWorkbookSheetIndex ?? []);
     setShapesByWorkbookSheetIndex(assets?.shapesByWorkbookSheetIndex ?? []);
-  }, []);
+  }, [setCommentThreads]);
 
   const setChartAssets = React.useCallback((assets: WorkbookChartAssets | null) => {
     chartAssetsRef.current = assets;
@@ -3375,7 +3399,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
 
   const createSavedWorkbookBytes = React.useCallback((targetWorkbook: Workbook) => {
     const sanitizedBytes = sanitizeSavedWorkbookBytes(targetWorkbook.saveXlsxBytes());
-    return mergeWorkbookImageAssets(sanitizedBytes, imageAssetsRef.current, sheetOriginsRef.current);
+    const mergedBytes = mergeWorkbookImageAssets(sanitizedBytes, imageAssetsRef.current, sheetOriginsRef.current);
+    return commentThreadsRef.current ? applyCommentThreads(mergedBytes, commentThreadsRef.current) : mergedBytes;
   }, []);
 
   const createHistoryEntry = React.useCallback((): SnapshotHistoryEntry | null => {
@@ -3509,6 +3534,91 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     redoStackRef.current = [];
     setHistoryRevision((current) => current + 1);
   }, [createHistoryEntry]);
+
+  // Comment edits validate first (the helpers throw on an unknown thread or a bad
+  // reference), then record one snapshot so undo restores threads and cells together.
+  const updateCommentThreads = React.useCallback((update: (threads: XlsxCommentThread[]) => XlsxCommentThread[]) => {
+    const current = commentThreadsRef.current;
+    if (readOnly || !workbook || !current) {
+      return false;
+    }
+
+    const next = update(current);
+    recordHistoryBeforeMutation();
+    setCommentThreads(next);
+    return true;
+  }, [readOnly, recordHistoryBeforeMutation, setCommentThreads, workbook]);
+
+  const updateCommentThread = React.useCallback((
+    threadId: string,
+    update: (threads: XlsxCommentThread[]) => XlsxCommentThread[]
+  ) => {
+    let nextId: string | null = null;
+    const changed = updateCommentThreads((threads) => {
+      const index = threads.findIndex((thread) => thread.id === threadId);
+      const next = update(threads);
+      nextId = next[index]?.id ?? null;
+      return next;
+    });
+    return changed ? nextId : null;
+  }, [updateCommentThreads]);
+
+  const addComment = React.useCallback((sheet: string, ref: string, text: string, author: string) => {
+    let threadId: string | null = null;
+    const changed = updateCommentThreads((threads) => {
+      if (workbook?.sheetIndex(sheet) === undefined) {
+        throw new Error(`No sheet named "${sheet}".`);
+      }
+      const result = addCommentThread(threads, { author, ref, sheet, text });
+      threadId = result.thread.id;
+      return result.threads;
+    });
+    return changed ? threadId : null;
+  }, [updateCommentThreads, workbook]);
+
+  const replyToComment = React.useCallback((threadId: string, text: string, author: string) => (
+    updateCommentThread(threadId, (threads) => replyToCommentThread(threads, threadId, text, author))
+  ), [updateCommentThread]);
+
+  const resolveComment = React.useCallback((threadId: string, resolved: boolean) => (
+    updateCommentThread(threadId, (threads) => setCommentThreadResolved(threads, threadId, resolved))
+  ), [updateCommentThread]);
+
+  const deleteComment = React.useCallback((threadId: string) => (
+    updateCommentThreads((threads) => removeCommentThread(threads, threadId))
+  ), [updateCommentThreads]);
+
+  const acceptSuggestion = React.useCallback((threadId: string, author = DEFAULT_REVIEWER) => {
+    const current = commentThreadsRef.current;
+    if (readOnly || !workbook || !current) {
+      return false;
+    }
+
+    const suggestion = requireOpenSuggestion(current, threadId);
+    const sheetIndex = workbook.sheetIndex(suggestion.sheet);
+    if (sheetIndex === undefined) {
+      throw new Error(`No sheet named "${suggestion.sheet}".`);
+    }
+    const next = closeSuggestion(current, threadId, "accepted", author);
+    recordHistoryBeforeMutation();
+    const worksheet = workbook.getSheet(sheetIndex);
+    const { ref, value } = suggestion;
+    if (typeof value === "string" && value.startsWith("=") && value.length > 1) {
+      worksheet.setFormula(ref, value);
+    } else {
+      worksheet.setCell(ref, value);
+    }
+    setCommentThreads(next);
+    maybeRecalculateWorkbook(workbook);
+    refreshWorkbookState(workbook);
+    return true;
+  }, [maybeRecalculateWorkbook, readOnly, recordHistoryBeforeMutation, refreshWorkbookState, setCommentThreads, workbook]);
+
+  const rejectSuggestion = React.useCallback((threadId: string, author = DEFAULT_REVIEWER) => (
+    updateCommentThreads((threads) => closeSuggestion(threads, threadId, "rejected", author))
+  ), [updateCommentThreads]);
+
+  const suggestions = React.useMemo(() => listSuggestions(commentThreads), [commentThreads]);
 
   const addFormControl = React.useCallback((input: XlsxFormControlInput, sheetIndex = activeSheetIndex) => {
     const target = getFormControlWorksheet(sheetIndex);
@@ -5040,6 +5150,14 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       clearHighlightedRanges,
       highlightRanges,
       highlightedRanges,
+      acceptSuggestion,
+      addComment,
+      commentThreads,
+      deleteComment,
+      rejectSuggestion,
+      replyToComment,
+      resolveComment,
+      suggestions,
       continueDeferredLoad,
       copySelectionToClipboard,
       defaultZoomScale,
@@ -5165,6 +5283,14 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       clearHighlightedRanges,
       highlightRanges,
       highlightedRanges,
+      acceptSuggestion,
+      addComment,
+      commentThreads,
+      deleteComment,
+      rejectSuggestion,
+      replyToComment,
+      resolveComment,
+      suggestions,
       copySelectionToClipboard,
       defaultZoomScale,
       deferredLoadFileSize,

@@ -1,5 +1,6 @@
 import type * as React from "react";
 import type { Workbook, Worksheet } from "@dukelib/sheets-wasm";
+import type { XlsxCommentThread, XlsxSuggestion } from "./comments";
 
 export interface XlsxThemePalette {
   colorsByIndex: Record<number, string>;
@@ -1094,6 +1095,23 @@ export interface XlsxViewerController {
   clearSelection: () => void;
   /** Removes all render-only range highlights. */
   clearHighlightedRanges: () => void;
+  /**
+   * Excel threaded comments (and legacy notes) in the workbook. They are saved with
+   * the workbook, readable in Excel, and restored by undo/redo.
+   */
+  commentThreads: XlsxCommentThread[];
+  /** Threads whose root comment carries a `[suggestion] {"value":…}` marker line. */
+  suggestions: XlsxSuggestion[];
+  /** Starts a thread on a cell (`ref` like `B2`). Returns its id, or null when editing is unavailable. Throws if the cell already has a thread. */
+  addComment: (sheet: string, ref: string, text: string, author: string) => string | null;
+  /** Returns the thread id, which changes when a legacy note becomes a threaded comment. */
+  replyToComment: (threadId: string, text: string, author: string) => string | null;
+  resolveComment: (threadId: string, resolved: boolean) => string | null;
+  deleteComment: (threadId: string) => boolean;
+  /** Writes the proposed value or formula, replies "Accepted" and resolves the thread, as one undo step. */
+  acceptSuggestion: (threadId: string, author?: string) => boolean;
+  /** Replies "Rejected" and resolves the thread without changing the cell. */
+  rejectSuggestion: (threadId: string, author?: string) => boolean;
   /** Replaces the highlights with validated A1 ranges. Returns false without changing state if any reference cannot be resolved. */
   highlightRanges: (references: string | readonly string[], options?: XlsxHighlightRangeOptions) => boolean;
   highlightedRanges: XlsxRangeHighlight[];
@@ -1557,6 +1575,16 @@ export interface XlsxViewerProviderProps extends UseXlsxViewerControllerOptions 
   isDark?: boolean;
 }
 
+export interface XlsxCommentIndicatorRenderProps {
+  thread: XlsxCommentThread;
+  /** Present when the thread is a suggestion; `suggestion.value` is the proposed cell content. */
+  suggestion: XlsxSuggestion | null;
+  /** Zero-based address of the commented cell. */
+  cell: XlsxCellAddress;
+  /** Pixel rect of the cell within the grid's scroll content. The node is positioned to fill it. */
+  rect: XlsxImageRect;
+}
+
 export interface XlsxViewerProps extends UseXlsxViewerControllerOptions {
   /** Render-only A1 ranges to highlight. Null or an empty array clears them; undefined leaves controller state alone. */
   highlightedRanges?: string | readonly string[] | null;
@@ -1764,6 +1792,15 @@ export interface XlsxViewerProps extends UseXlsxViewerControllerOptions {
    * ```
    */
   renderActiveCellOverlay?: (props: XlsxActiveCellOverlayRenderProps) => React.ReactNode;
+  /**
+   * Called when someone clicks a cell's comment indicator, so the host can show the thread.
+   */
+  onCommentClick?: (props: XlsxCommentIndicatorRenderProps) => void;
+  /**
+   * Replaces the default comment indicator (a corner triangle whose tooltip shows the
+   * first comment, or the proposed value for a suggestion). Return null to hide it.
+   */
+  renderCommentIndicator?: (props: XlsxCommentIndicatorRenderProps) => React.ReactNode;
   /**
    * Shows worksheet images, charts, shapes, and form controls.
    *

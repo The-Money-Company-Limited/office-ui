@@ -396,6 +396,38 @@ Supported references include single cells (`A1`), rectangles (`B2:E8`), absolute
 
 Each string must contain one rectangular A1 reference, not named ranges, structured table references, unions, R1C1 notation, external workbooks, or references spanning multiple worksheets. Whole-row/column highlights cover the displayed grid and extend as it grows.
 
+## Comments And Suggestions
+
+Excel threaded comments (and legacy notes) load into `controller.commentThreads`, save with the workbook, and follow undo/redo. Edit them with `addComment(sheet, ref, text, author)`, `replyToComment(threadId, text, author)`, `resolveComment(threadId, resolved)` and `deleteComment(threadId)`.
+
+A suggestion is a threaded comment whose root text ends with one marker line, so Excel shows it as an ordinary comment:
+
+```text
+Invoice says 25 oranges.
+[suggestion] {"previous":20,"value":25}
+```
+
+`value` is what the cell becomes: a string starting with `=` is a formula; any other string, number or boolean is a literal. `controller.suggestions` lists them with a status (`open`, `accepted`, `rejected`, `resolved`). `acceptSuggestion(threadId)` writes the value, replies "Accepted" and resolves the thread as one undo step; `rejectSuggestion(threadId)` replies "Rejected" and resolves.
+
+Cells with a thread show a corner indicator. Pass `onCommentClick` to show the thread, or `renderCommentIndicator` to draw your own (it receives `thread`, `suggestion`, `cell` and `rect`).
+
+### Headless agent API
+
+`@extend-ai/react-xlsx/agent` has no React, DOM or wasm dependency and edits the XLSX package in place, so untouched parts are saved unchanged:
+
+```ts
+import { openXlsx } from "@extend-ai/react-xlsx/agent";
+
+const workbook = openXlsx(bytes);
+workbook.cells("Sheet1", "A1:D10");
+workbook.comment({ sheet: "Sheet1", ref: "C3", text: "Why?", author: "Agent" });
+workbook.suggest({ sheet: "Sheet1", ref: "D5", value: 25, author: "Agent", note: "Per the invoice." });
+workbook.accept("all"); // or a thread id; reject(...) likewise
+const output = workbook.save();
+```
+
+The same operations run from the command line: `react-xlsx-agent in.xlsx out.xlsx '[{"op":"suggest","sheet":"Sheet1","ref":"D5","value":25,"author":"Agent"}]'` (an `id` of `"$0"` refers to the thread from operation 0).
+
 ## Custom Rendering
 
 The viewer exposes render props for common UI integration points.
