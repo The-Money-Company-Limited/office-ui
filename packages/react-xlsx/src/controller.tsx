@@ -4509,8 +4509,14 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       return;
     }
 
-    const nextValue = coerceUserEnteredValue(value);
-    worksheet.setCell(cellAddressToA1(cell), nextValue);
+    // An entry that starts with "=" is a formula, as in Excel; a leading
+    // apostrophe keeps it as text.
+    const entry = value.trim();
+    if (entry.length > 1 && entry.startsWith("=")) {
+      worksheet.setFormula(cellAddressToA1(cell), entry);
+    } else {
+      worksheet.setCell(cellAddressToA1(cell), coerceUserEnteredValue(value));
+    }
     const after = captureCellMutationState(cell);
     if (!after) {
       return;
