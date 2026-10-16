@@ -11,6 +11,7 @@ import { createWindowScrollViewport, createWindowVirtualizerObservers, type Scro
 import { expandHighlightedRange, getHighlightAxisExtent, getHighlightScrollOffset } from "./range-highlight";
 import { XLSX_MAX_COLUMNS, XLSX_MAX_ROWS } from "./range-reference";
 import { resolveWorkbookColor, resolveWorkbookFillStyle } from "./colors";
+import { listCellAnchors } from "./cell-anchors";
 import { parseCellRef, type XlsxSuggestion } from "./comments";
 import { useXlsxViewerController, XlsxFileSizeLimitExceededError } from "./controller";
 import { MemoChartSvg } from "./chart-renderer";
@@ -7166,6 +7167,21 @@ const MemoGridRow = React.memo(GridRow, (prev, next) => {
   return true;
 });
 
+// The layer itself takes no events; its cells do, and they bubble to the layer's handlers.
+const CELL_ANCHOR_LAYER_STYLE: React.CSSProperties = { height: 0, left: 0, pointerEvents: "none", position: "absolute", top: 0, width: 0 };
+// Invisible over the canvas: no paint, no selectable text, same cursor as the canvas body.
+const CELL_ANCHOR_STYLE: React.CSSProperties = {
+  boxSizing: "border-box",
+  color: "transparent",
+  cursor: "cell",
+  overflow: "hidden",
+  pointerEvents: "auto",
+  position: "absolute",
+  userSelect: "none",
+  WebkitUserSelect: "none",
+  whiteSpace: "pre"
+};
+
 function DefaultCommentIndicator({ suggestion, thread, zoomFactor }: XlsxCommentIndicatorRenderProps & { zoomFactor: number }) {
   const size = Math.max(5, Math.round(7 * zoomFactor));
   const color = thread.resolved ? "#a19f9d" : thread.legacy ? "#d13438" : "#8764b8";
@@ -7213,6 +7229,7 @@ function XlsxGrid({
   renderActiveCellOverlay,
   renderCommentIndicator,
   onCommentClick,
+  cellAnchorIdPrefix,
   renderScroller,
   enableGestureZoom = true,
   experimentalCanvas = true,
@@ -7224,7 +7241,7 @@ function XlsxGrid({
   stickyTop = 0
 }: Pick<
   XlsxViewerProps,
-  "allowResizeInReadOnly" | "emptyState" | "enableCanvasSelectionAnimation" | "enableGestureZoom" | "errorState" | "experimentalCanvas" | "fileTooLargeState" | "getCellStyle" | "highlightClassName" | "loadingComponent" | "loadingState" | "onFormControlAction" | "onFormControlChange" | "renderChartLoading" | "renderFormControl" | "renderImage" | "renderImageSelection" | "renderScroller" | "renderTableHeaderMenu" | "renderActiveCellOverlay" | "renderCommentIndicator" | "onCommentClick" | "scrollTarget" | "selectionColor" | "selectionFillColor" | "selectionHeaderColor" | "showImages" | "stickyTop"
+  "allowResizeInReadOnly" | "emptyState" | "enableCanvasSelectionAnimation" | "enableGestureZoom" | "errorState" | "experimentalCanvas" | "fileTooLargeState" | "getCellStyle" | "highlightClassName" | "loadingComponent" | "loadingState" | "onFormControlAction" | "onFormControlChange" | "renderChartLoading" | "renderFormControl" | "renderImage" | "renderImageSelection" | "renderScroller" | "renderTableHeaderMenu" | "renderActiveCellOverlay" | "renderCommentIndicator" | "onCommentClick" | "cellAnchorIdPrefix" | "scrollTarget" | "selectionColor" | "selectionFillColor" | "selectionHeaderColor" | "showImages" | "stickyTop"
 > & {
   controller: XlsxViewerController;
   palette: ViewerPalette;
@@ -12145,7 +12162,7 @@ function XlsxGrid({
     event.currentTarget.style.cursor = "default";
   }, []);
 
-  const handleCanvasBodyPointerDown = React.useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+  const handleCanvasBodyPointerDown = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0) {
       return;
     }
@@ -12207,7 +12224,7 @@ function XlsxGrid({
     startCellSelection
   ]);
 
-  const handleCanvasBodyClick = React.useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
+  const handleCanvasBodyClick = React.useCallback((event: React.MouseEvent<HTMLElement>) => {
     const cell = resolvePointerCellFromClient(event.clientX, event.clientY);
     if (!cell) {
       return;
@@ -12216,7 +12233,7 @@ function XlsxGrid({
     handleCellClick(cell, getCellData(cell.row, cell.col));
   }, [getCellData, handleCellClick, resolvePointerCellFromClient]);
 
-  const handleCanvasBodyDoubleClick = React.useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
+  const handleCanvasBodyDoubleClick = React.useCallback((event: React.MouseEvent<HTMLElement>) => {
     if (readOnly) {
       return;
     }
@@ -13990,6 +14007,61 @@ function XlsxGrid({
     selectChartElement(selection);
   }, [selectChartElement]);
 
+  // Opt-in anchors for page comment layers: one transparent element per cell the canvas draws, per pane.
+  // Pointer events on them go to the same coordinate-based handlers as the canvas.
+  const cellAnchorPaneNodes = React.useMemo(() => {
+    if (cellAnchorIdPrefix === undefined || !experimentalCanvas) {
+      return null;
+    }
+    const mergeAnchorKeys = new Set(mergedRegions.map((region) => `${region.start.row}:${region.start.col}`));
+    const mergeAnchorOf = (row: number, col: number) => (
+      mergedSecondaryAnchorMap.get(`${row}:${col}`) ?? (mergeAnchorKeys.has(`${row}:${col}`) ? { col, row } : null)
+    );
+    const nodes = {} as Record<FrozenDrawingPane, React.ReactNode>;
+    for (const pane of ["scroll", "top", "left", "corner"] as const) {
+      const { cols, rows } = canvasPaneAxisItems[pane];
+      const cells = listCellAnchors(cellAnchorIdPrefix, rows, cols, mergeAnchorOf).flatMap((placement) => {
+        const cell = { col: placement.col, row: placement.row };
+        if (editingCell && isSameCell(editingCell, cell)) {
+          return [];
+        }
+        const rect = placement.rect
+          ? { ...placement.rect, left: displayRowHeaderWidth + placement.rect.left, top: displayHeaderHeight + placement.rect.top }
+          : resolveCellDisplayRect(cell);
+        return rect && rect.width > 0 && rect.height > 0 ? [
+          <div key={placement.id} id={placement.id} role="gridcell" style={{ ...CELL_ANCHOR_STYLE, ...rect }}>
+            {getControllerCellDisplayValue(cell)}
+          </div>
+        ] : [];
+      });
+      nodes[pane] = cells.length > 0 ? (
+        <div
+          onClick={handleCanvasBodyClick}
+          onDoubleClick={handleCanvasBodyDoubleClick}
+          onPointerDown={handleCanvasBodyPointerDown}
+          style={CELL_ANCHOR_LAYER_STYLE}
+        >
+          {cells}
+        </div>
+      ) : null;
+    }
+    return nodes;
+  }, [
+    canvasPaneAxisItems,
+    cellAnchorIdPrefix,
+    displayHeaderHeight,
+    displayRowHeaderWidth,
+    editingCell,
+    experimentalCanvas,
+    getControllerCellDisplayValue,
+    handleCanvasBodyClick,
+    handleCanvasBodyDoubleClick,
+    handleCanvasBodyPointerDown,
+    mergedRegions,
+    mergedSecondaryAnchorMap,
+    resolveCellDisplayRect,
+    revision
+  ]);
   if (isLoading) {
     return <>{renderLoading(loadingComponent, loadingState, palette)}</>;
   }
@@ -16184,32 +16256,42 @@ function XlsxGrid({
       </div>
     ];
   }) : [];
-  const drawingOverlayPanes = (experimentalCanvas && hasCanvasDomDrawingOverlays) || rangeHighlightNodes.length > 0 || commentIndicatorNodes.length > 0 ? (
+  const overlayPanes = ([
+    { pane: "scroll", style: canvasScrollOverlayPaneStyle, ref: canvasScrollOverlayContentRef, left: -drawingViewport.left - frozenPaneRight, top: -drawingViewport.top - frozenPaneBottom },
+    { pane: "top", style: canvasTopOverlayPaneStyle, ref: canvasTopOverlayContentRef, left: -drawingViewport.left - frozenPaneRight, top: -displayHeaderHeight },
+    { pane: "left", style: canvasLeftOverlayPaneStyle, ref: canvasLeftOverlayContentRef, left: -displayRowHeaderWidth, top: -drawingViewport.top - frozenPaneBottom },
+    { pane: "corner", style: canvasCornerOverlayPaneStyle, ref: canvasCornerOverlayContentRef, left: -displayRowHeaderWidth, top: -displayHeaderHeight }
+  ] as const);
+  const overlayPaneContentStyle = (left: number, top: number): React.CSSProperties => ({
+    height: sheetContentHeight,
+    left: 0,
+    pointerEvents: "none",
+    position: "absolute",
+    top: 0,
+    transform: `translate(${left}px, ${top}px)`,
+    transformOrigin: "0 0",
+    width: totalWidth
+  });
+  const drawingOverlayPanes = (experimentalCanvas && hasCanvasDomDrawingOverlays) || rangeHighlightNodes.length > 0 || commentIndicatorNodes.length > 0 || cellAnchorPaneNodes ? (
     <div style={{ ...canvasBodyViewportLayerStyle, zIndex: experimentalCanvas ? 23 : 34 }}>
-      {([
-        { pane: "scroll", style: canvasScrollOverlayPaneStyle, ref: canvasScrollOverlayContentRef, left: -drawingViewport.left - frozenPaneRight, top: -drawingViewport.top - frozenPaneBottom },
-        { pane: "top", style: canvasTopOverlayPaneStyle, ref: canvasTopOverlayContentRef, left: -drawingViewport.left - frozenPaneRight, top: -displayHeaderHeight },
-        { pane: "left", style: canvasLeftOverlayPaneStyle, ref: canvasLeftOverlayContentRef, left: -displayRowHeaderWidth, top: -drawingViewport.top - frozenPaneBottom },
-        { pane: "corner", style: canvasCornerOverlayPaneStyle, ref: canvasCornerOverlayContentRef, left: -displayRowHeaderWidth, top: -displayHeaderHeight }
-      ] as const).map(({ pane, style, ref, left, top }) => (
+      {overlayPanes.map(({ pane, style, ref, left, top }) => (
         <div key={pane} style={style}>
-          <div
-            ref={ref}
-            style={{
-              height: sheetContentHeight,
-              left: 0,
-              pointerEvents: "none",
-              position: "absolute",
-              top: 0,
-              transform: `translate(${left}px, ${top}px)`,
-              transformOrigin: "0 0",
-              width: totalWidth
-            }}
-          >
+          <div ref={ref} style={overlayPaneContentStyle(left, top)}>
+            {pane === "scroll" ? cellAnchorPaneNodes?.scroll : null}
             {experimentalCanvas ? paneDrawingNodes[pane] : null}
             {rangeHighlightNodes}
             {commentIndicatorNodes}
           </div>
+        </div>
+      ))}
+    </div>
+  ) : null;
+  // Frozen panes paint on canvases stacked above the overlay layer, so their cell anchors get a layer above those.
+  const frozenCellAnchorPanes = cellAnchorPaneNodes ? (
+    <div style={{ ...canvasBodyViewportLayerStyle, zIndex: 32 }}>
+      {overlayPanes.filter(({ pane }) => pane !== "scroll").map(({ pane, style, left, top }) => (
+        <div key={pane} style={style}>
+          <div style={overlayPaneContentStyle(left, top)}>{cellAnchorPaneNodes[pane]}</div>
         </div>
       ))}
     </div>
@@ -16252,6 +16334,7 @@ function XlsxGrid({
               </>
             ) : null}
             {drawingOverlayPanes}
+            {frozenCellAnchorPanes}
             {experimentalCanvas ? (
               <>
                 <div style={canvasBodyViewportLayerStyle}>
@@ -16762,6 +16845,7 @@ function XlsxViewerInner({
   renderActiveCellOverlay,
   renderCommentIndicator,
   onCommentClick,
+  cellAnchorIdPrefix,
   rounded = true,
   scrollTarget = "element",
   selectionColor,
@@ -16872,6 +16956,7 @@ function XlsxViewerInner({
                 renderActiveCellOverlay={renderActiveCellOverlay}
                 renderCommentIndicator={renderCommentIndicator}
                 onCommentClick={onCommentClick}
+                cellAnchorIdPrefix={cellAnchorIdPrefix}
                 scrollTarget={scrollTarget}
                 selectionColor={selectionColor}
                 selectionFillColor={selectionFillColor}

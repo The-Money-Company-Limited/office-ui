@@ -6,7 +6,7 @@
 // Operations: sheets, cells {sheet, range?}, comments, suggestions,
 // comment {sheet, ref, text, author}, reply {id, text, author}, resolve {id, resolved?},
 // delete {id}, suggest {sheet, ref, value, author, note?}, accept {id|"all", author?},
-// reject {id|"all", author?}. An id of "$N" means the thread created or changed by
+// reject {id|"all", author?}, locate {anchor, page?}. An id of "$N" means the thread created or changed by
 // operation N. Prints one JSON result per operation and writes out.xlsx.
 import { readFileSync, writeFileSync } from "node:fs";
 import { openXlsx } from "./dist/agent.js";
@@ -44,6 +44,7 @@ for (const [index, { op, ...args }] of (Array.isArray(operations) ? operations :
       case "suggest": results.push(workbook.suggest(args)); break;
       case "accept": results.push(workbook.accept(args.id, args.author)); break;
       case "reject": results.push(workbook.reject(args.id, args.author)); break;
+      case "locate": results.push(workbook.locate(args.anchor, { page: args.page })); break;
       default: throw new Error(`Unknown operation "${op}".`);
     }
   } catch (error) {

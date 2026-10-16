@@ -89,4 +89,18 @@ describe("headless agent API", () => {
     assert.deepEqual(workbook.accept("all"), [workbook.suggestions()[0]!.threadId]);
     assert.deepEqual(openXlsx(workbook.save()).cells("Sheet1", "B3"), [{ ref: "B3", value: 5 }]);
   });
+
+  it("locates the cell a page comment points at", () => {
+    const workbook = new Workbook();
+    workbook.getSheet(0).setCell("A1", "x");
+    workbook.addSheet("Q1 Plan");
+    workbook.getSheet(1).setCell("B2", 1200);
+    const agent = openXlsx(workbook.saveXlsxBytes());
+    const anchor = { page: "/book.html?sheet=Q1+Plan", selector: "main > div[id=\"wb-c-B2\"]" };
+    assert.deepEqual(agent.locate(anchor), { ref: "B2", sheet: "Q1 Plan", value: 1200 });
+    assert.deepEqual(agent.locate({ selector: "#wb-c-A1" }, { page: "/" }), { ref: "A1", sheet: "Sheet1", value: "x" });
+    assert.deepEqual(agent.locate({ selector: "#wb-c-C9" }, { page: "/?sheet=Q1%20Plan" }), { ref: "C9", sheet: "Q1 Plan", value: null });
+    assert.equal(agent.locate({ selector: "canvas" }, { page: "/?sheet=Q1+Plan" }), null);
+    assert.equal(agent.locate(anchor, { page: "/?sheet=Nope" }), null);
+  });
 });

@@ -411,6 +411,10 @@ Invoice says 25 oranges.
 
 Cells with a thread show a corner indicator. Pass `onCommentClick` to show the thread, or `renderCommentIndicator` to draw your own (it receives `thread`, `suggestion`, `cell` and `rect`).
 
+### Cell anchors for page comment layers
+
+A page comment layer that anchors to the clicked element sees only the canvas. Pass `cellAnchorIdPrefix` (any string, `""` included) to render a transparent element over each visible cell, with id `${prefix}c-B4`, `role="gridcell"` and the cell's formatted text. The grid looks and behaves the same. The agent's `locate(anchor, { page })` reads a stored anchor back to `{ sheet, ref, value }`: the sheet comes from the page's `?sheet=` query and the cell from the most-inked cell of a drawing, else from the selector.
+
 ### Headless agent API
 
 `@extend-ai/react-xlsx/agent` has no React, DOM or wasm dependency and edits the XLSX package in place, so untouched parts are saved unchanged:

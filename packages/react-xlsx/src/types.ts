@@ -1802,6 +1802,15 @@ export interface XlsxViewerProps extends UseXlsxViewerControllerOptions {
    */
   renderCommentIndicator?: (props: XlsxCommentIndicatorRenderProps) => React.ReactNode;
   /**
+   * Opt-in, canvas grid only. Renders a transparent element over every cell the canvas draws, with id
+   * `${cellAnchorIdPrefix}c-${A1}` (a merge uses its top-left cell), `role="gridcell"` and the cell's
+   * formatted text, so a page comment layer that anchors to the clicked element can name the cell.
+   * Any string turns the layer on, including `""` (ids are then `c-B4`); undefined leaves it off. Keep the
+   * prefix to `[A-Za-z0-9_-]`. The grid looks and behaves the same; `locate` in
+   * `@extend-ai/react-xlsx/agent` reads the cell back from a stored anchor.
+   */
+  cellAnchorIdPrefix?: string;
+  /**
    * Shows worksheet images, charts, shapes, and form controls.
    *
    * @default true

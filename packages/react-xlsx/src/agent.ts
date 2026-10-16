@@ -30,6 +30,7 @@ import {
   type XlsxSuggestionValue,
   type XlsxWorkbookSheet
 } from "./comments.ts";
+import { cellRefFromAnchor, sheetFromPage, type CommentAnchor } from "./cell-anchors.ts";
 import { normalizeZipEntryNames } from "./zip-entry-names.ts";
 
 export type {
@@ -40,6 +41,7 @@ export type {
   XlsxSuggestionValue
 } from "./comments.ts";
 export { SUGGESTION_MARKER, formatSuggestionText, parseSuggestionText } from "./comments.ts";
+export type { CommentAnchor } from "./cell-anchors.ts";
 
 export interface XlsxAgentCell {
   ref: string;
@@ -67,6 +69,19 @@ export interface XlsxAgentWorkbook {
   /** Replies "Rejected" and resolves without changing the cell. Returns the thread ids. */
   reject(id: string | "all", author?: string): string[];
   save(): Uint8Array;
+  /**
+   * The cell a page comment points at, for a viewer rendered with `cellAnchorIdPrefix`: the sheet
+   * from the page's `?sheet=` query (else the workbook's active sheet), the cell from the anchor's
+   * most-inked cell or its selector. Null when the anchor names no cell of a known sheet.
+   */
+  locate(anchor: CommentAnchor, options?: { page?: string }): XlsxAgentLocation | null;
+}
+
+export interface XlsxAgentLocation {
+  sheet: string;
+  ref: string;
+  value: XlsxAgentCell["value"];
+  formula?: string;
 }
 
 export function openXlsx(bytes: Uint8Array): XlsxAgentWorkbook {
@@ -155,6 +170,17 @@ export function openXlsx(bytes: Uint8Array): XlsxAgentWorkbook {
       writeCommentThreads(output, threads);
       return zipSync(output, { level: 6 });
     },
+    locate(anchor, options = {}) {
+      const ref = cellRefFromAnchor(anchor);
+      const page = options.page ?? anchor.page ?? "";
+      const sheetName = sheetFromPage(page) ?? activeSheetName(archive) ?? workbookSheets[0]!.name;
+      const sheet = workbookSheets.find((entry) => entry.name === sheetName);
+      if (!ref || !sheet) {
+        return null;
+      }
+      const cell = cells(sheet.name, ref)[0];
+      return { ...(cell?.formula === undefined ? {} : { formula: cell.formula }), ref, sheet: sheet.name, value: cell?.value ?? null };
+    },
     sheets: () => workbookSheets.map((sheet) => sheet.name),
     suggest({ sheet: sheetName, ref, value, author, note }) {
       const sheet = sheetByName(sheetName);
@@ -172,6 +198,14 @@ export function openXlsx(bytes: Uint8Array): XlsxAgentWorkbook {
     },
     suggestions: () => listSuggestions(threads)
   };
+}
+
+/** Name of the tab the workbook opens on (`workbookView activeTab`, counting every sheet kind). */
+function activeSheetName(archive: XlsxArchive): string | null {
+  const entry = archive["xl/workbook.xml"];
+  const xml = entry ? strFromU8(entry) : "";
+  const activeTab = Number(xmlElements(xml, "workbookView")[0]?.attributes.activeTab ?? 0);
+  return xmlElements(xml, "sheet")[activeTab]?.attributes.name ?? null;
 }
 
 // ---------------------------------------------------------------------------
