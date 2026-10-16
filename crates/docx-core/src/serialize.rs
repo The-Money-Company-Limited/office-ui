@@ -755,7 +755,9 @@ fn paragraph_properties_xml(style: Option<&ParagraphStyle>, text_alignment: Opti
     }
 
     if let Some(numbering) = &style.numbering {
-        if numbering.num_id > 0 {
+        if numbering.num_id == 0 {
+            fragments.push(r#"<w:numPr><w:numId w:val="0"/></w:numPr>"#.to_string());
+        } else if numbering.num_id > 0 {
             let ilvl = numbering.ilvl.max(0);
             let num_id = numbering.num_id;
             fragments.push(format!(
@@ -5238,6 +5240,96 @@ fn serialize_document_settings(model: &DocModel, pkg: &mut OoxmlPackage) {
     ensure_document_relationship(pkg, REL_TYPE_SETTINGS, &format!("/{source_part_name}"));
 }
 
+fn numbering_level_xml(level: &NumberingLevelDefinition) -> String {
+    let mut children = String::new();
+    if let Some(start) = level.start {
+        children.push_str(&format!(r#"<w:start w:val="{start}"/>"#));
+    }
+    if let Some(format) = &level.format {
+        children.push_str(&format!(r#"<w:numFmt w:val="{}"/>"#, escape_xml(format)));
+    }
+    if let Some(restart) = level.lvl_restart {
+        children.push_str(&format!(r#"<w:lvlRestart w:val="{restart}"/>"#));
+    }
+    children.push_str(&on_off_element_xml("isLgl", level.is_lgl));
+    if let Some(suffix) = &level.suffix {
+        let value = match suffix {
+            NumberingLevelSuffix::Tab => "tab",
+            NumberingLevelSuffix::Space => "space",
+            NumberingLevelSuffix::Nothing => "nothing",
+        };
+        children.push_str(&format!(r#"<w:suff w:val="{value}"/>"#));
+    }
+    if let Some(text) = &level.text {
+        children.push_str(&format!(r#"<w:lvlText w:val="{}"/>"#, escape_xml(text)));
+    }
+    if let Some(id) = level.picture_bullet_id {
+        children.push_str(&format!(r#"<w:lvlPicBulletId w:val="{id}"/>"#));
+    }
+    children.push_str(&paragraph_properties_xml(Some(&ParagraphStyle {
+        indent: level.indent.clone(),
+        ..ParagraphStyle::default()
+    }), None, None));
+    children.push_str(&run_properties_xml(level.run_style.as_ref()));
+    format!(r#"<w:lvl w:ilvl="{}">{children}</w:lvl>"#, level.ilvl)
+}
+
+fn serialize_numbering_definitions(model: &DocModel, pkg: &mut OoxmlPackage) {
+    let Some(definitions) = &model.metadata.numbering_definitions else { return; };
+    if definitions.abstracts.is_empty() && definitions.instances.is_empty() {
+        return;
+    }
+    let part_name = crate::package::related_document_part_name(pkg, "numbering");
+    let existing = pkg.parts.get(&part_name).map(|part| part.content.clone())
+        .unwrap_or_else(|| format!(r#"<w:numbering xmlns:w="{WORD_MAIN_NS}"/>"#));
+    let Some(root) = extract_balanced_tag_ranges(&existing, "w:numbering").into_iter().next() else { return; };
+    let mut xml = existing[root.start..root.end].to_string();
+    let order = ["w:numPicBullet", "w:abstractNum", "w:num", "w:numIdMacAtCleanup"];
+    // Imported definitions can contain properties outside our model. Keep them
+    // verbatim and append only the new IDs allocated by list typing.
+    for definition in &definitions.abstracts {
+        let exists = extract_balanced_tag_ranges(&xml, "w:abstractNum").iter().any(|range| {
+            get_attribute(&xml[range.start..opening_tag_end(&xml, range.start).unwrap_or(range.end)], "w:abstractNumId")
+                .and_then(|id| id.parse::<i64>().ok()) == Some(definition.abstract_num_id)
+        });
+        if exists { continue; }
+        let levels = definition.levels.iter().map(numbering_level_xml).collect::<String>();
+        let child = format!(r#"<w:abstractNum w:abstractNumId="{}">{levels}</w:abstractNum>"#, definition.abstract_num_id);
+        xml = insert_property_child(&xml, "w:numbering", "w:abstractNum", &child, &order);
+    }
+    for instance in &definitions.instances {
+        let exists = extract_balanced_tag_ranges(&xml, "w:num").iter().any(|range| {
+            get_attribute(&xml[range.start..opening_tag_end(&xml, range.start).unwrap_or(range.end)], "w:numId")
+                .and_then(|id| id.parse::<i64>().ok()) == Some(instance.num_id)
+        });
+        if exists { continue; }
+        let mut overrides = std::collections::BTreeMap::<i64, String>::new();
+        if let Some(starts) = &instance.level_start_overrides {
+            for (level, start) in starts {
+                if let Ok(level) = level.parse::<i64>() {
+                    overrides.insert(level, format!(r#"<w:startOverride w:val="{start}"/>"#));
+                }
+            }
+        }
+        if let Some(levels) = &instance.level_overrides {
+            for level in levels {
+                overrides.entry(level.ilvl).or_default().push_str(&numbering_level_xml(level));
+            }
+        }
+        let overrides = overrides.into_iter().map(|(level, children)| {
+            format!(r#"<w:lvlOverride w:ilvl="{level}">{children}</w:lvlOverride>"#)
+        }).collect::<String>();
+        let child = format!(r#"<w:num w:numId="{}"><w:abstractNumId w:val="{}"/>{overrides}</w:num>"#,
+            instance.num_id, instance.abstract_num_id);
+        xml = insert_property_child(&xml, "w:numbering", "w:num", &child, &order);
+    }
+    let content = format!("{}{}{}", &existing[..root.start], xml, &existing[root.end..]);
+    pkg.parts.insert(part_name.clone(), OoxmlPart { name: part_name.clone(), content });
+    ensure_content_type_override(pkg, &part_name,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml");
+    ensure_document_relationship(pkg, &format!("{OFFICE_REL_NS}/numbering"), &format!("/{part_name}"));
+}
+
 fn ensure_document_open_tag(model: &DocModel) -> String {
     let mut open_tag = model.metadata.document_open_tag.clone().unwrap_or_else(|| {
         format!(r#"<w:document xmlns:w="{WORD_MAIN_NS}" xmlns:r="{OFFICE_REL_NS}">"#)
@@ -5321,6 +5413,7 @@ pub fn serialize_doc_model(model: &DocModel, base_package: Option<&OoxmlPackage>
     serialize_header_footer_parts(model, &mut result);
     serialize_comment_parts(model, &mut result);
     serialize_document_settings(model, &mut result);
+    serialize_numbering_definitions(model, &mut result);
     result
 }
 
