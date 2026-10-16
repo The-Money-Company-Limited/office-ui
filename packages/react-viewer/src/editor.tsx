@@ -19312,20 +19312,19 @@ function mergeTextDecorations(
   baseDecoration: React.CSSProperties["textDecoration"],
   decoration: string
 ): string {
+  // "none" cannot combine with a line: "none line-through" is invalid CSS
+  // and the browser would drop the whole declaration.
   const tokens = new Set<string>();
-  if (typeof baseDecoration === "string") {
-    baseDecoration
+  const addTokens = (value: string): void => {
+    value
       .split(/\s+/)
-      .map((token) => token.trim())
-      .filter(Boolean)
+      .filter((token) => token && token !== "none")
       .forEach((token) => tokens.add(token));
+  };
+  if (typeof baseDecoration === "string") {
+    addTokens(baseDecoration);
   }
-
-  decoration
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter(Boolean)
-    .forEach((token) => tokens.add(token));
+  addTokens(decoration);
 
   return tokens.size > 0 ? Array.from(tokens).join(" ") : "none";
 }
@@ -42704,8 +42703,11 @@ export function DocxEditorViewer({
             return;
           }
 
+          // The connector leaves from the bottom of the change, as in Word:
+          // drawn through the middle it would run across the rest of the
+          // line and read as a strikethrough of the text after the change.
           const anchorY = clampNumber(
-            Math.round(anchorRect.top + anchorRect.height / 2),
+            Math.round(anchorRect.top + anchorRect.height),
             10,
             Math.max(10, pageHeightPx - 10)
           );
