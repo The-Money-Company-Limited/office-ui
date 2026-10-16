@@ -125,6 +125,7 @@ function App() {
               anchorIdPrefix=""
               defaultMode="viewing"
               scrollsWindow
+              showUpload={false}
               isDark={isDark}
               onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
             />

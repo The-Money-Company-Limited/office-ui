@@ -68,6 +68,7 @@ import {
   createDocxTrackedChangeCardRenderer,
 } from "@/components/extend/docx-annotation-card"
 import { FileThumbnail } from "@/components/extend/file-thumbnail"
+import { ToolbarOverflow } from "@/components/extend/toolbar-overflow"
 import { IconPlaceholder } from "@/components/icon-placeholder"
 
 function ArrowExpandDiagonal01Glyph(props: RegistryIconProps) {
@@ -933,10 +934,6 @@ function ToolbarIconButton({
   )
 }
 
-function ToolbarSeparator() {
-  return <Separator orientation="vertical" className="mx-1 h-4 self-center" />
-}
-
 function DocxSidebarThumbnail({
   canvasRef,
   displayFileName,
@@ -1029,9 +1026,9 @@ function ParagraphStylePreviewCard({
 }
 
 function DocxEditorToolbar({
-  activePage,
   controlsDisabled,
   editor,
+  fileName,
   mode,
   onImageUploadClick,
   onIsDarkChange,
@@ -1039,22 +1036,21 @@ function DocxEditorToolbar({
   onOpenLinkEditor,
   onToggleSidebar,
   onUploadClick,
-  pageCount,
   setZoomScale,
   showNightRenderToggle,
   zoomScale,
 }: {
-  activePage: number
   controlsDisabled: boolean
   editor: DocxEditorController
+  fileName: string
   mode: DocxEditorMode
   onImageUploadClick: () => void
   onIsDarkChange: (checked: boolean) => void
   onModeChange: (mode: DocxEditorMode) => void
   onOpenLinkEditor: () => void
   onToggleSidebar: () => void
-  onUploadClick: () => void
-  pageCount: number
+  /** Opens a file picker to replace the document; no button without it. */
+  onUploadClick?: () => void
   setZoomScale: React.Dispatch<React.SetStateAction<number>>
   showNightRenderToggle: boolean
   zoomScale: number
@@ -1184,6 +1180,72 @@ function DocxEditorToolbar({
     [editor, fontToggleValues]
   )
 
+  const zoomControls = (
+    <>
+      <ToolbarIconButton
+        label="Zoom out"
+        disabled={controlsDisabled || !canZoomOut}
+        onClick={() =>
+          setZoomScale((currentZoomScale) =>
+            getNextZoomScale(currentZoomScale, -1)
+          )
+        }
+      >
+        <IconPlaceholder
+          lucide="CircleMinus"
+          tabler="IconCircleMinus"
+          hugeicons="MinusSignCircleIcon"
+          phosphor="MinusCircleIcon"
+          remixicon="RiIndeterminateCircleLine"
+          className="size-4"
+        />
+      </ToolbarIconButton>
+      <Select
+        value={zoomScale.toString()}
+        onValueChange={(value) => setZoomScale(Number(value))}
+        disabled={controlsDisabled}
+        modal={false}
+      >
+        <SelectTrigger
+          size="sm"
+          className="w-[84px] min-w-[84px]"
+          aria-label="Zoom level"
+        >
+          <SelectValue>{Math.round(zoomScale)}%</SelectValue>
+        </SelectTrigger>
+        <SelectContent
+          align="end"
+          alignItemWithTrigger={false}
+          className="z-40"
+        >
+          {ZOOM_OPTIONS.map((value) => (
+            <SelectItem key={value} value={value.toString()}>
+              {value}%
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <ToolbarIconButton
+        label="Zoom in"
+        disabled={controlsDisabled || !canZoomIn}
+        onClick={() =>
+          setZoomScale((currentZoomScale) =>
+            getNextZoomScale(currentZoomScale, 1)
+          )
+        }
+      >
+        <IconPlaceholder
+          lucide="CirclePlusIcon"
+          tabler="IconCirclePlusFilled"
+          hugeicons="PlusSignCircleIcon"
+          phosphor="PlusCircleIcon"
+          remixicon="RiAddCircleFill"
+          className="size-4"
+        />
+      </ToolbarIconButton>
+    </>
+  )
+
   return (
     <div className="docx-editor-toolbar bg-background">
       <TooltipProvider>
@@ -1202,10 +1264,22 @@ function DocxEditorToolbar({
               className="size-4"
             />
           </ToolbarIconButton>
-          <div className="min-w-28 text-sm whitespace-nowrap text-primary">
-            Page {pageCount ? activePage : 1} of {pageCount || "-"}
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <IconPlaceholder
+                lucide="FileText"
+                tabler="IconFileText"
+                hugeicons="File01Icon"
+                phosphor="FileDocIcon"
+                remixicon="RiFileWord2Line"
+                className="size-4"
+              />
+            </span>
+            <span className="truncate text-sm font-semibold" title={fileName}>
+              {fileName}
+            </span>
           </div>
-          <div className="min-w-0 flex-1" />
+          {mode === "viewing" ? zoomControls : null}
           {showNightRenderToggle ? (
             <>
               <ToolbarIconButton
@@ -1309,24 +1383,26 @@ function DocxEditorToolbar({
             onModeChange={onModeChange}
           />
           <Separator orientation="vertical" className="mx-1 h-4 self-center" />
-          <ToolbarIconButton
-            label="Import DOCX"
-            disabled={editor.isImporting}
-            onClick={onUploadClick}
-          >
-            {editor.isImporting ? (
-              <Spinner className="size-4" />
-            ) : (
-              <IconPlaceholder
-                lucide="Upload"
-                tabler="IconUpload"
-                hugeicons="Upload01Icon"
-                phosphor="UploadSimpleIcon"
-                remixicon="RiUpload2Line"
-                className="size-4"
-              />
-            )}
-          </ToolbarIconButton>
+          {onUploadClick ? (
+            <ToolbarIconButton
+              label="Import DOCX"
+              disabled={editor.isImporting}
+              onClick={onUploadClick}
+            >
+              {editor.isImporting ? (
+                <Spinner className="size-4" />
+              ) : (
+                <IconPlaceholder
+                  lucide="Upload"
+                  tabler="IconUpload"
+                  hugeicons="Upload01Icon"
+                  phosphor="UploadSimpleIcon"
+                  remixicon="RiUpload2Line"
+                  className="size-4"
+                />
+              )}
+            </ToolbarIconButton>
+          ) : null}
           <ToolbarIconButton
             label="Download DOCX"
             disabled={controlsDisabled || editor.isImporting}
@@ -1343,650 +1419,563 @@ function DocxEditorToolbar({
           </ToolbarIconButton>
         </div>
 
-        <div className="docx-editor-ribbon flex min-h-12 flex-wrap items-center gap-2 border-b px-3 py-2">
-          <div className="flex shrink-0 items-center gap-1">
-            <ToolbarIconButton
-              label="Undo"
-              disabled={!editor.canUndo || mode === "viewing"}
-              onClick={editor.undo}
-            >
-              <IconPlaceholder
-                lucide="Undo2"
-                tabler="IconArrowBackUp"
-                hugeicons="Undo02Icon"
-                phosphor="ArrowUUpLeftIcon"
-                remixicon="RiArrowGoBackLine"
-                className="size-4"
-              />
-            </ToolbarIconButton>
-            <ToolbarIconButton
-              label="Redo"
-              disabled={!editor.canRedo || mode === "viewing"}
-              onClick={editor.redo}
-            >
-              <IconPlaceholder
-                lucide="Redo2"
-                tabler="IconArrowForwardUp"
-                hugeicons="Redo02Icon"
-                phosphor="ArrowUUpRightIcon"
-                remixicon="RiArrowGoForwardLine"
-                className="size-4"
-              />
-            </ToolbarIconButton>
-          </div>
-
-          <ToolbarSeparator />
-
-          <Select
-            value={selectedParagraphStyleValue}
-            onOpenChange={() => setParagraphStylePreviewId(null)}
-            onValueChange={(value) => {
-              if (value) {
-                setParagraphStyle(value)
-              }
-            }}
-            disabled={!canEdit}
-            modal={false}
+        {mode === "viewing" ? null : (
+          <ToolbarOverflow
+            className="docx-editor-ribbon min-h-12 border-b px-3 py-2"
+            end={zoomControls}
           >
-            <SelectTrigger
-              size="sm"
-              className="w-[136px] min-w-[136px]"
-              aria-label="Paragraph style"
-            >
-              <SelectValue placeholder="Style" />
-            </SelectTrigger>
-            <SelectContent
-              align="start"
-              alignItemWithTrigger={false}
-              className="z-40 min-w-[210px]"
-            >
-              {paragraphStyleOptions.map((option) => (
-                <PreviewCard
-                  key={option.id}
-                  open={paragraphStylePreviewId === option.id}
-                  onOpenChange={(open) => {
-                    setParagraphStylePreviewId((current) =>
-                      open ? option.id : current === option.id ? null : current
-                    )
-                  }}
-                  openDelay={0}
-                  closeDelay={120}
-                >
-                  <SelectItem
-                    value={option.id}
-                    label={option.name}
-                    className="relative min-w-[190px]"
-                    onFocus={() => setParagraphStylePreviewId(option.id)}
-                    onPointerEnter={() => setParagraphStylePreviewId(option.id)}
-                  >
-                    <PreviewCardTrigger asChild>
-                      <span className="block w-full truncate">
-                        {option.name}
-                      </span>
-                    </PreviewCardTrigger>
-                  </SelectItem>
-                  <PreviewCardContent
-                    side="right"
-                    align="start"
-                    sideOffset={10}
-                    alignOffset={-4}
-                    data-slot="paragraph-style-preview-card"
-                    className="origin-(--transform-origin) rounded-lg border bg-popover text-popover-foreground shadow-lg/5 transition-opacity duration-100 outline-none not-dark:bg-clip-padding before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:opacity-0 data-starting-style:opacity-0 dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
-                  >
-                    <ParagraphStylePreviewCard
-                      documentTheme={documentTheme}
-                      option={option}
-                    />
-                  </PreviewCardContent>
-                </PreviewCard>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <Select
-            value={selectedRunStyle?.fontFamily ?? "Calibri"}
-            onValueChange={(value) => {
-              if (value) {
-                editor.setFontFamily(value)
-              }
-            }}
-            disabled={!canEdit}
-            modal={false}
-          >
-            <SelectTrigger
-              size="sm"
-              className="w-[156px] min-w-[156px]"
-              aria-label="Font family"
-            >
-              <SelectValue placeholder="Font" />
-            </SelectTrigger>
-            <SelectContent
-              align="start"
-              alignItemWithTrigger={false}
-              className="z-40"
-            >
-              {FONT_FAMILIES.map((fontFamily) => (
-                <SelectItem key={fontFamily} value={fontFamily}>
-                  <span style={{ fontFamily }}>{fontFamily}</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <Select
-            value={String(Math.round(selectedRunStyle?.fontSizePt ?? 12))}
-            onValueChange={(value) => {
-              const nextSize = Number(value)
-              if (Number.isFinite(nextSize)) {
-                editor.setFontSize(nextSize)
-              }
-            }}
-            disabled={!canEdit}
-            modal={false}
-          >
-            <SelectTrigger
-              size="sm"
-              className="w-[86px] min-w-[86px]"
-              aria-label="Font size"
-            >
-              <SelectValue placeholder="Size" />
-            </SelectTrigger>
-            <SelectContent
-              align="start"
-              alignItemWithTrigger={false}
-              className="z-40"
-            >
-              {FONT_SIZE_OPTIONS.map((size) => (
-                <SelectItem key={size} value={String(size)}>
-                  {size} pt
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <Select
-            value={selectedLineSpacingValue}
-            onValueChange={(value) => {
-              const nextSpacing = Number(value)
-              if (Number.isFinite(nextSpacing)) {
-                setLineSpacing(nextSpacing)
-              }
-            }}
-            disabled={!canEdit}
-            modal={false}
-          >
-            <SelectTrigger
-              size="sm"
-              className="w-[94px] min-w-[94px]"
-              aria-label="Line spacing"
-            >
-              <SelectValue placeholder="Spacing" />
-            </SelectTrigger>
-            <SelectContent
-              align="start"
-              alignItemWithTrigger={false}
-              className="z-40"
-            >
-              {LINE_SPACING_OPTIONS.map((spacing) => (
-                <SelectItem key={spacing} value={String(spacing)}>
-                  {spacing}x
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <ToolbarSeparator />
-
-          <ToggleGroup
-            className="shrink-0"
-            disabled={!canEdit}
-            multiple
-            spacing="default"
-            value={fontToggleValues}
-            onMouseDown={preserveTextSelection}
-            onPointerDown={preserveTextSelection}
-            onValueChange={(value) =>
-              applyFontToggleValues(value as DocxFontToggleValue[])
-            }
-          >
-            <ToolbarTooltip label="Bold">
-              <ToggleGroupItem aria-label="Bold" size="sm" value="bold">
-                <IconPlaceholder
-                  lucide="Bold"
-                  tabler="IconBold"
-                  hugeicons="TextBoldIcon"
-                  phosphor="TextBIcon"
-                  remixicon="RiBold"
-                  className="size-4"
-                />
-              </ToggleGroupItem>
-            </ToolbarTooltip>
-            <ToolbarTooltip label="Italic">
-              <ToggleGroupItem aria-label="Italic" size="sm" value="italic">
-                <IconPlaceholder
-                  lucide="Italic"
-                  tabler="IconItalic"
-                  hugeicons="TextItalicIcon"
-                  phosphor="TextItalicIcon"
-                  remixicon="RiItalic"
-                  className="size-4"
-                />
-              </ToggleGroupItem>
-            </ToolbarTooltip>
-            <ToolbarTooltip label="Underline">
-              <ToggleGroupItem
-                aria-label="Underline"
-                size="sm"
-                value="underline"
+            <div className="flex shrink-0 items-center gap-1">
+              <ToolbarIconButton
+                label="Undo"
+                disabled={!editor.canUndo || mode === "viewing"}
+                onClick={editor.undo}
               >
                 <IconPlaceholder
-                  lucide="Underline"
-                  tabler="IconUnderline"
-                  hugeicons="TextUnderlineIcon"
-                  phosphor="TextUnderlineIcon"
-                  remixicon="RiUnderline"
+                  lucide="Undo2"
+                  tabler="IconArrowBackUp"
+                  hugeicons="Undo02Icon"
+                  phosphor="ArrowUUpLeftIcon"
+                  remixicon="RiArrowGoBackLine"
                   className="size-4"
                 />
-              </ToggleGroupItem>
-            </ToolbarTooltip>
-            <ToolbarTooltip label="Strikethrough">
-              <ToggleGroupItem
-                aria-label="Strikethrough"
-                size="sm"
-                value="strike"
+              </ToolbarIconButton>
+              <ToolbarIconButton
+                label="Redo"
+                disabled={!editor.canRedo || mode === "viewing"}
+                onClick={editor.redo}
               >
                 <IconPlaceholder
-                  lucide="Strikethrough"
-                  tabler="IconStrikethrough"
-                  hugeicons="TextStrikethroughIcon"
-                  phosphor="TextStrikethroughIcon"
-                  remixicon="RiStrikethrough"
+                  lucide="Redo2"
+                  tabler="IconArrowForwardUp"
+                  hugeicons="Redo02Icon"
+                  phosphor="ArrowUUpRightIcon"
+                  remixicon="RiArrowGoForwardLine"
                   className="size-4"
                 />
-              </ToggleGroupItem>
-            </ToolbarTooltip>
-            <ToolbarTooltip label="Superscript">
-              <ToggleGroupItem
-                aria-label="Superscript"
-                size="sm"
-                value="superscript"
-              >
-                <IconPlaceholder
-                  lucide="Superscript"
-                  tabler="IconSuperscript"
-                  hugeicons="TextSuperscriptIcon"
-                  phosphor="TextSuperscriptIcon"
-                  remixicon="RiSuperscript"
-                  className="size-4"
-                />
-              </ToggleGroupItem>
-            </ToolbarTooltip>
-            <ToolbarTooltip label="Subscript">
-              <ToggleGroupItem
-                aria-label="Subscript"
-                size="sm"
-                value="subscript"
-              >
-                <IconPlaceholder
-                  lucide="Subscript"
-                  tabler="IconSubscript"
-                  hugeicons="TextSubscriptIcon"
-                  phosphor="TextSubscriptIcon"
-                  remixicon="RiSubscript"
-                  className="size-4"
-                />
-              </ToggleGroupItem>
-            </ToolbarTooltip>
-          </ToggleGroup>
-
-          <ToolbarSeparator />
-
-          <div className="flex shrink-0 items-center gap-1">
-            <ColorPicker
-              label="Text color"
-              icon={TextColorGlyph}
-              color={textColorValue}
+              </ToolbarIconButton>
+            </div>
+            <Select
+              value={selectedParagraphStyleValue}
+              onOpenChange={() => setParagraphStylePreviewId(null)}
+              onValueChange={(value) => {
+                if (value) {
+                  setParagraphStyle(value)
+                }
+              }}
               disabled={!canEdit}
-              onTriggerMouseDown={preserveTextSelection}
-              onTriggerPointerDown={preserveTextSelection}
-              onChange={(color) =>
-                editor.setTextColor(normalizeHexColor(color))
+              modal={false}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-[136px] min-w-[136px]"
+                aria-label="Paragraph style"
+              >
+                <SelectValue placeholder="Style" />
+              </SelectTrigger>
+              <SelectContent
+                align="start"
+                alignItemWithTrigger={false}
+                className="z-40 min-w-[210px]"
+              >
+                {paragraphStyleOptions.map((option) => (
+                  <PreviewCard
+                    key={option.id}
+                    open={paragraphStylePreviewId === option.id}
+                    onOpenChange={(open) => {
+                      setParagraphStylePreviewId((current) =>
+                        open
+                          ? option.id
+                          : current === option.id
+                            ? null
+                            : current
+                      )
+                    }}
+                    openDelay={0}
+                    closeDelay={120}
+                  >
+                    <SelectItem
+                      value={option.id}
+                      label={option.name}
+                      className="relative min-w-[190px]"
+                      onFocus={() => setParagraphStylePreviewId(option.id)}
+                      onPointerEnter={() =>
+                        setParagraphStylePreviewId(option.id)
+                      }
+                    >
+                      <PreviewCardTrigger asChild>
+                        <span className="block w-full truncate">
+                          {option.name}
+                        </span>
+                      </PreviewCardTrigger>
+                    </SelectItem>
+                    <PreviewCardContent
+                      side="right"
+                      align="start"
+                      sideOffset={10}
+                      alignOffset={-4}
+                      data-slot="paragraph-style-preview-card"
+                      className="origin-(--transform-origin) rounded-lg border bg-popover text-popover-foreground shadow-lg/5 transition-opacity duration-100 outline-none not-dark:bg-clip-padding before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:opacity-0 data-starting-style:opacity-0 dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
+                    >
+                      <ParagraphStylePreviewCard
+                        documentTheme={documentTheme}
+                        option={option}
+                      />
+                    </PreviewCardContent>
+                  </PreviewCard>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={selectedRunStyle?.fontFamily ?? "Calibri"}
+              onValueChange={(value) => {
+                if (value) {
+                  editor.setFontFamily(value)
+                }
+              }}
+              disabled={!canEdit}
+              modal={false}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-[156px] min-w-[156px]"
+                aria-label="Font family"
+              >
+                <SelectValue placeholder="Font" />
+              </SelectTrigger>
+              <SelectContent
+                align="start"
+                alignItemWithTrigger={false}
+                className="z-40"
+              >
+                {FONT_FAMILIES.map((fontFamily) => (
+                  <SelectItem key={fontFamily} value={fontFamily}>
+                    <span style={{ fontFamily }}>{fontFamily}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={String(Math.round(selectedRunStyle?.fontSizePt ?? 12))}
+              onValueChange={(value) => {
+                const nextSize = Number(value)
+                if (Number.isFinite(nextSize)) {
+                  editor.setFontSize(nextSize)
+                }
+              }}
+              disabled={!canEdit}
+              modal={false}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-[86px] min-w-[86px]"
+                aria-label="Font size"
+              >
+                <SelectValue placeholder="Size" />
+              </SelectTrigger>
+              <SelectContent
+                align="start"
+                alignItemWithTrigger={false}
+                className="z-40"
+              >
+                {FONT_SIZE_OPTIONS.map((size) => (
+                  <SelectItem key={size} value={String(size)}>
+                    {size} pt
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={selectedLineSpacingValue}
+              onValueChange={(value) => {
+                const nextSpacing = Number(value)
+                if (Number.isFinite(nextSpacing)) {
+                  setLineSpacing(nextSpacing)
+                }
+              }}
+              disabled={!canEdit}
+              modal={false}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-[94px] min-w-[94px]"
+                aria-label="Line spacing"
+              >
+                <SelectValue placeholder="Spacing" />
+              </SelectTrigger>
+              <SelectContent
+                align="start"
+                alignItemWithTrigger={false}
+                className="z-40"
+              >
+                {LINE_SPACING_OPTIONS.map((spacing) => (
+                  <SelectItem key={spacing} value={String(spacing)}>
+                    {spacing}x
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <ToggleGroup
+              className="shrink-0"
+              disabled={!canEdit}
+              multiple
+              spacing="default"
+              value={fontToggleValues}
+              onMouseDown={preserveTextSelection}
+              onPointerDown={preserveTextSelection}
+              onValueChange={(value) =>
+                applyFontToggleValues(value as DocxFontToggleValue[])
               }
-            />
+            >
+              <ToolbarTooltip label="Bold">
+                <ToggleGroupItem aria-label="Bold" size="sm" value="bold">
+                  <IconPlaceholder
+                    lucide="Bold"
+                    tabler="IconBold"
+                    hugeicons="TextBoldIcon"
+                    phosphor="TextBIcon"
+                    remixicon="RiBold"
+                    className="size-4"
+                  />
+                </ToggleGroupItem>
+              </ToolbarTooltip>
+              <ToolbarTooltip label="Italic">
+                <ToggleGroupItem aria-label="Italic" size="sm" value="italic">
+                  <IconPlaceholder
+                    lucide="Italic"
+                    tabler="IconItalic"
+                    hugeicons="TextItalicIcon"
+                    phosphor="TextItalicIcon"
+                    remixicon="RiItalic"
+                    className="size-4"
+                  />
+                </ToggleGroupItem>
+              </ToolbarTooltip>
+              <ToolbarTooltip label="Underline">
+                <ToggleGroupItem
+                  aria-label="Underline"
+                  size="sm"
+                  value="underline"
+                >
+                  <IconPlaceholder
+                    lucide="Underline"
+                    tabler="IconUnderline"
+                    hugeicons="TextUnderlineIcon"
+                    phosphor="TextUnderlineIcon"
+                    remixicon="RiUnderline"
+                    className="size-4"
+                  />
+                </ToggleGroupItem>
+              </ToolbarTooltip>
+              <ToolbarTooltip label="Strikethrough">
+                <ToggleGroupItem
+                  aria-label="Strikethrough"
+                  size="sm"
+                  value="strike"
+                >
+                  <IconPlaceholder
+                    lucide="Strikethrough"
+                    tabler="IconStrikethrough"
+                    hugeicons="TextStrikethroughIcon"
+                    phosphor="TextStrikethroughIcon"
+                    remixicon="RiStrikethrough"
+                    className="size-4"
+                  />
+                </ToggleGroupItem>
+              </ToolbarTooltip>
+              <ToolbarTooltip label="Superscript">
+                <ToggleGroupItem
+                  aria-label="Superscript"
+                  size="sm"
+                  value="superscript"
+                >
+                  <IconPlaceholder
+                    lucide="Superscript"
+                    tabler="IconSuperscript"
+                    hugeicons="TextSuperscriptIcon"
+                    phosphor="TextSuperscriptIcon"
+                    remixicon="RiSuperscript"
+                    className="size-4"
+                  />
+                </ToggleGroupItem>
+              </ToolbarTooltip>
+              <ToolbarTooltip label="Subscript">
+                <ToggleGroupItem
+                  aria-label="Subscript"
+                  size="sm"
+                  value="subscript"
+                >
+                  <IconPlaceholder
+                    lucide="Subscript"
+                    tabler="IconSubscript"
+                    hugeicons="TextSubscriptIcon"
+                    phosphor="TextSubscriptIcon"
+                    remixicon="RiSubscript"
+                    className="size-4"
+                  />
+                </ToggleGroupItem>
+              </ToolbarTooltip>
+            </ToggleGroup>
+            <div className="flex shrink-0 items-center gap-1">
+              <ColorPicker
+                label="Text color"
+                icon={TextColorGlyph}
+                color={textColorValue}
+                disabled={!canEdit}
+                onTriggerMouseDown={preserveTextSelection}
+                onTriggerPointerDown={preserveTextSelection}
+                onChange={(color) =>
+                  editor.setTextColor(normalizeHexColor(color))
+                }
+              />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={!canEdit}
+                    aria-label="Highlight color"
+                    className="relative"
+                  >
+                    <IconPlaceholder
+                      lucide="Highlighter"
+                      tabler="IconHighlight"
+                      hugeicons="HighlighterIcon"
+                      phosphor="HighlighterIcon"
+                      remixicon="RiMarkPenLine"
+                      className="size-4"
+                    />
+                    <span
+                      className="absolute right-1 bottom-1 h-1 w-4 rounded-full border border-background"
+                      style={{ backgroundColor: highlightColor }}
+                    />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="z-40 w-44">
+                  {HIGHLIGHT_COLORS.map((option) => (
+                    <DropdownMenuCheckboxItem
+                      key={option.value}
+                      checked={selectedRunStyle?.highlight === option.value}
+                      onCheckedChange={() => editor.setHighlight(option.value)}
+                    >
+                      <span
+                        className="size-3 rounded-full border"
+                        style={{ backgroundColor: option.color }}
+                      />
+                      {option.label}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuCheckboxItem
+                    checked={!selectedRunStyle?.highlight}
+                    onCheckedChange={() => editor.setHighlight(undefined)}
+                  >
+                    No highlight
+                  </DropdownMenuCheckboxItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <ToolbarIconButton
+                label="Link"
+                disabled={!canEdit}
+                onMouseDown={preserveTextSelection}
+                onPointerDown={preserveTextSelection}
+                onClick={onOpenLinkEditor}
+              >
+                <IconPlaceholder
+                  lucide="Link"
+                  tabler="IconLink"
+                  hugeicons="Link02Icon"
+                  phosphor="LinkIcon"
+                  remixicon="RiLink"
+                  className="size-4"
+                />
+              </ToolbarIconButton>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <ToolbarIconButton
+                label="Align left"
+                active={
+                  selectedParagraph?.style?.align === "left" ||
+                  !selectedParagraph?.style?.align
+                }
+                disabled={!canEdit}
+                onMouseDown={preserveTextSelection}
+                onPointerDown={preserveTextSelection}
+                onClick={() => editor.setAlignment("left")}
+              >
+                <IconPlaceholder
+                  lucide="AlignLeft"
+                  tabler="IconAlignLeft"
+                  hugeicons="TextAlignLeft01Icon"
+                  phosphor="TextAlignLeftIcon"
+                  remixicon="RiAlignLeft"
+                  className="size-4"
+                />
+              </ToolbarIconButton>
+              <ToolbarIconButton
+                label="Align center"
+                active={selectedParagraph?.style?.align === "center"}
+                disabled={!canEdit}
+                onMouseDown={preserveTextSelection}
+                onPointerDown={preserveTextSelection}
+                onClick={() => editor.setAlignment("center")}
+              >
+                <IconPlaceholder
+                  lucide="AlignCenter"
+                  tabler="IconAlignCenter"
+                  hugeicons="TextAlignCenterIcon"
+                  phosphor="TextAlignCenterIcon"
+                  remixicon="RiAlignCenter"
+                  className="size-4"
+                />
+              </ToolbarIconButton>
+              <ToolbarIconButton
+                label="Align right"
+                active={selectedParagraph?.style?.align === "right"}
+                disabled={!canEdit}
+                onMouseDown={preserveTextSelection}
+                onPointerDown={preserveTextSelection}
+                onClick={() => editor.setAlignment("right")}
+              >
+                <IconPlaceholder
+                  lucide="AlignRight"
+                  tabler="IconAlignRight"
+                  hugeicons="TextAlignRight01Icon"
+                  phosphor="TextAlignRightIcon"
+                  remixicon="RiAlignRight"
+                  className="size-4"
+                />
+              </ToolbarIconButton>
+              <ToolbarIconButton
+                label="Justify"
+                active={selectedParagraph?.style?.align === "justify"}
+                disabled={!canEdit}
+                onMouseDown={preserveTextSelection}
+                onPointerDown={preserveTextSelection}
+                onClick={() => editor.setAlignment("justify")}
+              >
+                <IconPlaceholder
+                  lucide="AlignJustify"
+                  tabler="IconAlignJustified"
+                  hugeicons="TextAlignJustifyLeftIcon"
+                  phosphor="TextAlignJustifyIcon"
+                  remixicon="RiAlignJustify"
+                  className="size-4"
+                />
+              </ToolbarIconButton>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <ToolbarIconButton
+                label="Bulleted list"
+                active={editor.hasUnorderedList}
+                disabled={!canEdit}
+                onMouseDown={preserveTextSelection}
+                onPointerDown={preserveTextSelection}
+                onClick={() => editor.toggleList("unordered")}
+              >
+                <IconPlaceholder
+                  lucide="Columns3Icon"
+                  tabler="IconLayoutColumns"
+                  hugeicons="LeftToRightListBulletIcon"
+                  phosphor="ColumnsIcon"
+                  remixicon="RiLayoutColumnLine"
+                  className="size-4"
+                />
+              </ToolbarIconButton>
+              <ToolbarIconButton
+                label="Numbered list"
+                active={editor.hasOrderedList}
+                disabled={!canEdit}
+                onMouseDown={preserveTextSelection}
+                onPointerDown={preserveTextSelection}
+                onClick={() => editor.toggleList("ordered")}
+              >
+                <IconPlaceholder
+                  lucide="ListOrdered"
+                  tabler="IconListNumbers"
+                  hugeicons="LeftToRightListNumberIcon"
+                  phosphor="ListNumbersIcon"
+                  remixicon="RiListOrdered"
+                  className="size-4"
+                />
+              </ToolbarIconButton>
+            </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="sm"
                   disabled={!canEdit}
-                  aria-label="Highlight color"
-                  className="relative"
+                  className="h-7 gap-1 px-2 shadow-none"
                 >
-                  <IconPlaceholder
-                    lucide="Highlighter"
-                    tabler="IconHighlight"
-                    hugeicons="HighlighterIcon"
-                    phosphor="HighlighterIcon"
-                    remixicon="RiMarkPenLine"
-                    className="size-4"
-                  />
-                  <span
-                    className="absolute right-1 bottom-1 h-1 w-4 rounded-full border border-background"
-                    style={{ backgroundColor: highlightColor }}
-                  />
+                  {borderTriggerIcon}
+                  {borderTriggerLabel}
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="z-40 w-44">
-                {HIGHLIGHT_COLORS.map((option) => (
-                  <DropdownMenuCheckboxItem
-                    key={option.value}
-                    checked={selectedRunStyle?.highlight === option.value}
-                    onCheckedChange={() => editor.setHighlight(option.value)}
-                  >
-                    <span
-                      className="size-3 rounded-full border"
-                      style={{ backgroundColor: option.color }}
-                    />
-                    {option.label}
-                  </DropdownMenuCheckboxItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuCheckboxItem
-                  checked={!selectedRunStyle?.highlight}
-                  onCheckedChange={() => editor.setHighlight(undefined)}
-                >
-                  No highlight
-                </DropdownMenuCheckboxItem>
+              <DropdownMenuContent align="start" className="z-40 w-56">
+                {BORDER_CONTROL_OPTIONS.map((option) => {
+                  const enabledForContext =
+                    !option.contexts || option.contexts.includes(borderContext)
+                  const BorderOptionIcon = borderControlOptionIcon(option.id)
+
+                  return (
+                    <React.Fragment key={option.id}>
+                      {option.separatorBefore ? (
+                        <DropdownMenuSeparator />
+                      ) : null}
+                      <DropdownMenuCheckboxItem
+                        checked={activeBorderPresets[option.id]}
+                        disabled={!enabledForContext}
+                        onCheckedChange={() => {
+                          if (enabledForContext) {
+                            applyBorderPreset(option.id)
+                          }
+                        }}
+                      >
+                        <BorderOptionIcon className="size-4 text-muted-foreground" />
+                        {option.label}
+                      </DropdownMenuCheckboxItem>
+                    </React.Fragment>
+                  )
+                })}
               </DropdownMenuContent>
             </DropdownMenu>
-            <ToolbarIconButton
-              label="Link"
-              disabled={!canEdit}
-              onMouseDown={preserveTextSelection}
-              onPointerDown={preserveTextSelection}
-              onClick={onOpenLinkEditor}
-            >
-              <IconPlaceholder
-                lucide="Link"
-                tabler="IconLink"
-                hugeicons="Link02Icon"
-                phosphor="LinkIcon"
-                remixicon="RiLink"
-                className="size-4"
-              />
-            </ToolbarIconButton>
-          </div>
-
-          <ToolbarSeparator />
-
-          <div className="flex shrink-0 items-center gap-1">
-            <ToolbarIconButton
-              label="Align left"
-              active={
-                selectedParagraph?.style?.align === "left" ||
-                !selectedParagraph?.style?.align
-              }
-              disabled={!canEdit}
-              onMouseDown={preserveTextSelection}
-              onPointerDown={preserveTextSelection}
-              onClick={() => editor.setAlignment("left")}
-            >
-              <IconPlaceholder
-                lucide="AlignLeft"
-                tabler="IconAlignLeft"
-                hugeicons="TextAlignLeft01Icon"
-                phosphor="TextAlignLeftIcon"
-                remixicon="RiAlignLeft"
-                className="size-4"
-              />
-            </ToolbarIconButton>
-            <ToolbarIconButton
-              label="Align center"
-              active={selectedParagraph?.style?.align === "center"}
-              disabled={!canEdit}
-              onMouseDown={preserveTextSelection}
-              onPointerDown={preserveTextSelection}
-              onClick={() => editor.setAlignment("center")}
-            >
-              <IconPlaceholder
-                lucide="AlignCenter"
-                tabler="IconAlignCenter"
-                hugeicons="TextAlignCenterIcon"
-                phosphor="TextAlignCenterIcon"
-                remixicon="RiAlignCenter"
-                className="size-4"
-              />
-            </ToolbarIconButton>
-            <ToolbarIconButton
-              label="Align right"
-              active={selectedParagraph?.style?.align === "right"}
-              disabled={!canEdit}
-              onMouseDown={preserveTextSelection}
-              onPointerDown={preserveTextSelection}
-              onClick={() => editor.setAlignment("right")}
-            >
-              <IconPlaceholder
-                lucide="AlignRight"
-                tabler="IconAlignRight"
-                hugeicons="TextAlignRight01Icon"
-                phosphor="TextAlignRightIcon"
-                remixicon="RiAlignRight"
-                className="size-4"
-              />
-            </ToolbarIconButton>
-            <ToolbarIconButton
-              label="Justify"
-              active={selectedParagraph?.style?.align === "justify"}
-              disabled={!canEdit}
-              onMouseDown={preserveTextSelection}
-              onPointerDown={preserveTextSelection}
-              onClick={() => editor.setAlignment("justify")}
-            >
-              <IconPlaceholder
-                lucide="AlignJustify"
-                tabler="IconAlignJustified"
-                hugeicons="TextAlignJustifyLeftIcon"
-                phosphor="TextAlignJustifyIcon"
-                remixicon="RiAlignJustify"
-                className="size-4"
-              />
-            </ToolbarIconButton>
-          </div>
-
-          <ToolbarSeparator />
-
-          <div className="flex shrink-0 items-center gap-1">
-            <ToolbarIconButton
-              label="Bulleted list"
-              active={editor.hasUnorderedList}
-              disabled={!canEdit}
-              onMouseDown={preserveTextSelection}
-              onPointerDown={preserveTextSelection}
-              onClick={() => editor.toggleList("unordered")}
-            >
-              <IconPlaceholder
-                lucide="Columns3Icon"
-                tabler="IconLayoutColumns"
-                hugeicons="LeftToRightListBulletIcon"
-                phosphor="ColumnsIcon"
-                remixicon="RiLayoutColumnLine"
-                className="size-4"
-              />
-            </ToolbarIconButton>
-            <ToolbarIconButton
-              label="Numbered list"
-              active={editor.hasOrderedList}
-              disabled={!canEdit}
-              onMouseDown={preserveTextSelection}
-              onPointerDown={preserveTextSelection}
-              onClick={() => editor.toggleList("ordered")}
-            >
-              <IconPlaceholder
-                lucide="ListOrdered"
-                tabler="IconListNumbers"
-                hugeicons="LeftToRightListNumberIcon"
-                phosphor="ListNumbersIcon"
-                remixicon="RiListOrdered"
-                className="size-4"
-              />
-            </ToolbarIconButton>
-          </div>
-
-          <ToolbarSeparator />
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
+            <div className="flex shrink-0 items-center gap-1">
+              <ToolbarIconButton
+                label="Insert image"
                 disabled={!canEdit}
-                className="h-7 gap-1 px-2 shadow-none"
+                onClick={onImageUploadClick}
               >
-                {borderTriggerIcon}
-                {borderTriggerLabel}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="z-40 w-56">
-              {BORDER_CONTROL_OPTIONS.map((option) => {
-                const enabledForContext =
-                  !option.contexts || option.contexts.includes(borderContext)
-                const BorderOptionIcon = borderControlOptionIcon(option.id)
-
-                return (
-                  <React.Fragment key={option.id}>
-                    {option.separatorBefore ? <DropdownMenuSeparator /> : null}
-                    <DropdownMenuCheckboxItem
-                      checked={activeBorderPresets[option.id]}
-                      disabled={!enabledForContext}
-                      onCheckedChange={() => {
-                        if (enabledForContext) {
-                          applyBorderPreset(option.id)
-                        }
-                      }}
-                    >
-                      <BorderOptionIcon className="size-4 text-muted-foreground" />
-                      {option.label}
-                    </DropdownMenuCheckboxItem>
-                  </React.Fragment>
-                )
-              })}
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <ToolbarSeparator />
-
-          <div className="flex shrink-0 items-center gap-1">
-            <ToolbarIconButton
-              label="Insert image"
-              disabled={!canEdit}
-              onClick={onImageUploadClick}
-            >
-              <IconPlaceholder
-                lucide="ImagePlus"
-                tabler="IconPhotoPlus"
-                hugeicons="ImageAdd01Icon"
-                phosphor="ImageIcon"
-                remixicon="RiImageAddLine"
-                className="size-4"
-              />
-            </ToolbarIconButton>
-            <ToolbarIconButton
-              label="Insert table"
-              disabled={!canEdit}
-              onClick={editor.insertTable}
-            >
-              <IconPlaceholder
-                lucide="TableIcon"
-                tabler="IconTable"
-                hugeicons="TableIcon"
-                phosphor="TableIcon"
-                remixicon="RiTableLine"
-                className="size-4"
-              />
-            </ToolbarIconButton>
-            <ToolbarTooltip label="Section columns">
-              <div className="flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-xs text-muted-foreground">
                 <IconPlaceholder
-                  lucide="Columns3Cog"
-                  tabler="IconColumns3"
-                  hugeicons="ColumnsThreeCogIcon"
-                  phosphor="ColumnsIcon"
-                  remixicon="RiLayoutColumnLine"
+                  lucide="ImagePlus"
+                  tabler="IconPhotoPlus"
+                  hugeicons="ImageAdd01Icon"
+                  phosphor="ImageIcon"
+                  remixicon="RiImageAddLine"
                   className="size-4"
                 />
-                {activeColumns ? `${activeColumns.count} cols` : "1 col"}
-              </div>
-            </ToolbarTooltip>
-          </div>
-
-          <ToolbarSeparator />
-
-          <div className="ml-auto flex flex-none items-center gap-1">
-            <ToolbarIconButton
-              label="Zoom out"
-              disabled={controlsDisabled || !canZoomOut}
-              onClick={() =>
-                setZoomScale((currentZoomScale) =>
-                  getNextZoomScale(currentZoomScale, -1)
-                )
-              }
-            >
-              <IconPlaceholder
-                lucide="CircleMinus"
-                tabler="IconCircleMinus"
-                hugeicons="MinusSignCircleIcon"
-                phosphor="MinusCircleIcon"
-                remixicon="RiIndeterminateCircleLine"
-                className="size-4"
-              />
-            </ToolbarIconButton>
-            <Select
-              value={zoomScale.toString()}
-              onValueChange={(value) => setZoomScale(Number(value))}
-              disabled={controlsDisabled}
-              modal={false}
-            >
-              <SelectTrigger
-                size="sm"
-                className="w-[84px] min-w-[84px]"
-                aria-label="Zoom level"
+              </ToolbarIconButton>
+              <ToolbarIconButton
+                label="Insert table"
+                disabled={!canEdit}
+                onClick={editor.insertTable}
               >
-                <SelectValue>{Math.round(zoomScale)}%</SelectValue>
-              </SelectTrigger>
-              <SelectContent
-                align="end"
-                alignItemWithTrigger={false}
-                className="z-40"
-              >
-                {ZOOM_OPTIONS.map((value) => (
-                  <SelectItem key={value} value={value.toString()}>
-                    {value}%
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <ToolbarIconButton
-              label="Zoom in"
-              disabled={controlsDisabled || !canZoomIn}
-              onClick={() =>
-                setZoomScale((currentZoomScale) =>
-                  getNextZoomScale(currentZoomScale, 1)
-                )
-              }
-            >
-              <IconPlaceholder
-                lucide="CirclePlusIcon"
-                tabler="IconCirclePlusFilled"
-                hugeicons="PlusSignCircleIcon"
-                phosphor="PlusCircleIcon"
-                remixicon="RiAddCircleFill"
-                className="size-4"
-              />
-            </ToolbarIconButton>
-          </div>
-        </div>
+                <IconPlaceholder
+                  lucide="TableIcon"
+                  tabler="IconTable"
+                  hugeicons="TableIcon"
+                  phosphor="TableIcon"
+                  remixicon="RiTableLine"
+                  className="size-4"
+                />
+              </ToolbarIconButton>
+            </div>
+          </ToolbarOverflow>
+        )}
       </TooltipProvider>
     </div>
   )
@@ -2002,6 +1991,7 @@ export function DocxEditorPreview({
   isDark,
   onIsDarkChange,
   scrollsWindow = false,
+  showUpload = true,
   src,
 }: {
   /** Gives pages and paragraphs stable DOM ids under this prefix. */
@@ -2020,6 +2010,8 @@ export function DocxEditorPreview({
    * toolbar sticks to the top: the editor fills the page.
    */
   scrollsWindow?: boolean
+  /** Shows a button that replaces the document with a file from the device. */
+  showUpload?: boolean
   src?: string
 }) {
   return (
@@ -2035,6 +2027,7 @@ export function DocxEditorPreview({
       fileName={fileName}
       setIsDark={onIsDarkChange}
       shouldRenderNightMode
+      showUpload={showUpload}
       url={src}
     />
   )
@@ -2051,6 +2044,7 @@ function DocxEditorContent({
   scrollsWindow = false,
   setIsDark,
   shouldRenderNightMode,
+  showUpload,
   url,
 }: {
   anchorIdPrefix?: string
@@ -2063,6 +2057,7 @@ function DocxEditorContent({
   fileName?: string
   setIsDark: (checked: boolean) => void
   shouldRenderNightMode: boolean
+  showUpload: boolean
   url?: string
 }) {
   const fileInputRef = React.useRef<HTMLInputElement>(null)
@@ -2076,8 +2071,10 @@ function DocxEditorContent({
   const [activePage, setActivePage] = React.useState(1)
   const [sidebarOpen, setSidebarOpen] = React.useState(false)
   const resolvedDefaultZoomScale = normalizeDocxZoomScale(defaultZoomScale)
-  const [zoomScale, setZoomScale] = React.useState<number>(
-    resolvedDefaultZoomScale
+  // Null until the reader picks a zoom; until then it is the default, or the
+  // zoom that fits the page in a narrower window, as Google Docs opens it.
+  const [chosenZoomScale, setChosenZoomScale] = React.useState<number | null>(
+    null
   )
   const [loadError, setLoadError] = React.useState<string>()
   const [isLoadingDocument, setIsLoadingDocument] = React.useState(Boolean(url))
@@ -2108,6 +2105,22 @@ function DocxEditorContent({
   )
   const editor = useDocxEditor(editorOptions)
   const { layout: pageLayout } = useDocxPageLayout(editor)
+  const fitZoomScale =
+    viewerShellWidth && pageLayout.pageWidthPx
+      ? Math.floor(((viewerShellWidth - 32) / pageLayout.pageWidthPx) * 100)
+      : resolvedDefaultZoomScale
+  const zoomScale =
+    chosenZoomScale ??
+    Math.max(ZOOM_OPTIONS[0], Math.min(resolvedDefaultZoomScale, fitZoomScale))
+  const setZoomScale = React.useCallback<
+    React.Dispatch<React.SetStateAction<number>>
+  >(
+    (value) =>
+      setChosenZoomScale(
+        typeof value === "function" ? value(zoomScale) : value
+      ),
+    [zoomScale]
+  )
   const { importDocxFile, setDocumentTheme, status } = editor
   const [reportedPageCount, setReportedPageCount] = React.useState(0)
   const thumbnailEditor = React.useMemo<DocxEditorController>(
@@ -2220,7 +2233,7 @@ function DocxEditorContent({
   )
   if (previousDefaultZoom !== resolvedDefaultZoomScale) {
     setPreviousDefaultZoom(resolvedDefaultZoomScale)
-    setZoomScale(resolvedDefaultZoomScale)
+    setChosenZoomScale(null)
     setActivePage(1)
   }
 
@@ -2408,7 +2421,7 @@ function DocxEditorContent({
 
     if (!file) return
 
-    setZoomScale(resolvedDefaultZoomScale)
+    setChosenZoomScale(null)
     setActivePage(1)
     setReportedPageCount(0)
     setIsLoadingDocument(true)
@@ -2463,17 +2476,18 @@ function DocxEditorContent({
       />
       <div className={scrollsWindow ? "sticky top-0 z-30" : undefined}>
         <DocxEditorToolbar
-          activePage={activePage}
           controlsDisabled={controlsDisabled}
           editor={editor}
+          fileName={displayFileName}
           mode={mode}
           onImageUploadClick={() => imageInputRef.current?.click()}
           onIsDarkChange={setIsDark}
           onModeChange={changeMode}
           onOpenLinkEditor={openLinkEditor}
           onToggleSidebar={() => setSidebarOpen((open) => !open)}
-          onUploadClick={() => fileInputRef.current?.click()}
-          pageCount={pageCount}
+          onUploadClick={
+            showUpload ? () => fileInputRef.current?.click() : undefined
+          }
           setZoomScale={setZoomScale}
           showNightRenderToggle={shouldRenderNightMode}
           zoomScale={zoomScale}

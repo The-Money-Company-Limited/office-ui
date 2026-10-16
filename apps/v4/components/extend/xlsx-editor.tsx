@@ -53,6 +53,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { ToolbarOverflow } from "@/components/extend/toolbar-overflow"
 import {
   renderXlsxScroller,
   WorkbookSheetTabs,
@@ -869,10 +870,6 @@ function ToolbarIconButton({
       </Button>
     </ToolbarTooltip>
   )
-}
-
-function ToolbarSeparator() {
-  return <Separator orientation="vertical" className="mx-1 h-4 self-center" />
 }
 
 function StyleDropdownItem({
@@ -1854,7 +1851,79 @@ function EditorToolbar({
         </TooltipProvider>
       </div>
       <TooltipProvider>
-        <div className="xlsx-editor-ribbon flex min-h-12 flex-wrap items-center gap-2 border-b bg-background px-3 py-2">
+        <ToolbarOverflow
+          className="xlsx-editor-ribbon min-h-12 border-b bg-background px-3 py-2"
+          end={
+            <>
+              <ToolbarTooltip label="Zoom out">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={!hasWorkbook || !canZoomOut}
+                  aria-label="Zoom out"
+                  onClick={zoomOut}
+                >
+                  <IconPlaceholder
+                    lucide="CircleMinus"
+                    tabler="IconCircleMinus"
+                    hugeicons="MinusSignCircleIcon"
+                    phosphor="MinusCircleIcon"
+                    remixicon="RiIndeterminateCircleLine"
+                    className="size-4"
+                  />
+                </Button>
+              </ToolbarTooltip>
+              <Select
+                value={currentZoom.toString()}
+                onValueChange={(value) => setZoomScale(Number(value))}
+                disabled={!hasWorkbook}
+                modal={false}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className={cn(
+                    "w-[84px] min-w-[84px]",
+                    XLSX_EDITOR_SELECT_CHROME_CLASS
+                  )}
+                  aria-label="Zoom level"
+                >
+                  <SelectValue>{currentZoom}%</SelectValue>
+                </SelectTrigger>
+                <SelectContent
+                  align="end"
+                  alignItemWithTrigger={false}
+                  className={XLSX_DROPDOWN_Z_INDEX_CLASS}
+                >
+                  {ZOOM_OPTIONS.map((value) => (
+                    <SelectItem key={value} value={value.toString()}>
+                      {value}%
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <ToolbarTooltip label="Zoom in">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={!hasWorkbook || !canZoomIn}
+                  aria-label="Zoom in"
+                  onClick={zoomIn}
+                >
+                  <IconPlaceholder
+                    lucide="CirclePlusIcon"
+                    tabler="IconCirclePlusFilled"
+                    hugeicons="PlusSignCircleIcon"
+                    phosphor="PlusCircleIcon"
+                    remixicon="RiAddCircleFill"
+                    className="size-4"
+                  />
+                </Button>
+              </ToolbarTooltip>
+            </>
+          }
+        >
           <div className="flex shrink-0 items-center gap-1">
             <ToolbarTooltip label="Undo">
               <Button
@@ -1895,7 +1964,6 @@ function EditorToolbar({
               </Button>
             </ToolbarTooltip>
           </div>
-          <ToolbarSeparator />
           <div className="flex shrink-0 items-center gap-1">
             <Select
               value={fontFamilyValue}
@@ -1966,7 +2034,6 @@ function EditorToolbar({
               </SelectContent>
             </Select>
           </div>
-          <ToolbarSeparator />
           <ToggleGroup
             className="shrink-0"
             disabled={!canStyleSelection}
@@ -2034,7 +2101,6 @@ function EditorToolbar({
               </ToggleGroupItem>
             </ToolbarTooltip>
           </ToggleGroup>
-          <ToolbarSeparator />
           <div className="flex shrink-0 items-center gap-1">
             <ColorPicker
               label="Text color"
@@ -2078,7 +2144,6 @@ function EditorToolbar({
               />
             </ToolbarIconButton>
           </div>
-          <ToolbarSeparator />
           <div className="flex shrink-0 items-center gap-1">
             <ToggleGroup
               className="shrink-0"
@@ -2215,7 +2280,6 @@ function EditorToolbar({
               onApplyStyle={applyStyle}
             />
           </div>
-          <ToolbarSeparator />
           <div className="flex shrink-0 items-center gap-1">
             <NumberFormatSelect
               disabled={!canStyleSelection}
@@ -2229,7 +2293,6 @@ function EditorToolbar({
               onBorderColorChange={setBorderColor}
             />
           </div>
-          <ToolbarSeparator />
           <div className="flex shrink-0 items-center gap-1">
             <MergeCellsMenu
               canMerge={canMergeSelectedCells}
@@ -2259,7 +2322,6 @@ function EditorToolbar({
               </ToolbarIconButton>
             )}
           </div>
-          <ToolbarSeparator />
           <div className="flex shrink-0 items-center gap-1">
             <ToolbarTooltip label="Add sheet">
               <Button
@@ -2329,76 +2391,7 @@ function EditorToolbar({
               </SelectContent>
             </Select>
           </div>
-          <ToolbarSeparator />
-          <div className="flex flex-none items-center gap-1">
-            <ToolbarTooltip label="Zoom out">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                disabled={!hasWorkbook || !canZoomOut}
-                aria-label="Zoom out"
-                onClick={zoomOut}
-              >
-                <IconPlaceholder
-                  lucide="CircleMinus"
-                  tabler="IconCircleMinus"
-                  hugeicons="MinusSignCircleIcon"
-                  phosphor="MinusCircleIcon"
-                  remixicon="RiIndeterminateCircleLine"
-                  className="size-4"
-                />
-              </Button>
-            </ToolbarTooltip>
-            <Select
-              value={currentZoom.toString()}
-              onValueChange={(value) => setZoomScale(Number(value))}
-              disabled={!hasWorkbook}
-              modal={false}
-            >
-              <SelectTrigger
-                size="sm"
-                className={cn(
-                  "w-[84px] min-w-[84px]",
-                  XLSX_EDITOR_SELECT_CHROME_CLASS
-                )}
-                aria-label="Zoom level"
-              >
-                <SelectValue>{currentZoom}%</SelectValue>
-              </SelectTrigger>
-              <SelectContent
-                align="end"
-                alignItemWithTrigger={false}
-                className={XLSX_DROPDOWN_Z_INDEX_CLASS}
-              >
-                {ZOOM_OPTIONS.map((value) => (
-                  <SelectItem key={value} value={value.toString()}>
-                    {value}%
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <ToolbarTooltip label="Zoom in">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                disabled={!hasWorkbook || !canZoomIn}
-                aria-label="Zoom in"
-                onClick={zoomIn}
-              >
-                <IconPlaceholder
-                  lucide="CirclePlusIcon"
-                  tabler="IconCirclePlusFilled"
-                  hugeicons="PlusSignCircleIcon"
-                  phosphor="PlusCircleIcon"
-                  remixicon="RiAddCircleFill"
-                  className="size-4"
-                />
-              </Button>
-            </ToolbarTooltip>
-          </div>
-        </div>
+        </ToolbarOverflow>
         <div className="xlsx-editor-formula border-t bg-background px-2 py-1">
           <Group className="w-full">
             <Input
