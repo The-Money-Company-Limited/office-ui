@@ -1347,7 +1347,6 @@ function EditorToolbar({
     selectedFormula,
     selectedValue,
     setCellStyle,
-    setCellFormula,
     setCellValue,
     setRangeStyle,
     setSelectedCellStyle,
@@ -1496,13 +1495,10 @@ function EditorToolbar({
     if (!targetCell) return
     if (formulaDraft === formulaInitialValueRef.current) return
 
-    if (formulaDraft.trim().startsWith("=")) {
-      setCellFormula(targetCell, formulaDraft)
-    } else {
-      setCellValue(targetCell, formulaDraft)
-    }
+    // A leading "=" makes it a formula, the same as typing in the cell.
+    setCellValue(targetCell, formulaDraft)
     formulaInitialValueRef.current = formulaDraft
-  }, [activeCell, formulaDraft, setCellFormula, setCellValue])
+  }, [activeCell, formulaDraft, setCellValue])
 
   const applyStyle = React.useCallback(
     (style: XlsxCellStyleInput) => {
