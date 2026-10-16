@@ -1136,6 +1136,14 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
   const previewGap = 12
   const previewOpenDelayMs = 500
 
+  // The active tab is always in view, including a sheet just added at the end.
+  React.useEffect(() => {
+    itemRefs.current[activeSheetIndex]?.scrollIntoView({
+      block: "nearest",
+      inline: "nearest",
+    })
+  }, [activeSheetIndex, sheets.length])
+
   const clearOpenTimeout = React.useCallback(() => {
     if (openTimeoutRef.current) {
       clearTimeout(openTimeoutRef.current)

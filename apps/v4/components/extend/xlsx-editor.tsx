@@ -1796,6 +1796,37 @@ function EditorToolbar({
     [applyStyle, fontToggleValues]
   )
 
+  // Cmd/Ctrl+B, I and U toggle the font on the selection while the grid has
+  // the keyboard, as in Sheets.
+  React.useEffect(() => {
+    if (readOnly) return
+    const shortcuts: Record<string, XlsxFontToggleValue> = {
+      b: "bold",
+      i: "italic",
+      u: "underline",
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const value = shortcuts[event.key.toLowerCase()]
+      const target = event.target as Element | null
+      if (
+        !value ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey ||
+        target?.getAttribute("aria-label") !== "Spreadsheet input"
+      )
+        return
+      event.preventDefault()
+      applyFontToggleValues(
+        fontToggleValues.includes(value)
+          ? fontToggleValues.filter((current) => current !== value)
+          : [...fontToggleValues, value]
+      )
+    }
+    document.addEventListener("keydown", handleKeyDown)
+    return () => document.removeEventListener("keydown", handleKeyDown)
+  }, [applyFontToggleValues, fontToggleValues, readOnly])
+
   return (
     <div className="xlsx-editor-toolbar border-b bg-background">
       <div className="xlsx-editor-header flex min-h-11 items-center justify-between gap-3 border-b px-3">
