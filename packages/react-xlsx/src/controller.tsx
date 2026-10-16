@@ -1883,6 +1883,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     fileName,
     maxFileSizeBytes = DEFAULT_MAX_FILE_SIZE_BYTES,
     readOnly: requestedReadOnly = false,
+    onActiveSheetChange,
     readOnlyAboveBytes = 0,
     showHiddenSheets = false,
     skipXmlParsing = false,
@@ -2445,6 +2446,17 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   ]);
 
   const activeTab = tabs[activeTabIndex] ?? null;
+  const activeSheetName = activeTab?.name ?? null;
+  const onActiveSheetChangeRef = React.useRef(onActiveSheetChange);
+  onActiveSheetChangeRef.current = onActiveSheetChange;
+  const reportedActiveSheetNameRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (isLoading || activeSheetName === null || reportedActiveSheetNameRef.current === activeSheetName) {
+      return;
+    }
+    reportedActiveSheetNameRef.current = activeSheetName;
+    onActiveSheetChangeRef.current?.(activeSheetName);
+  }, [activeSheetName, isLoading]);
   const activeSheet = activeTab?.kind === "sheet"
     ? sheets[activeTab.sheetIndex ?? -1] ?? null
     : null;
@@ -2499,6 +2511,18 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       return index;
     });
   }, [tabs]);
+
+  const setActiveSheetByName = React.useCallback((name: string) => {
+    const exactIndex = tabs.findIndex((tab) => tab.name === name);
+    const tabIndex = exactIndex >= 0
+      ? exactIndex
+      : tabs.findIndex((tab) => tab.name.toLowerCase() === name.toLowerCase());
+    if (tabIndex < 0) {
+      return false;
+    }
+    setActiveTabIndex(tabIndex);
+    return true;
+  }, [setActiveTabIndex, tabs]);
 
   const highlightRanges = React.useCallback((references: string | readonly string[], options: XlsxHighlightRangeOptions = {}) => {
     const inputs = typeof references === "string" ? [references] : references;
@@ -4994,6 +5018,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       activeCellAddress,
       activeSheet,
       activeSheetIndex,
+      activeSheetName,
       activeTab,
       activeTabIndex,
       addFormControl,
@@ -5093,6 +5118,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       selectImage,
       selectRange,
       selection,
+      setActiveSheetByName,
       setActiveSheetIndex,
       setActiveTabIndex,
       setSelectedCellFormula,
@@ -5119,6 +5145,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       activeCellAddress,
       activeSheet,
       activeSheetIndex,
+      activeSheetName,
       activeTab,
       activeTabIndex,
       addFormControl,
@@ -5214,6 +5241,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       selectImage,
       selectRange,
       selection,
+      setActiveSheetByName,
       setActiveSheetIndex,
       setActiveTabIndex,
       setSelectedCellFormula,
