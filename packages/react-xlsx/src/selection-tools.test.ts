@@ -2,10 +2,56 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { before, test } from "node:test";
 import initSheetsWasm, { Workbook } from "@dukelib/sheets-wasm";
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import * as tools from "./selection-tools.ts";
 
 before(async () => {
   await initSheetsWasm({ module_or_path: readFileSync(new URL(import.meta.resolve("@dukelib/sheets-wasm/duke_sheets_wasm_bg.wasm"))) });
+});
+
+function workbookWithSelection(selection: string) {
+  const workbook = new Workbook();
+  const archive = unzipSync(workbook.saveXlsxBytes());
+  workbook.free();
+  const path = "xl/worksheets/sheet1.xml";
+  archive[path] = strToU8(strFromU8(archive[path]).replace(
+    "<sheetFormatPr",
+    `<sheetViews><sheetView workbookViewId="0">${selection}</sheetView></sheetViews><sheetFormatPr`
+  ));
+  return Workbook.fromBytes(zipSync(archive));
+}
+
+test("initial selection defaults to A1 when a worksheet has no saved active cell", () => {
+  const workbook = workbookWithSelection("");
+  assert.deepEqual(tools.getXlsxInitialActiveCell(workbook.getSheet(0)), { row: 0, col: 0 });
+  workbook.free();
+});
+
+test("initial selection uses the saved active cell rather than the selection range corner", () => {
+  const workbook = workbookWithSelection('<selection activeCell="D7" sqref="C4:F9"/>');
+  assert.deepEqual(tools.getXlsxInitialActiveCell(workbook.getSheet(0)), { row: 6, col: 3 });
+  workbook.free();
+});
+
+test("initial selection ignores frozen-pane placeholders without an active cell", () => {
+  const workbook = workbookWithSelection(
+    '<pane xSplit="1" ySplit="1" activePane="bottomRight" state="frozen"/>'
+    + '<selection pane="topRight"/><selection pane="bottomLeft"/>'
+    + '<selection pane="bottomRight" activeCell="AA12" sqref="AA12"/>'
+  );
+  assert.deepEqual(tools.getXlsxInitialActiveCell(workbook.getSheet(0)), { row: 11, col: 26 });
+  workbook.free();
+});
+
+test("initial selection uses the active pane when each frozen pane has a saved cell", () => {
+  const workbook = workbookWithSelection(
+    '<pane xSplit="1" ySplit="1" activePane="bottomLeft" state="frozen"/>'
+    + '<selection pane="topRight" activeCell="B1" sqref="B1"/>'
+    + '<selection pane="bottomLeft" activeCell="A8" sqref="A8"/>'
+    + '<selection pane="bottomRight" activeCell="D7" sqref="D7"/>'
+  );
+  assert.deepEqual(tools.getXlsxInitialActiveCell(workbook.getSheet(0), "bottomLeft"), { row: 7, col: 0 });
+  workbook.free();
 });
 
 test("selection statistics use calculated numbers, count populated cells, and ignore numeric text and errors in the sum", () => {

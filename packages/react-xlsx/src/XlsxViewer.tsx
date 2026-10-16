@@ -8595,9 +8595,11 @@ function XlsxGrid({
     visibleRows.length
   ]);
 
-  React.useEffect(() => {
+  // Pointer handlers read the same committed selection as the controller before the next paint.
+  React.useLayoutEffect(() => {
     activeCellRef.current = activeCell;
-  }, [activeCell]);
+    selectionRef.current = normalizedSelection;
+  }, [activeCell, normalizedSelection]);
 
   React.useEffect(() => {
     selectedChartIdRef.current = selectedChartId;
@@ -8634,10 +8636,6 @@ function XlsxGrid({
     drawingViewportStateRef.current = drawingViewport;
     applyCanvasViewportCompensation();
   }, [applyCanvasViewportCompensation, drawingViewport]);
-
-  React.useEffect(() => {
-    selectionRef.current = normalizedSelection;
-  }, [normalizedSelection]);
 
   React.useEffect(() => {
     editingCellRef.current = editingCell;
@@ -9527,7 +9525,17 @@ function XlsxGrid({
     }
   }, []);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
+    if (selectionCommitFrameRef.current !== null) {
+      window.cancelAnimationFrame(selectionCommitFrameRef.current);
+      selectionCommitFrameRef.current = null;
+    }
+    pendingSelectionCommitRef.current = null;
+    axisSelectionRef.current = null;
+    gridKeyboardActiveRef.current = !isLoading && activeTab?.kind === "sheet";
+  }, [activeTab?.kind, activeTabIndex, isLoading, workbook]);
+
+  React.useLayoutEffect(() => {
     pendingSelectionDragCleanupRef.current?.();
     selectionDragCleanupRef.current?.();
     fillDragCleanupRef.current?.();
@@ -9557,7 +9565,7 @@ function XlsxGrid({
     setImagePreviewRect(null);
     selectionPreviewRangeRef.current = null;
     setInteractionMode("idle");
-  }, [activeSheetIndex, clearGlobalCursor, revision]);
+  }, [activeTabIndex, clearGlobalCursor, isLoading, revision, workbook]);
 
   // Grid keyboard input arrives through a visually hidden textarea at the active cell, so the page sees a
   // focused text field (host shortcuts stay quiet while the grid is typed into) and IME composes in place.

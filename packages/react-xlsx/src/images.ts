@@ -231,6 +231,7 @@ type WorkbookSheetInfo = {
 };
 
 type WorkbookSheetState = {
+  activePane?: string;
   cellStyleIds: Record<string, number>;
   autoFilterRanges: XlsxCellRange[];
   cachedFormulaValues: Record<string, string>;
@@ -1750,6 +1751,7 @@ function parseSheetState(
   });
 
   return {
+    activePane: sheetViewNode ? getLocalElements(sheetViewNode, "pane")[0]?.getAttribute("activePane") ?? undefined : undefined,
     autoFilterRanges,
     cachedFormulaValues,
     cellStyleIds,

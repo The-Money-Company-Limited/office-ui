@@ -59,7 +59,7 @@ import {
   setCommentThreadResolved,
   type XlsxCommentThread
 } from "./comments";
-import { applyXlsxCut, captureXlsxCut } from "./selection-tools";
+import { applyXlsxCut, captureXlsxCut, getXlsxInitialActiveCell } from "./selection-tools";
 import { safeCalculate, tryRecalculate } from "./safe-calculate";
 import { parseXlsxRange } from "./range-reference";
 import { canUseConfiguredWasmSourceInWorker, getSheetsWasmModule } from "./wasm";
@@ -469,6 +469,7 @@ function resolveSheetDisplayUsedRange(
 function buildSheetList(
   workbook: Workbook,
   sheetStatesByWorkbookSheetIndex?: Array<{
+    activePane?: string;
     cellStyleIds?: Record<string, number>;
     autoFilterRanges?: XlsxCellRange[];
     cachedFormulaValues?: Record<string, string>;
@@ -554,6 +555,7 @@ function buildSheetList(
         defaultColWidthPx,
         defaultRowHeightPx,
         freezePanes: parseWorksheetFreezePanes(worksheet),
+        initialActiveCell: getXlsxInitialActiveCell(worksheet, sheetState?.activePane),
         hasHorizontalMerges: mergeMetadata.hasHorizontalMerges,
         hasVerticalMerges: mergeMetadata.hasVerticalMerges,
         maxHorizontalMergeEndCol: mergeMetadata.maxHorizontalMergeEndCol,
@@ -655,6 +657,7 @@ function buildSheetList(
       defaultColWidthPx,
       defaultRowHeightPx,
       freezePanes: parseWorksheetFreezePanes(worksheet),
+      initialActiveCell: getXlsxInitialActiveCell(worksheet, sheetState?.activePane),
       hasHorizontalMerges: mergeMetadata.hasHorizontalMerges,
       hasVerticalMerges: mergeMetadata.hasVerticalMerges,
       maxHorizontalMergeEndCol: mergeMetadata.maxHorizontalMergeEndCol,
@@ -2528,15 +2531,57 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   const canZoomIn = zoomScale < MAX_ZOOM_SCALE;
   const canZoomOut = zoomScale > MIN_ZOOM_SCALE;
 
-  React.useEffect(() => {
-    setActiveCell(null);
-    setSelection(null);
+  const selectCell = React.useCallback((cell: XlsxCellAddress, options?: { extend?: boolean }) => {
     setSelectedChartId(null);
     setSelectedChartElement(null);
     setSelectedImageId(null);
-    selectionAnchorRef.current = null;
+    setActiveCell(cell);
+    if (options?.extend && selectionAnchorRef.current) {
+      setSelection(normalizeRange({ start: selectionAnchorRef.current, end: cell }));
+      return;
+    }
+
+    selectionAnchorRef.current = cell;
+    setSelection({ start: cell, end: cell });
+  }, []);
+
+  const selectionsByTabRef = React.useRef(new Map<string, {
+    activeCell: XlsxCellAddress;
+    selection: XlsxCellRange;
+    anchor: XlsxCellAddress | null;
+  }>());
+  const selectionTabRef = React.useRef<string | null>(null);
+  const selectionTabId = isLoading ? null : activeTab?.id ?? null;
+
+  React.useLayoutEffect(() => {
+    if (selectionTabRef.current === selectionTabId) return;
+    if (selectionTabRef.current && activeCell && selection) {
+      selectionsByTabRef.current.set(selectionTabRef.current, {
+        activeCell,
+        selection,
+        anchor: selectionAnchorRef.current
+      });
+    }
+    selectionTabRef.current = selectionTabId;
+    if (selectionTabId === null) selectionsByTabRef.current.clear();
+
+    const saved = selectionTabId ? selectionsByTabRef.current.get(selectionTabId) : undefined;
+    if (activeSheet && selectionTabId !== null) {
+      selectCell(saved?.activeCell ?? activeSheet.initialActiveCell ?? { row: 0, col: 0 });
+      if (saved) {
+        setSelection(saved.selection);
+        selectionAnchorRef.current = saved.anchor;
+      }
+    } else {
+      setActiveCell(null);
+      setSelection(null);
+      selectionAnchorRef.current = null;
+    }
+    setSelectedChartId(null);
+    setSelectedChartElement(null);
+    setSelectedImageId(null);
     setSortState(null);
-  }, [activeTabIndex]);
+  }, [activeCell, activeSheet, selectCell, selection, selectionTabId]);
 
   const setActiveSheetIndex = React.useCallback((index: number) => {
     setActiveSheetIndexState((currentIndex) => {
@@ -4444,20 +4489,6 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     return true;
   }, [getChartById, readOnly, updateChart, workbook]);
 
-  const selectCell = React.useCallback((cell: XlsxCellAddress, options?: { extend?: boolean }) => {
-    setSelectedChartId(null);
-    setSelectedChartElement(null);
-    setSelectedImageId(null);
-    setActiveCell(cell);
-    if (options?.extend && selectionAnchorRef.current) {
-      setSelection(normalizeRange({ start: selectionAnchorRef.current, end: cell }));
-      return;
-    }
-
-    selectionAnchorRef.current = cell;
-    setSelection({ start: cell, end: cell });
-  }, []);
-
   const selectRange = React.useCallback((range: XlsxCellRange) => {
     const normalized = normalizeRange(range);
     setSelectedChartId(null);
@@ -4826,6 +4857,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     cancelCut();
     recordHistoryBeforeMutation();
     workbook.removeSheet(activeSheet.workbookSheetIndex);
+    selectionsByTabRef.current.clear();
+    selectionTabRef.current = null;
     sheetOriginsRef.current = sheetOriginsRef.current.filter((_, index) => index !== activeSheet.workbookSheetIndex);
     setFormControlsByWorkbookSheetIndex((current) => current.filter((_, index) => index !== activeSheet.workbookSheetIndex));
     setImagesByWorkbookSheetIndex((current) => current.filter((_, index) => index !== activeSheet.workbookSheetIndex));

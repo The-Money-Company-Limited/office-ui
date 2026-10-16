@@ -13,6 +13,7 @@ import {
 } from "./images";
 import type { WorkbookStructureAssets } from "./images";
 import { safeCalculate } from "./safe-calculate";
+import { getXlsxInitialActiveCell } from "./selection-tools";
 import { getSheetsWasmModule, setWasmSource, type WorkerWasmSource } from "./wasm";
 import type {
   XlsxChart,
@@ -230,7 +231,11 @@ function parseWorkerSheetLayoutAssets(bytes: Uint8Array, sheetCount: number): Ar
         }
       }
 
-      return { rowHeightOverridesPx };
+      const paneTag = xml.match(/<pane\b[^>]*>/)?.[0];
+      return {
+        activePane: paneTag ? readXmlAttribute(paneTag, "activePane") ?? undefined : undefined,
+        rowHeightOverridesPx
+      };
     });
   } catch {
     return [];
@@ -533,6 +538,7 @@ function buildSheetList(
         defaultColWidthPx,
         defaultRowHeightPx,
         freezePanes: parseWorksheetFreezePanes(worksheet),
+        initialActiveCell: getXlsxInitialActiveCell(worksheet, sheetState?.activePane),
         hasHorizontalMerges: mergeMetadata.hasHorizontalMerges,
         hasVerticalMerges: mergeMetadata.hasVerticalMerges,
         maxHorizontalMergeEndCol: mergeMetadata.maxHorizontalMergeEndCol,
@@ -599,6 +605,7 @@ function buildSheetList(
       defaultColWidthPx,
       defaultRowHeightPx,
       freezePanes: parseWorksheetFreezePanes(worksheet),
+      initialActiveCell: getXlsxInitialActiveCell(worksheet, sheetState?.activePane),
       hasHorizontalMerges: mergeMetadata.hasHorizontalMerges,
       hasVerticalMerges: mergeMetadata.hasVerticalMerges,
       maxHorizontalMergeEndCol: mergeMetadata.maxHorizontalMergeEndCol,

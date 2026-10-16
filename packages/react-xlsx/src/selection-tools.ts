@@ -1,5 +1,17 @@
 import type { Worksheet } from "@dukelib/sheets-wasm";
 import type { XlsxCellAddress, XlsxCellRange, XlsxSheetData } from "./types";
+import { parseXlsxRange } from "./range-reference.ts";
+
+export function getXlsxInitialActiveCell(worksheet: Worksheet, activePane?: string): XlsxCellAddress {
+  const selections = worksheet.selections as Array<{ activeCell?: string; pane?: string }>;
+  for (const selection of selections) {
+    if (activePane && selection.pane !== activePane) continue;
+    if (!selection.activeCell) continue;
+    const parsed = parseXlsxRange(selection.activeCell);
+    if (parsed?.kind === "cells") return parsed.range.start;
+  }
+  return { row: 0, col: 0 };
+}
 
 // Bound synchronous WASM reads; null means the result is too large to calculate completely.
 const MAX_SCAN_CELLS = 50_000;
