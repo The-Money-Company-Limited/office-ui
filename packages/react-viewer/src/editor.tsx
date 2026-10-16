@@ -57383,6 +57383,9 @@ export function DocxEditorViewer({
   const pageSurfaceBaseStyle: React.CSSProperties = {
     ...BASE_DOC_STYLE,
     ...DOC_SURFACE_STYLE_BY_THEME[editor.documentTheme],
+    // Text without its own color inherits this. In night-reader mode the
+    // content is drawn light and inverted, so it inherits the light color.
+    color: DOC_SURFACE_STYLE_BY_THEME[documentContentTheme].color,
     ...(documentInheritedFontFamily
       ? { fontFamily: documentInheritedFontFamily }
       : undefined),
