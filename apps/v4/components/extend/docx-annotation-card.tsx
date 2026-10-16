@@ -29,6 +29,7 @@ function trackedChangeBadgeVariant(
       return "success"
     case "deletion":
     case "move-from":
+    case "paragraph-deletion":
       return "error"
     default:
       return "warning"

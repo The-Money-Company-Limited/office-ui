@@ -102,8 +102,9 @@ answers missing paths with a 404 instead of the editor shell.
 
 For an HTML page, the gateway also injects the site comment layer's script
 while the computer's comments switch is on (it is on by default). The layer
-anchors a note to a clicked DOM element; on the XLSX and PDF canvases that
-anchor is coarse. See [Open questions](#open-questions).
+anchors a note to a clicked DOM element. The XLSX and PDF editors draw on
+canvases, so they lay transparent DOM over them for the layer to name (see
+[Page rules](#page-rules-that-keep-comments-and-ink-anchored)).
 
 There is **no per-document Linux VM**. The publish service and the gateway run
 server-side; the browser does the document work. A computer gains a VM only
@@ -169,8 +170,8 @@ person in the editor --accept / reject / reply--> exported or saved file
   `<script src="/__cool/comments.js">` into its files, and runs as a top-level
   tab, never in an iframe (RuntimeVM COD-1403, COD-1415).
 - **Suggestions are the file's.** The agent answers by changing the document:
-  DOCX tracked changes (`w:ins`/`w:del`) and comments (`comments.xml`), XLSX
-  threaded comments. They round-trip through Word and Excel, and the editor
+  DOCX tracked changes (`w:ins`/`w:del`, on text and on paragraph marks) and
+  comments (`comments.xml`), XLSX threaded comments. They round-trip through Word and Excel, and the editor
   shows them for accept, reject, and reply.
 
 ### Page rules that keep Comments and Ink anchored
@@ -192,7 +193,8 @@ each rule is an opt-in prop on the editor that the template turns on:
    walk: DOCX pages `page-<n>` and paragraphs `p-<w14:paraId>` (the model
    carries `paraId` through edits; `p-n<index>` only for a paragraph without
    one, and the agent stamps a `paraId` on every paragraph it saves); PDF
-   pages `page-<n>`; PPTX slides `slide-<n>` on the slide's list row, present
+   pages `page-<n>`, each holding its text as transparent lines from PDFium
+   that take pointer hits; PPTX slides `slide-<n>` on the slide's list row, present
    while the slide is virtualized away; XLSX cells `c-<ref>` on a transparent
    DOM layer over the canvas (`cellAnchorIdPrefix`) that carries each visible
    cell's text and passes pointer events to the grid.
@@ -212,9 +214,9 @@ Verified on 2026-10-16, locally with [`dev/comments-harness.mjs`](./dev/comments
 and on cool.computer: a DOCX click comment anchors at `#p-n1` with the
 paragraph's text; Ink under a title records `line: "under"` and the title's
 text; Ink on a sheet records `#c-D10` and `#c-E10` with their values; PPTX Ink
-records `#slide-1 > …` and the title text; PDF anchors at `#page-1` (no text:
-pages render as images, see Open questions). Ink stays on its content as the
-window scrolls in all four formats.
+records `#slide-1 > …` and the title text; a PDF click comment anchors inside
+`#page-1` with the clicked line's text, and text selection still works. Ink
+stays on its content as the window scrolls in all four formats.
 
 ### Agent tools run without a browser or a VM
 
@@ -226,7 +228,7 @@ is written back with the files API as one new release.
 
 - `@extend-ai/react-docx/agent`: `openDocx`, `paragraphs`, `find`, `locate`
   (a Comments or Ink anchor to a paragraph and offsets), `suggest` (a tracked
-  change), `comment`, `reply`, `resolve`, `comments`, `revisions`, `accept`,
+  change; each `\n` in the replacement is a suggested paragraph break), `comment`, `reply`, `resolve`, `comments`, `revisions`, `accept`,
   `reject`, `save`. CLI: `react-docx-agent in.docx out.docx '<ops>'`.
 - `@extend-ai/react-xlsx/agent`: `openXlsx`, `sheets`, `cells`, `locate`
   (`?sheet=` plus a `#c-<ref>` id to a cell), `comment`, `reply`, `resolve`,
@@ -266,7 +268,8 @@ The editors are three MIT engines forked into the organization, with
 3. **Agent tools** for DOCX and XLSX. Done.
 4. **Review in the editor.** Done: DOCX Viewing, Suggesting, and Editing
    modes, accept and reject, comment replies; XLSX comment cards and
-   suggestion accept and reject.
+   suggestion accept and reject. Enter and Backspace across paragraphs
+   while suggesting are tracked paragraph breaks, as in Word.
 5. **PPTX editing.** Not started; the PPTX engine is a viewer.
 
 ## Open questions
@@ -282,8 +285,6 @@ The editors are three MIT engines forked into the organization, with
   resize. A layer that re-resolves detached targets would fix it.
 - **Layout per mode.** Suggesting adds a review gutter and moves the page, so
   Ink drawn in Viewing is shown off its content in Suggesting.
-- **PDF text.** Pages render as images, so PDF comments carry no words. A
-  transparent text layer, like the XLSX cell layer, would give them text.
 - **Bundle storage per computer.** R2 content is addressed per computer, so
   every new document artifact uploads the bundle once. A platform-side
   template could share bundle bytes across computers.
