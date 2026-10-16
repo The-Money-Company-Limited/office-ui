@@ -18,10 +18,10 @@ against the published demos. Status: ✅ works, 🔧 fixed (commit), ❌ missing
 | Function suggestions and argument help | 🔧 react-xlsx `Formula suggestions and argument help` |
 | Fill handle drag, column resize | ✅ |
 | + adds a sheet and its tab comes into view | 🔧 office-ui |
-| Right-click menu (cut, copy, paste, clear, comment) | ❌ |
-| Sum / Average / Count of the selection | ❌ |
-| Cmd+F find in the sheet | ❌ |
-| Name box shows the anchor cell; typing a reference jumps there | ❌ |
+| Right-click menu (cut, copy, paste, clear, comment); cut moves on paste | 🔧 react-xlsx + office-ui |
+| Sum / Average / Count of the selection | 🔧 react-xlsx + office-ui |
+| Cmd+F find in the sheet | 🔧 react-xlsx + office-ui |
+| Name box shows the selection; typing a reference jumps there | 🔧 office-ui |
 | A sheet opens with A1 selected | ❌ (host-side attempt broke the first click; belongs in the grid) |
 | Rename, reorder sheets | ⛔ duke-sheets has no rename/move |
 | Insert / delete rows and columns | ⛔ duke-sheets has no insert/delete |

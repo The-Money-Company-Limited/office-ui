@@ -1075,15 +1075,18 @@ type WorkbookSheetTabsInnerProps = {
   activeSheetIndex: number
   onActiveSheetIndexChange: (index: number) => void
   onAddSheet?: () => void
+  status?: React.ReactNode
   sheets: WorkbookSheetTab[]
 }
 
 export function WorkbookSheetTabs({
   onAddSheet,
+  status,
   workbookIdentity,
 }: {
   /** Shows a + before the tabs, as Google Sheets does. */
   onAddSheet?: () => void
+  status?: React.ReactNode
   workbookIdentity: string
 }) {
   const { activeSheetIndex, setActiveSheetIndex, sheets } = useXlsxViewer()
@@ -1099,6 +1102,7 @@ export function WorkbookSheetTabs({
       activeSheetIndex={activeSheetIndex}
       onActiveSheetIndexChange={handleActiveSheetIndexChange}
       onAddSheet={onAddSheet}
+      status={status}
       sheets={sheets}
     />
   )
@@ -1108,6 +1112,7 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
   activeSheetIndex,
   onActiveSheetIndexChange,
   onAddSheet,
+  status,
   sheets,
 }: WorkbookSheetTabsInnerProps) {
   const [visiblePreviewIndex, setVisiblePreviewIndex] = React.useState<
@@ -1288,7 +1293,7 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
     return () => clearInterval(interval)
   }, [clearCloseTimeout, clearOpenTimeout, visiblePreviewIndex])
 
-  if (sheets.length <= 1) return null
+  if (sheets.length <= 1 && !onAddSheet && !status) return null
 
   const previewSheet =
     visiblePreviewIndex === null ? null : sheets[visiblePreviewIndex]
@@ -1353,6 +1358,7 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
           </div>
         </ScrollArea>
       </Tabs>
+      {status ? <div className="shrink-0">{status}</div> : null}
       {typeof document !== "undefined" &&
       previewSheet &&
       visiblePreviewIndex !== null &&

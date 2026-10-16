@@ -2,6 +2,10 @@
 
 import * as React from "react"
 import {
+  findXlsxCells,
+  getXlsxSelectionStatistics,
+  parseXlsxRange,
+  resolveXlsxFindIndex,
   useXlsxFormulaAssist,
   useXlsxViewer,
   useXlsxViewerController,
@@ -12,6 +16,7 @@ import {
   XlsxFormulaAssistPopup,
   XlsxViewer,
   XlsxViewerProvider,
+  type XlsxCellAddress,
   type XlsxCellAlignmentInput,
   type XlsxCellBorderEdgeInput,
   type XlsxCellRange,
@@ -1314,6 +1319,7 @@ function EditorToolbar({
   fileName,
   isDark,
   onAddComment,
+  onNavigate,
   onIsDarkChange,
   onUploadClick,
   showNightRenderToggle,
@@ -1322,6 +1328,7 @@ function EditorToolbar({
   fileName?: string
   isDark: boolean
   onAddComment: () => void
+  onNavigate: (range: XlsxCellRange) => void
   onIsDarkChange: (checked: boolean) => void
   onUploadClick: () => void
   showNightRenderToggle: boolean
@@ -1337,8 +1344,13 @@ function EditorToolbar({
     setActiveSheetIndex,
     sheets,
   } = useXlsxViewer()
-  const { activeCell, activeCellAddress, selectRange, selection } =
-    useXlsxViewerSelection()
+  const {
+    activeCell,
+    activeCellAddress,
+    selectedRangeAddress,
+    selectRange,
+    selection,
+  } = useXlsxViewerSelection()
   const {
     canRedo,
     canUndo,
@@ -1358,6 +1370,8 @@ function EditorToolbar({
   } = useXlsxViewerEditing()
   const { canZoomIn, canZoomOut, setZoomScale, zoomIn, zoomOut, zoomScale } =
     useXlsxViewerZoom()
+  const [nameDraft, setNameDraft] = React.useState<string | null>(null)
+  const [nameInvalid, setNameInvalid] = React.useState(false)
   const [formulaDraft, setFormulaDraft] = React.useState("")
   const [formulaFocused, setFormulaFocused] = React.useState(false)
   const formulaInputRef = React.useRef<HTMLInputElement>(null)
@@ -2416,8 +2430,53 @@ function EditorToolbar({
                 "h-8 w-[92px] shrink-0 font-mono text-xs",
                 XLSX_EDITOR_FORMULA_INPUT_CHROME_CLASS
               )}
-              readOnly
-              value={activeCellAddress ?? ""}
+              aria-label="Name box"
+              disabled={!hasWorkbook}
+              aria-invalid={nameInvalid || undefined}
+              title={
+                nameInvalid
+                  ? "Enter a cell or range, such as B5 or A1:C3"
+                  : "Go to a cell or range"
+              }
+              value={
+                nameDraft ?? selectedRangeAddress ?? activeCellAddress ?? ""
+              }
+              onFocus={(event) => {
+                setNameDraft(event.currentTarget.value)
+                event.currentTarget.select()
+              }}
+              onChange={(event) => {
+                setNameDraft(event.target.value)
+                setNameInvalid(false)
+              }}
+              onBlur={() => {
+                setNameDraft(null)
+                setNameInvalid(false)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  setNameDraft(null)
+                  setNameInvalid(false)
+                  event.currentTarget.blur()
+                }
+                if (event.key !== "Enter") return
+                event.preventDefault()
+                const parsed = parseXlsxRange(
+                  nameDraft ?? selectedRangeAddress ?? activeCellAddress ?? ""
+                )
+                if (
+                  !parsed ||
+                  parsed.kind !== "cells" ||
+                  (parsed.sheetName !== null &&
+                    parsed.sheetName !== activeSheet?.name)
+                ) {
+                  setNameInvalid(true)
+                  return
+                }
+                setNameDraft(null)
+                setNameInvalid(false)
+                onNavigate(parsed.range)
+              }}
             />
             <GroupSeparator />
             <GroupText className="h-8 w-9 shrink-0 justify-center px-0 text-[11px] font-semibold italic">
@@ -2710,6 +2769,177 @@ function XlsxCommentPopover({
   )
 }
 
+function EditorSelectionStatus() {
+  const { getActiveWorksheet, revision } = useXlsxViewer()
+  const { selection } = useXlsxViewerSelection()
+  const startRow = selection?.start.row
+  const startCol = selection?.start.col
+  const endRow = selection?.end.row
+  const endCol = selection?.end.col
+  const statistics = React.useMemo(() => {
+    // The worksheet is mutable; revision invalidates values after edits.
+    void revision
+    if (
+      startRow === undefined ||
+      startCol === undefined ||
+      endRow === undefined ||
+      endCol === undefined
+    )
+      return undefined
+    const worksheet = getActiveWorksheet()
+    if (!worksheet) return undefined
+    try {
+      return getXlsxSelectionStatistics(worksheet, {
+        start: { row: startRow, col: startCol },
+        end: { row: endRow, col: endCol },
+      })
+    } finally {
+      worksheet.free()
+    }
+  }, [getActiveWorksheet, startRow, startCol, endRow, endCol, revision])
+
+  if (statistics === null) {
+    return (
+      <span className="px-2 text-xs text-muted-foreground">
+        Selection too large for statistics
+      </span>
+    )
+  }
+  if (!statistics || statistics.count < 2) return null
+  const format = (value: number) =>
+    value.toLocaleString(undefined, { maximumFractionDigits: 10 })
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-label="Selection statistics"
+        >
+          {statistics.sum === null
+            ? `Count: ${statistics.count}`
+            : `Sum: ${format(statistics.sum)}`}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className={XLSX_DROPDOWN_Z_INDEX_CLASS}>
+        {statistics.sum !== null && statistics.average !== null ? (
+          <>
+            <DropdownMenuItem>Sum: {format(statistics.sum)}</DropdownMenuItem>
+            <DropdownMenuItem>
+              Average: {format(statistics.average)}
+            </DropdownMenuItem>
+          </>
+        ) : null}
+        <DropdownMenuItem>Count: {statistics.count}</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+function EditorFindBar({
+  inputRef,
+  onClose,
+  onNavigate,
+}: {
+  inputRef: React.RefObject<HTMLInputElement | null>
+  onClose: () => void
+  onNavigate: (range: XlsxCellRange, focus?: boolean) => void
+}) {
+  const { activeSheet, getCellDisplayValue, revision } = useXlsxViewer()
+  const [query, setQuery] = React.useState("")
+  const result = React.useMemo(() => {
+    void revision
+    return activeSheet
+      ? findXlsxCells(activeSheet, getCellDisplayValue, query)
+      : []
+  }, [activeSheet, getCellDisplayValue, query, revision])
+  const matches = result ?? []
+  const [currentMatch, setCurrentMatch] = React.useState({ query, index: 0 })
+  const index = resolveXlsxFindIndex(currentMatch, query, matches.length)
+  if (currentMatch.query !== query || currentMatch.index !== index) {
+    setCurrentMatch({ query, index })
+  }
+  const matchRow = matches[index]?.row
+  const matchCol = matches[index]?.col
+  React.useEffect(() => {
+    if (matchRow !== undefined && matchCol !== undefined) {
+      const cell = { row: matchRow, col: matchCol }
+      onNavigate({ start: cell, end: cell }, false)
+    }
+  }, [matchRow, matchCol, onNavigate, query])
+
+  const move = (direction: number) => {
+    if (!matches.length) return
+    const nextIndex = (index + direction + matches.length) % matches.length
+    setCurrentMatch({ query, index: nextIndex })
+  }
+
+  return (
+    <div
+      role="search"
+      aria-label="Find in sheet"
+      className="flex items-center justify-end gap-2 border-t bg-background px-2 py-1"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault()
+          onClose()
+        }
+      }}
+    >
+      <Input
+        ref={inputRef}
+        autoFocus
+        aria-label="Find in sheet"
+        placeholder="Find in sheet"
+        className="h-8 w-52"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault()
+            move(event.shiftKey ? -1 : 1)
+          }
+        }}
+      />
+      <span className="min-w-14 text-xs text-muted-foreground" role="status">
+        {result === null
+          ? "Sheet too large to search"
+          : `${matches.length ? index + 1 : 0} of ${matches.length}`}
+      </span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        disabled={!matches.length}
+        onClick={() => move(-1)}
+        aria-label="Previous match"
+      >
+        ↑
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        disabled={!matches.length}
+        onClick={() => move(1)}
+        aria-label="Next match"
+      >
+        ↓
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={onClose}
+        aria-label="Close find"
+      >
+        ×
+      </Button>
+    </div>
+  )
+}
+
 export function XlsxEditorSurface({
   author,
   cellAnchorIdPrefix,
@@ -2741,8 +2971,77 @@ export function XlsxEditorSurface({
   workbookIdentity: string
 }) {
   const { activeSheet, error } = useXlsxViewer()
-  const { activeCell } = useXlsxViewerSelection()
-  const { addSheet, readOnly } = useXlsxViewerEditing()
+  const { activeCell, selectRange } = useXlsxViewerSelection()
+  const {
+    addSheet,
+    clearSelectedCells,
+    copySelectionToClipboard,
+    cutSelectionToClipboard,
+    cancelCut,
+    pasteFromClipboard,
+    readOnly,
+  } = useXlsxViewerEditing()
+  const surfaceRef = React.useRef<HTMLDivElement>(null)
+  const findInputRef = React.useRef<HTMLInputElement>(null)
+  const [findOpen, setFindOpen] = React.useState(false)
+  const [scrollRequest, setScrollRequest] = React.useState<{
+    cell: XlsxCellAddress
+    sheet: string
+  } | null>(null)
+  const [contextMenu, setContextMenu] = React.useState<{
+    getBoundingClientRect: () => DOMRect
+  } | null>(null)
+  const [clipboardError, setClipboardError] = React.useState<string | null>(
+    null
+  )
+  const getKeyboardInput = React.useCallback(
+    () =>
+      surfaceRef.current?.querySelector<HTMLTextAreaElement>(
+        "[data-xlsx-keyboard-input]"
+      ) ?? null,
+    []
+  )
+  const focusGrid = React.useCallback(() => {
+    getKeyboardInput()?.focus({ preventScroll: true })
+  }, [getKeyboardInput])
+  const activeSheetName = activeSheet?.name
+  const navigate = React.useCallback(
+    (range: XlsxCellRange, focus = true) => {
+      if (!activeSheetName) return
+      selectRange(range)
+      setScrollRequest({ cell: { ...range.start }, sheet: activeSheetName })
+      if (focus) focusGrid()
+    },
+    [activeSheetName, focusGrid, selectRange]
+  )
+  const runClipboardAction = async (action: "cut" | "copy" | "paste") => {
+    setClipboardError(null)
+    const message =
+      "Clipboard access failed. Use the keyboard shortcut to copy or paste."
+    try {
+      const succeeded =
+        action === "paste"
+          ? await pasteFromClipboard()
+          : action === "cut"
+            ? await cutSelectionToClipboard()
+            : await copySelectionToClipboard()
+      if (!succeeded) setClipboardError(message)
+    } catch {
+      setClipboardError(message)
+    }
+  }
+  const [menuScope, setMenuScope] = React.useState({
+    sheet: activeSheet?.name,
+    workbookIdentity,
+  })
+  if (
+    menuScope.sheet !== activeSheet?.name ||
+    menuScope.workbookIdentity !== workbookIdentity
+  ) {
+    setMenuScope({ sheet: activeSheet?.name, workbookIdentity })
+    setContextMenu(null)
+    setClipboardError(null)
+  }
   const toolbarRef = React.useRef<HTMLDivElement>(null)
   const toolbarHeight = useElementHeight(toolbarRef)
   const [commentTarget, setCommentTarget] =
@@ -2776,25 +3075,51 @@ export function XlsxEditorSurface({
   )
 
   const toolbar = (
-    <EditorToolbar
-      fileName={fileName}
-      isDark={isDark}
-      onAddComment={openActiveCellComment}
-      onIsDarkChange={onIsDarkChange}
-      onUploadClick={onUploadClick}
-      showNightRenderToggle={showNightRenderToggle}
-      workbookIdentity={workbookIdentity}
-    />
+    <>
+      <EditorToolbar
+        fileName={fileName}
+        onNavigate={navigate}
+        isDark={isDark}
+        onAddComment={openActiveCellComment}
+        onIsDarkChange={onIsDarkChange}
+        onUploadClick={onUploadClick}
+        showNightRenderToggle={showNightRenderToggle}
+        workbookIdentity={workbookIdentity}
+      />
+      {findOpen ? (
+        <EditorFindBar
+          inputRef={findInputRef}
+          onNavigate={navigate}
+          onClose={() => {
+            setFindOpen(false)
+            focusGrid()
+          }}
+        />
+      ) : null}
+      {clipboardError ? (
+        <div
+          role="alert"
+          className="bg-background px-3 py-1 text-xs text-destructive"
+        >
+          {clipboardError}
+        </div>
+      ) : null}
+    </>
   )
   const sheetTabs = (
     <WorkbookSheetTabs
       onAddSheet={readOnly ? undefined : () => addSheet()}
+      status={<EditorSelectionStatus />}
       workbookIdentity={workbookIdentity}
     />
   )
 
   return (
     <div
+      ref={surfaceRef}
+      onKeyDownCapture={(event) => {
+        if (event.key === "Escape") cancelCut()
+      }}
       className={cn(
         // As wide as the sheet, so the toolbar and sheet tabs can stay at
         // the window's left edge while the page scrolls sideways.
@@ -2854,8 +3179,63 @@ export function XlsxEditorSurface({
             }
             renderTableHeaderMenu={renderTableHeaderMenu}
             onCommentClick={openThread}
+            onCellContextMenu={(_cell, event) => {
+              const rect = new DOMRect(event.clientX, event.clientY, 0, 0)
+              setContextMenu({ getBoundingClientRect: () => rect })
+            }}
+            onFind={() => {
+              setFindOpen(true)
+              findInputRef.current?.focus()
+              findInputRef.current?.select()
+            }}
+            scrollToCell={
+              scrollRequest?.sheet === activeSheet?.name
+                ? scrollRequest?.cell
+                : null
+            }
             renderActiveCellOverlay={renderActiveCellAnchor}
           />
+          <DropdownMenu
+            open={contextMenu !== null}
+            onOpenChange={(open) => {
+              if (!open) setContextMenu(null)
+            }}
+          >
+            <DropdownMenuContent
+              anchor={contextMenu}
+              className={XLSX_DROPDOWN_Z_INDEX_CLASS}
+              finalFocus={openCommentTarget ? false : getKeyboardInput}
+            >
+              <DropdownMenuItem
+                disabled={readOnly}
+                onClick={() => void runClipboardAction("cut")}
+              >
+                Cut
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void runClipboardAction("copy")}>
+                Copy
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={readOnly}
+                onClick={() => void runClipboardAction("paste")}
+              >
+                Paste
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={readOnly}
+                onClick={clearSelectedCells}
+              >
+                Clear contents
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={readOnly}
+                onClick={openActiveCellComment}
+              >
+                Comment
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {openCommentTarget ? (
             <XlsxCommentPopover
               key={`${openCommentTarget.sheet}!${openCommentTarget.ref}`}
@@ -2866,7 +3246,7 @@ export function XlsxEditorSurface({
           ) : null}
         </div>
         {scrollsWindow ? (
-          <div className="sticky bottom-0 left-0 z-30 w-screen bg-background">
+          <div className="xlsx-editor-sheet-tabs sticky bottom-0 left-0 z-30 w-screen bg-background">
             {sheetTabs}
           </div>
         ) : (

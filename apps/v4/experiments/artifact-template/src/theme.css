@@ -293,3 +293,9 @@ html:has(.artifact-editor) {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
+
+/* RuntimeVM pins its Comment button to the page's bottom-right corner; keep
+   the sheet tabs' right end (the selection's Sum) out from under it. */
+.artifact-xlsx .xlsx-editor-sheet-tabs {
+  padding-right: 8rem;
+}
