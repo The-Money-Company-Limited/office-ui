@@ -12,7 +12,9 @@ import {
  * started from. Only edits that change the visible text of existing
  * top-level paragraphs can be expressed that way; anything else (splitting
  * or merging paragraphs, formatting, tables, headers) fails closed so an
- * untracked change never slips through.
+ * untracked change never slips through. That includes an edit that changes
+ * text and formatting together, such as a styled paste: the tracked text
+ * would lose the formatting.
  */
 
 export interface TextReplacement {
@@ -78,11 +80,51 @@ function paragraphVisibleText(paragraph: ParagraphNode): string | undefined {
   return text;
 }
 
+/** JSON with sorted keys and no undefined values, for structural equality. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner && typeof inner === "object" && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner as Record<string, unknown>).sort(([left], [right]) =>
+            left < right ? -1 : left > right ? 1 : 0
+          )
+        )
+      : inner
+  );
+}
+
+/** One entry per UTF-16 unit of visible text: the formatting it carries. */
+function characterFormats(paragraph: ParagraphNode): string[] {
+  const formats: string[] = [];
+  for (const child of paragraph.children) {
+    if (child.type !== "text") {
+      continue;
+    }
+    const format = canonicalJson({ style: child.style, link: child.link });
+    for (let index = 0; index < child.text.length; index += 1) {
+      formats.push(format);
+    }
+  }
+  return formats;
+}
+
+/** Whether the tracked paragraph shows the text and formatting the edit produced. */
+function sameFormatting(tracked: ParagraphNode, edited: ParagraphNode): boolean {
+  const trackedFormats = characterFormats(tracked);
+  const editedFormats = characterFormats(edited);
+  return (
+    canonicalJson(tracked.style) === canonicalJson(edited.style) &&
+    trackedFormats.length === editedFormats.length &&
+    trackedFormats.every((format, index) => format === editedFormats[index])
+  );
+}
+
 /**
  * Re-expresses the change from `before` to `after` as tracked changes by
  * `authorship.author`, applied to `before`. Every changed node must be a
- * top-level paragraph whose visible text changed; each one becomes one
- * tracked replacement. Fails with "unsupported" for any other change.
+ * top-level paragraph whose visible text changed and whose formatting the
+ * tracked replacement reproduces; each one becomes one tracked replacement.
+ * Fails with "unsupported" for any other change.
  */
 export function trackModelTextEdits(
   before: DocModel,
@@ -133,6 +175,9 @@ export function trackModelTextEdits(
     });
     if (!tracked.ok) {
       return tracked;
+    }
+    if (!sameFormatting(tracked.model.nodes[index] as ParagraphNode, next)) {
+      return { ok: false, reason: "unsupported" };
     }
     model = tracked.model;
   }

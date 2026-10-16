@@ -24,6 +24,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { useVirtualizer, useWindowVirtualizer } from "@tanstack/react-virtual";
 import {
   allocateBlockId,
+  bodyParagraphIds,
   cloneDocModel,
   cloneParagraphMarkFormatting,
   collectDuplicateDocModelBlockIds,
@@ -4372,7 +4373,7 @@ export interface UseDocxEditorOptions {
 
 export type DocxRevisionBatchCommandResult = {
   ok: true;
-  /** Top-level paragraphs whose revision markup could not be resolved and was left as is. */
+  /** Body nodes (paragraphs or tables) whose revision markup could not be resolved and was left as is. */
   remainingNodeIndexes: number[];
 };
 
@@ -29972,15 +29973,21 @@ export function useDocxEditor(
   const author = options.author?.trim() || "Anonymous";
   const authorRef = React.useRef(author);
   authorRef.current = author;
-  const suggestingRef = React.useRef(false);
+  // Viewers in mode="suggest" currently registered on this controller; one
+  // unmounting must not stop tracking for another.
+  const suggestingViewerCountRef = React.useRef(0);
   const [suggestionRefusalNonce, bumpSuggestionRefusalNonce] = React.useReducer(
     (value: number) => value + 1,
     0
   );
   const registerSuggestingMode = React.useCallback((): (() => void) => {
-    suggestingRef.current = true;
+    suggestingViewerCountRef.current += 1;
+    let registered = true;
     return () => {
-      suggestingRef.current = false;
+      if (registered) {
+        registered = false;
+        suggestingViewerCountRef.current -= 1;
+      }
     };
   }, []);
   const [paginationInfo, setPaginationInfo] =
@@ -30574,7 +30581,7 @@ export function useDocxEditor(
         return false;
       }
       if (
-        suggestingRef.current &&
+        suggestingViewerCountRef.current > 0 &&
         !patch.annotation &&
         patch.model !== undefined &&
         patch.model !== currentModel
@@ -30595,7 +30602,7 @@ export function useDocxEditor(
           });
           bumpSuggestionRefusalNonce();
           setStatus(
-            "Suggesting can only track text changes within a paragraph; this edit was not applied"
+            "Suggesting can only track text changes within a paragraph, not formatting; this edit was not applied"
           );
           return false;
         }
@@ -38922,19 +38929,6 @@ function renderHeaderNode(
   );
 }
 
-const PARAGRAPH_PARA_ID = /^<w:p\b[^>]*?\bw14:paraId="([0-9A-Fa-f]{1,8})"/;
-
-// paragraphAnchorId is a body paragraph's DOM id under anchorIdPrefix: Word's
-// w14:paraId when the paragraph has one, else its index in the body.
-function paragraphAnchorId(
-  prefix: string,
-  node: { sourceXml?: string },
-  nodeIndex: number
-): string {
-  const paraId = node.sourceXml?.match(PARAGRAPH_PARA_ID)?.[1];
-  return paraId ? `${prefix}p-${paraId.toUpperCase()}` : `${prefix}p-n${nodeIndex}`;
-}
-
 export function DocxEditorViewer({
   editor,
   anchorIdPrefix,
@@ -39010,6 +39004,11 @@ export function DocxEditorViewer({
   const tocLinkColorByLevel = React.useMemo(
     () => collectHeadingTextColorByLevel(editor.model),
     [editor.model]
+  );
+  // Anchor ids under anchorIdPrefix; the agent API names paragraphs the same way.
+  const paragraphIds = React.useMemo(
+    () => bodyParagraphIds(editor.model.nodes),
+    [editor.model.nodes]
   );
   const paragraphRunRenderOptions = React.useMemo<ParagraphRunRenderOptions>(
     () => ({
@@ -59123,7 +59122,7 @@ export function DocxEditorViewer({
           id={
             anchorIdPrefix === undefined || options?.syntheticKeySuffix
               ? undefined
-              : `${paragraphAnchorId(anchorIdPrefix, node, nodeIndex)}${
+              : `${anchorIdPrefix}${paragraphIds[nodeIndex]}${
                   paragraphSegmentStartLine > 0
                     ? `-l${paragraphSegmentStartLine}`
                     : ""

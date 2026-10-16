@@ -157,6 +157,7 @@ function cloneParagraph(paragraph: ParagraphNode): ParagraphNode {
     ),
     sourceParagraphMarkPropertiesXml: paragraph.sourceParagraphMarkPropertiesXml,
     paragraphMarkDeleted: paragraph.paragraphMarkDeleted,
+    paraId: paragraph.paraId,
     sourceXml: paragraph.sourceXml,
     sourceTextPatch: paragraph.sourceTextPatch
       ? {

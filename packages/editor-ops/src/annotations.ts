@@ -1,5 +1,6 @@
 import type {
   DocModel,
+  DocNode,
   DocumentCommentDefinition,
   ParagraphNode,
   TextLigatures,
@@ -48,7 +49,11 @@ export type CommentCreationResult =
 export type RevisionBatchResult = {
   ok: true;
   model: DocModel;
-  /** Top-level paragraphs whose revision markup could not be resolved and was left as is. */
+  /**
+   * Body nodes (paragraphs or tables) that still carry revision markup this
+   * batch could not resolve: paragraph-mark changes, moves, tables, or
+   * markup it cannot parse.
+   */
   remainingNodeIndexes: number[];
 };
 
@@ -714,20 +719,16 @@ function decideAllRevisions(
   model: DocModel,
   decision: RevisionDecision
 ): RevisionBatchResult {
-  const remainingNodeIndexes: number[] = [];
   let nodes = model.nodes;
   model.nodes.forEach((node, nodeIndex) => {
     if (node.type !== "paragraph" || !RUN_REVISION_XML.test(node.sourceXml ?? "")) {
       return;
     }
+    // Paragraph-mark revisions (in source.openXml) would merge or split
+    // paragraphs, so they stay, and the node is reported below.
     const source = paragraphSourceForModel(node);
     if (!source) {
-      remainingNodeIndexes.push(nodeIndex);
       return;
-    }
-    if (RUN_REVISION_XML.test(source.openXml)) {
-      // Paragraph-mark revisions would merge or split paragraphs.
-      remainingNodeIndexes.push(nodeIndex);
     }
     const isRevision = (wrapper: SourceWrapper) =>
       wrapper.tagName === "w:ins" || wrapper.tagName === "w:del";
@@ -742,6 +743,9 @@ function decideAllRevisions(
       items: resolveRevisions(source.items, isRevision, decision),
     });
   });
+  const remainingNodeIndexes = nodes.flatMap((node, nodeIndex) =>
+    RUN_REVISION_XML.test(node.sourceXml ?? "") ? [nodeIndex] : []
+  );
   return { ok: true, model: { ...model, nodes }, remainingNodeIndexes };
 }
 
@@ -986,9 +990,30 @@ function withoutCommentMarkers(xml: string, ids: Set<number>): string {
   return replaceXmlRanges(xml, replacements);
 }
 
+function sourceXmlChanges(nodes: DocNode[], transform: (xml: string) => string): boolean {
+  return nodes.some(
+    (node) =>
+      (node.sourceXml !== undefined && transform(node.sourceXml) !== node.sourceXml) ||
+      (node.type === "table" &&
+        node.rows.some((row) =>
+          row.cells.some((cell) => sourceXmlChanges(cell.nodes as DocNode[], transform))
+        ))
+  );
+}
+
+function mapPartSourceXml<T extends { nodes: DocNode[] }>(
+  parts: T[],
+  transform: (xml: string) => string
+): T[] {
+  return parts.map((part) => ({ ...part, nodes: mapBodySourceXml(part.nodes, transform) }));
+}
+
 /**
- * Deletes a comment with its range markers and reference. Deleting a thread's
- * root deletes its replies too, as Word does.
+ * Deletes a comment with its range markers and reference, in the body,
+ * headers and footers. Deleting a thread's root deletes its replies too, as
+ * Word does. A comment anchored in a footnote or endnote is refused
+ * ("unsupported"): those parts are written back as imported, so its markers
+ * would be left dangling.
  */
 export function deleteComment(
   model: DocModel,
@@ -1009,13 +1034,30 @@ export function deleteComment(
       }
     }
   }
+  const strip = (xml: string) => withoutCommentMarkers(xml, deleted);
+  const notes = [...(model.metadata.footnotes ?? []), ...(model.metadata.endnotes ?? [])];
+  if (notes.some((note) => note.nodes && sourceXmlChanges(note.nodes, strip))) {
+    return { ok: false, reason: "unsupported" };
+  }
+  const { metadata } = model;
   return {
     ok: true,
     model: {
       ...model,
-      nodes: mapBodySourceXml(model.nodes, (xml) => withoutCommentMarkers(xml, deleted)),
+      nodes: mapBodySourceXml(model.nodes, strip),
       metadata: {
-        ...model.metadata,
+        ...metadata,
+        headerSections: mapPartSourceXml(metadata.headerSections, strip),
+        footerSections: mapPartSourceXml(metadata.footerSections, strip),
+        ...(metadata.sections
+          ? {
+              sections: metadata.sections.map((section) => ({
+                ...section,
+                headerSections: mapPartSourceXml(section.headerSections, strip),
+                footerSections: mapPartSourceXml(section.footerSections, strip),
+              })),
+            }
+          : {}),
         comments: comments.filter((comment) => !deleted.has(comment.id)),
       },
     },

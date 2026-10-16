@@ -4,7 +4,10 @@
  * save DOCX bytes. Runs in Node with no browser and no React.
  */
 import {
+  bodyParagraphIds,
   buildDocModel,
+  paragraphIdFromDomId,
+  withUniqueBodyParaIds,
   type DocModel,
   type ParagraphNode,
 } from "@extend-ai/react-docx-doc-model";
@@ -24,7 +27,11 @@ import { parseDocx, type OoxmlPackage } from "@extend-ai/react-docx-ooxml-core";
 import { serializeDocx } from "@extend-ai/react-docx-serializer";
 
 export interface DocParagraph {
-  /** The paragraph's DOM id in the viewer: `p-<w14:paraId>` or `p-n<index>`. */
+  /**
+   * The paragraph's DOM id in the viewer (after its `anchorIdPrefix`):
+   * `p-<w14:paraId>`, or `p-n<index>` for a paragraph without one. Files
+   * written by `save()` give every body paragraph a paraId.
+   */
   id: string;
   /** Index in the document body. */
   index: number;
@@ -107,6 +114,25 @@ export interface DocComment {
   quote?: string;
 }
 
+/**
+ * Body revisions: those `revisions` can list, and the nodes holding revision
+ * markup it cannot list (paragraph-mark changes, moves, revisions inside
+ * tables, unreadable markup). Accepting or rejecting "all" leaves the
+ * unlisted ones in place.
+ */
+export interface RevisionReport {
+  revisions: DocRevision[];
+  unlisted: UnlistedRevisions[];
+}
+
+export interface UnlistedRevisions {
+  /** Index in the document body. */
+  index: number;
+  kind: "paragraph" | "table";
+  /** Set for a paragraph. */
+  paragraphId?: string;
+}
+
 export interface DocRevision {
   /** OOXML `w:id`. */
   id: string;
@@ -117,25 +143,16 @@ export interface DocRevision {
   paragraphId: string;
 }
 
-const PARAGRAPH_PARA_ID = /^<w:p\b[^>]*?\bw14:paraId="([0-9A-Fa-f]{1,8})"/;
-/** A viewer paragraph id at the end of a DOM id, without a `-l<line>` segment suffix. */
-const PARAGRAPH_DOM_ID = /(?:^|-)(p-(?:n\d+|[0-9A-Fa-f]{1,8}))(?:-l\d+)?$/;
-
-function paragraphId(node: ParagraphNode, index: number): string {
-  const paraId = node.sourceXml?.match(PARAGRAPH_PARA_ID)?.[1];
-  return paraId ? `p-${paraId.toUpperCase()}` : `p-n${index}`;
-}
-
 function paragraphText(node: ParagraphNode): string {
   return node.children
     .map((child) => (child.type === "text" ? child.text : ""))
     .join("");
 }
 
-/** `#p-n1 > span` → `p-n1`; `#p-0A1B2C3D-l2` → `p-0A1B2C3D`. */
+/** `#doc_p-n1 > span` → `p-n1`; `#p-0A1B2C3D-l2` → `p-0A1B2C3D`. */
 function selectorParagraphId(selector: string | undefined): string | undefined {
   const id = selector?.trim().match(/^#([^\s>+~:.[#]+)/)?.[1];
-  return id?.match(PARAGRAPH_DOM_ID)?.[1];
+  return id === undefined ? undefined : paragraphIdFromDomId(id);
 }
 
 function required<T extends { ok: true; model: DocModel }>(
@@ -169,15 +186,21 @@ export class Doc {
     return new Doc(await buildDocModel(pkg), pkg);
   }
 
+  /**
+   * Writes DOCX bytes. Every body paragraph first gets a unique `w14:paraId`,
+   * so a `p-n<index>` id becomes a stable `p-<paraId>` id here and in the file.
+   */
   async save(): Promise<Uint8Array> {
+    this.model = withUniqueBodyParaIds(this.model);
     return new Uint8Array(await serializeDocx(this.model, this.pkg));
   }
 
   paragraphs(): DocParagraph[] {
+    const ids = bodyParagraphIds(this.model.nodes);
     const result: DocParagraph[] = [];
     this.model.nodes.forEach((node, index) => {
       if (node.type === "paragraph") {
-        result.push({ id: paragraphId(node, index), index, text: paragraphText(node) });
+        result.push({ id: ids[index]!, index, text: paragraphText(node) });
       }
     });
     return result;
@@ -245,7 +268,7 @@ export class Doc {
 
   suggest(input: SuggestInput): DocRevision[] {
     const range = this.targetRange(input.range, input.paragraphId, input.find, "end");
-    const before = new Set(this.revisions().map(revisionKey));
+    const before = new Set(this.listedRevisions().map(revisionKey));
     this.model = required(
       replaceParagraphTextTracked(this.model, {
         nodeIndex: this.paragraphOrThrow(range.paragraphId).index,
@@ -257,7 +280,7 @@ export class Doc {
       }),
       "suggest"
     ).model;
-    return this.revisions().filter((revision) => !before.has(revisionKey(revision)));
+    return this.listedRevisions().filter((revision) => !before.has(revisionKey(revision)));
   }
 
   comment(input: CommentInput): { commentId: number } {
@@ -309,7 +332,31 @@ export class Doc {
     }));
   }
 
-  revisions(): DocRevision[] {
+  revisions(): RevisionReport {
+    const ids = bodyParagraphIds(this.model.nodes);
+    // What accepting everything listable would leave is exactly what cannot be listed.
+    const unlisted = acceptAllRevisions(this.model).remainingNodeIndexes.map(
+      (index): UnlistedRevisions => {
+        const node = this.model.nodes[index]!;
+        return node.type === "paragraph"
+          ? { index, kind: "paragraph", paragraphId: ids[index] }
+          : { index, kind: "table" };
+      }
+    );
+    return { revisions: this.listedRevisions(), unlisted };
+  }
+
+  /** Accepts one revision (every paragraph carrying its id) or all; returns what remains. */
+  accept(id: string | number): RevisionReport {
+    return this.decide(id, "accept");
+  }
+
+  /** Rejects one revision (every paragraph carrying its id) or all; returns what remains. */
+  reject(id: string | number): RevisionReport {
+    return this.decide(id, "reject");
+  }
+
+  private listedRevisions(): DocRevision[] {
     return this.paragraphs().flatMap((paragraph) =>
       readParagraphAnnotations(this.model, paragraph.index).revisions.map((revision) => ({
         ...revision,
@@ -318,22 +365,12 @@ export class Doc {
     );
   }
 
-  /** Accepts one revision (every paragraph carrying its id) or all; returns what remains. */
-  accept(id: string | number): DocRevision[] {
-    return this.decide(id, "accept");
-  }
-
-  /** Rejects one revision (every paragraph carrying its id) or all; returns what remains. */
-  reject(id: string | number): DocRevision[] {
-    return this.decide(id, "reject");
-  }
-
-  private decide(id: string | number, decision: "accept" | "reject"): DocRevision[] {
+  private decide(id: string | number, decision: "accept" | "reject"): RevisionReport {
     if (id === "all") {
       this.model = (decision === "accept" ? acceptAllRevisions : rejectAllRevisions)(this.model).model;
       return this.revisions();
     }
-    const targets = this.revisions().filter((revision) => revision.id === String(id));
+    const targets = this.listedRevisions().filter((revision) => revision.id === String(id));
     if (targets.length === 0) {
       throw new Error(`${decision} failed: no revision ${id}; list revisions() for current ids`);
     }

@@ -316,6 +316,12 @@ export interface ParagraphNode {
   /** @internal Original paragraph mark properties retained during regeneration. */
   sourceParagraphMarkPropertiesXml?: string;
   paragraphMarkDeleted?: boolean;
+  /**
+   * Word's `w14:paraId` (8 hex digits, upper case): parsed at import, kept
+   * through edits and written back on export, so a paragraph's anchor id
+   * survives a rebuilt `sourceXml`.
+   */
+  paraId?: string;
   sourceXml?: string;
   /** @internal Validated provenance for a surgical plain-text sourceXml patch. */
   sourceTextPatch?: {

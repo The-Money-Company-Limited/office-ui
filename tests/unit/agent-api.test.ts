@@ -65,7 +65,11 @@ describe("agent document API", () => {
     expect(
       doc.locate({ kind: "element", selector: "#p-1a2b3c4d-l1 > span:nth-child(2)", text: "not here" })
     ).toEqual({ paragraphId: "p-1A2B3C4D", index: 0, text: "Demonstration of the agent tools" });
+    expect(
+      doc.locate({ kind: "element", selector: "#doc_p-n2-l3 > span", text: "quick" })
+    ).toEqual({ paragraphId: "p-n2", index: 2, text: "The quick fox", start: 4, end: 9 });
     expect(doc.locate({ kind: "element", selector: "#page-1", text: "" })).toBeNull();
+    expect(doc.locate({ kind: "element", selector: "#doc_page-1", text: "" })).toBeNull();
     expect(doc.locate({ kind: "element", selector: "#p-n9", text: "" })).toBeNull();
   });
 
@@ -113,33 +117,39 @@ describe("agent document API", () => {
     doc.suggest({ paragraphId: "p-1A2B3C4D", replace: ".", author: "Agent" });
 
     const after = await reopened(doc);
+    const ids = doc.paragraphs().map((paragraph) => paragraph.id);
     expect(after.paragraphs().map((paragraph) => paragraph.text)).toEqual([
       "Demonstration of the agent tools.",
       "Hello there, hello again",
       "The quick fox",
     ]);
     expect(
-      after.revisions().map(({ kind, author, text, paragraphId }) => [kind, author, text, paragraphId])
+      after
+        .revisions()
+        .revisions.map(({ kind, author, text, paragraphId }) => [kind, author, text, paragraphId])
     ).toEqual([
       ["insertion", "Agent", ".", "p-1A2B3C4D"],
-      ["deletion", "Agent", "world", "p-n1"],
-      ["insertion", "Agent", "there", "p-n1"],
-      ["deletion", "Bob", " slow", "p-n2"],
+      ["deletion", "Agent", "world", ids[1]],
+      ["insertion", "Agent", "there", ids[1]],
+      ["deletion", "Bob", " slow", ids[2]],
     ]);
   });
 
   it("accepts and rejects one revision or all of them", async () => {
     const doc = await fixture();
     doc.suggest({ paragraphId: "p-n1", find: "world", replace: "there", author: "Agent" });
-    const bob = doc.revisions().find((revision) => revision.author === "Bob")!;
-    expect(doc.reject(bob.id).map((revision) => revision.author)).toEqual(["Agent", "Agent"]);
+    const bob = doc.revisions().revisions.find((revision) => revision.author === "Bob")!;
+    expect(doc.reject(bob.id).revisions.map((revision) => revision.author)).toEqual([
+      "Agent",
+      "Agent",
+    ]);
     expect(doc.paragraphs()[2]!.text).toBe("The quick slow fox");
 
     const accepted = await fixture();
     accepted.suggest({ paragraphId: "p-n1", find: "world", replace: "there", author: "Agent" });
-    expect(accepted.accept("all")).toEqual([]);
+    expect(accepted.accept("all")).toEqual({ revisions: [], unlisted: [] });
     const acceptedAfter = await reopened(accepted);
-    expect(acceptedAfter.revisions()).toEqual([]);
+    expect(acceptedAfter.revisions()).toEqual({ revisions: [], unlisted: [] });
     expect(acceptedAfter.paragraphs().map((paragraph) => paragraph.text)).toEqual([
       "Demonstration of the agent tools",
       "Hello there, hello again",
@@ -148,7 +158,7 @@ describe("agent document API", () => {
 
     const rejected = await fixture();
     rejected.suggest({ paragraphId: "p-n1", find: "world", replace: "there", author: "Agent" });
-    expect(rejected.reject("all")).toEqual([]);
+    expect(rejected.reject("all")).toEqual({ revisions: [], unlisted: [] });
     expect((await reopened(rejected)).paragraphs()[1]!.text).toBe("Hello world, hello again");
   });
 
@@ -165,13 +175,14 @@ describe("agent document API", () => {
     doc.resolve(0);
 
     const after = await reopened(doc);
+    const ids = doc.paragraphs().map((paragraph) => paragraph.id);
     expect(after.comments()).toEqual([
       expect.objectContaining({
         id: 0,
         author: "Carol",
         text: "Is this right?",
         resolved: true,
-        paragraphId: "p-n2",
+        paragraphId: ids[2],
         quote: "quick",
       }),
       expect.objectContaining({
@@ -179,17 +190,50 @@ describe("agent document API", () => {
         author: "Agent Smith",
         text: "Too casual?",
         resolved: false,
-        paragraphId: "p-n1",
+        paragraphId: ids[1],
         quote: "hello again",
       }),
       expect.objectContaining({
         id: reply.commentId,
         text: "Yes, it is.",
         parentId: 0,
-        paragraphId: "p-n2",
+        paragraphId: ids[2],
         quote: "quick",
       }),
     ]);
+  });
+
+  it("gives every paragraph a stable paraId id when it saves", async () => {
+    const doc = await fixture();
+    await doc.save();
+    const ids = doc.paragraphs().map((paragraph) => paragraph.id);
+    expect(ids[0]).toBe("p-1A2B3C4D");
+    for (const id of ids) {
+      expect(id).toMatch(/^p-[0-7][0-9A-F]{7}$/);
+    }
+    expect(new Set(ids).size).toBe(3);
+
+    // Edits keep the ids, in this session and in the file it writes next.
+    doc.suggest({ paragraphId: ids[1]!, find: "world", replace: "there", author: "Agent" });
+    const after = await reopened(doc);
+    expect(after.paragraphs().map((paragraph) => paragraph.id)).toEqual(ids);
+    expect(doc.paragraphs().map((paragraph) => paragraph.id)).toEqual(ids);
+  });
+
+  it("reports revisions it cannot list instead of claiming none remain", async () => {
+    const table =
+      `<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc>` +
+      `<w:p><w:ins w:id="7" w:author="Bob" w:date="${DATE}"><w:r><w:t>cell</w:t></w:r></w:ins></w:p>` +
+      `</w:tc></w:tr></w:tbl>`;
+    const pkg = createMinimalDocxPackage(
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W_NS}"><w:body>` +
+        `<w:p><w:r><w:t>Before</w:t></w:r></w:p>${table}<w:p><w:r><w:t>After</w:t></w:r></w:p>` +
+        `</w:body></w:document>`
+    );
+    const doc = await openDocx(await packageToArrayBuffer(pkg));
+    const unlisted = [{ index: 1, kind: "table" }];
+    expect(doc.revisions()).toEqual({ revisions: [], unlisted });
+    expect(doc.accept("all")).toEqual({ revisions: [], unlisted });
   });
 
   it("explains a target it cannot find", async () => {

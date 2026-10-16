@@ -1135,6 +1135,14 @@ fn parse_paragraph_mark_formatting(
     }
 }
 
+/// The paragraph's `w14:paraId`, upper case, when it is 1–8 hex digits.
+fn paragraph_para_id(paragraph_xml: &str) -> Option<String> {
+    let open_tag = &paragraph_xml[..paragraph_xml.find('>')? + 1];
+    let value = get_attribute(open_tag, "w14:paraId")?;
+    let valid = (1..=8).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_hexdigit());
+    valid.then(|| value.to_ascii_uppercase())
+}
+
 pub fn parse_paragraph(paragraph_xml: &str, context: &ParseContext<'_>) -> ParagraphNode {
     parse_paragraph_in_table(paragraph_xml, context, None)
 }
@@ -1326,6 +1334,7 @@ pub(crate) fn parse_paragraph_with_table_run_style(
         source_paragraph_mark_properties_xml,
         paragraph_mark_deleted: if paragraph_mark_deleted { Some(true) } else { None },
         children,
+        para_id: paragraph_para_id(paragraph_xml),
         source_xml: Some(paragraph_xml.to_string()),
         source_text_patch: None,
         source_run_provenance,

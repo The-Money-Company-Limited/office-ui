@@ -80,6 +80,7 @@ pub fn parse_document_xml(document_xml: &str, context: &ParseContext<'_>) -> Vec
             source_paragraph_mark_formatting: None,
             source_paragraph_mark_properties_xml: None,
             paragraph_mark_deleted: None,
+            para_id: None,
             source_xml: None,
             source_text_patch: None,
             source_run_provenance: None,

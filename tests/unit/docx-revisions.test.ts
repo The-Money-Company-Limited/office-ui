@@ -7,7 +7,9 @@ import {
   type OoxmlPackage,
 } from "@extend-ai/react-docx-ooxml-core";
 import {
+  bodyParagraphIds,
   buildDocModel,
+  withUniqueBodyParaIds,
   type DocModel,
   type ParagraphNode,
 } from "@extend-ai/react-docx-doc-model";
@@ -390,5 +392,72 @@ describe("comment threads", () => {
     expect(result.commentsExtended).not.toContain("0A000001");
     expect(paragraphText(result.model)).toBe("The quick brown fox");
     expect(result.xml).toContain("> slow</w:delText>");
+  });
+
+  it("deletes a comment's markers from the header it is anchored in", async () => {
+    const header =
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="${W_NS}">` +
+      `<w:p><w:commentRangeStart w:id="0"/><w:r><w:t>Header</w:t></w:r><w:commentRangeEnd w:id="0"/>` +
+      `<w:r><w:commentReference w:id="0"/></w:r></w:p></w:hdr>`;
+    const body =
+      `<w:p><w:r><w:t>Body</w:t></w:r></w:p>` +
+      `<w:sectPr><w:headerReference w:type="default" r:id="rId9"/><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>`;
+    let seed = createMinimalDocxPackage(
+      documentXml(body).replace("<w:document ", '<w:document xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ')
+    );
+    seed = withPart(seed, { name: "word/comments.xml", content: COMMENTS_XML });
+    seed = withPart(seed, { name: "word/commentsExtended.xml", content: COMMENTS_EXTENDED_XML });
+    seed = withPart(seed, { name: "word/header1.xml", content: header });
+    seed = withPart(seed, {
+      name: "word/_rels/document.xml.rels",
+      content: RELS_WITH_COMMENTS.replace(
+        "</Relationships>",
+        '<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>'
+      ),
+    });
+    const pkg = await parseDocx(await packageToArrayBuffer(seed));
+    const model = await buildDocModel(pkg);
+    expect(model.metadata.headerSections[0]?.nodes[0]?.sourceXml).toContain("w:commentRangeStart");
+
+    const result = await exported(ok(deleteComment(model, 0)), pkg);
+    const headerXml = result.out.parts.get("word/header1.xml")?.content ?? "";
+    expect(headerXml).toContain("Header");
+    expect(headerXml).not.toContain("w:commentRange");
+    expect(headerXml).not.toContain("w:commentReference");
+    expect(result.comments).not.toContain("Is this right?");
+  });
+});
+
+describe("paragraph ids", () => {
+  it("keep w14:paraId through an edit that rebuilds the paragraph", async () => {
+    const { pkg, model } = await load(
+      `<w:p w14:paraId="1a2b3c4d"><w:r><w:t>Name</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>Value</w:t></w:r></w:p>` +
+        `<w:p><w:r><w:t>Next</w:t></w:r></w:p>`
+    );
+    expect(bodyParagraphIds(model.nodes)).toEqual(["p-1A2B3C4D", "p-n1"]);
+
+    const edited = updateParagraphText(model, 0, `${paragraphText(model)}s`);
+    expect((edited.nodes[0] as ParagraphNode).sourceXml).toBeUndefined();
+    expect(bodyParagraphIds(edited.nodes)).toEqual(["p-1A2B3C4D", "p-n1"]);
+
+    const result = await exported(edited, pkg);
+    expect(result.xml).toContain('<w:p w14:paraId="1A2B3C4D">');
+    expect(bodyParagraphIds(result.model.nodes)).toEqual(["p-1A2B3C4D", "p-n1"]);
+  });
+
+  it("name a repeated paraId by index and give it a fresh one on stamping", async () => {
+    const { model } = await load(
+      `<w:p w14:paraId="0000AAAA"><w:r><w:t>One</w:t></w:r></w:p>` +
+        `<w:p w14:paraId="0000AAAA"><w:r><w:t>Two</w:t></w:r></w:p>` +
+        `<w:p><w:r><w:t>Three</w:t></w:r></w:p>`
+    );
+    expect(bodyParagraphIds(model.nodes)).toEqual(["p-0000AAAA", "p-n1", "p-n2"]);
+
+    const stamped = withUniqueBodyParaIds(model);
+    const ids = bodyParagraphIds(stamped.nodes);
+    expect(ids[0]).toBe("p-0000AAAA");
+    expect(new Set(ids).size).toBe(3);
+    expect(ids.every((id) => /^p-[0-7][0-9A-F]{7}$/.test(id!))).toBe(true);
+    expect(withUniqueBodyParaIds(stamped)).toBe(stamped);
   });
 });

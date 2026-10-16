@@ -2953,6 +2953,35 @@ fn paragraph_xml(
     state: &mut ImageSerializationState<'_>,
     run_id_ref: &mut i64,
 ) -> String {
+    let xml = paragraph_xml_without_id(paragraph, state, run_id_ref);
+    match &paragraph.para_id {
+        Some(para_id) => with_paragraph_para_id(&xml, para_id),
+        None => xml,
+    }
+}
+
+/// Sets `w14:paraId` on the paragraph's own opening tag, so the id survives a
+/// paragraph rebuilt from the model.
+fn with_paragraph_para_id(paragraph_xml: &str, para_id: &str) -> String {
+    let Some(open_end) = opening_tag_end(paragraph_xml, 0) else {
+        return paragraph_xml.to_string();
+    };
+    let open_tag = &paragraph_xml[..open_end];
+    if get_attribute(open_tag, "w14:paraId").is_some_and(|current| current.eq_ignore_ascii_case(para_id)) {
+        return paragraph_xml.to_string();
+    }
+    format!(
+        "{}{}",
+        set_xml_attribute(open_tag, "w14:paraId", para_id),
+        &paragraph_xml[open_end..]
+    )
+}
+
+fn paragraph_xml_without_id(
+    paragraph: &ParagraphNode,
+    state: &mut ImageSerializationState<'_>,
+    run_id_ref: &mut i64,
+) -> String {
     if let Some(source_xml) = &paragraph.source_xml {
         if let Some(patch_plan) = &paragraph.source_text_patch {
             if let Some(patched) = patch_source_paragraph_text(paragraph, source_xml, patch_plan) {

@@ -880,6 +880,10 @@ pub struct ParagraphNode {
     pub source_paragraph_mark_properties_xml: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paragraph_mark_deleted: Option<bool>,
+    /// Word's `w14:paraId` (upper-case hex), kept through edits and written
+    /// back on export.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub para_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_xml: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -172,6 +172,38 @@ describe("trackModelTextEdits", () => {
     expect(trackModelTextEdits(model, retitled, AUTHOR).ok).toBe(false);
   });
 
+  it("refuses a text change that also changes formatting, such as a styled paste", async () => {
+    const model = await load(PLAIN);
+    const paragraph = model.nodes[0] as ParagraphNode;
+    const pasted: DocModel = {
+      ...model,
+      nodes: [
+        {
+          ...paragraph,
+          sourceXml: undefined,
+          children: [
+            ...paragraph.children,
+            { type: "text", text: " again", style: { bold: true } },
+          ],
+        },
+      ],
+    };
+    expect(trackModelTextEdits(model, pasted, AUTHOR)).toEqual({
+      ok: false,
+      reason: "unsupported",
+    });
+  });
+
+  it("tracks typing next to formatted text, which takes that formatting", async () => {
+    const model = await load(
+      '<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">Bold </w:t></w:r><w:r><w:t>plain</w:t></w:r></w:p>'
+    );
+    for (const text of ["Oh Bold plain", "Bold, plain", "Bold plainly"]) {
+      const result = trackModelTextEdits(model, updateParagraphText(model, 0, text), AUTHOR);
+      expect(result.ok, text).toBe(true);
+    }
+  });
+
   it("passes an unchanged model through", async () => {
     const model = await load(PLAIN);
     expect(
@@ -267,6 +299,21 @@ describe("suggesting controller", () => {
     expect(editor.model.nodes).toHaveLength(2);
     expect((editor.model.nodes[0] as ParagraphNode).style?.align).toBeUndefined();
     expect(editor.canUndo).toBe(false);
+  });
+
+  it("keeps tracking while another suggesting viewer is still registered", async () => {
+    const model = await load(PLAIN);
+    const editor = runControllerSteps(model, [
+      (editor) => {
+        editor.registerSuggestingMode();
+        const unregisterSecond = editor.registerSuggestingMode();
+        unregisterSecond();
+        unregisterSecond();
+        editor.commitParagraphText(0, "Hello brave world");
+      },
+    ]);
+    expect(visible(editor.model)).toBe("Hello brave world");
+    expect(sourceXml(editor.model)).toContain("<w:ins ");
   });
 
   it("leaves edit mode untracked", async () => {

@@ -11,6 +11,7 @@ import type { DocModel } from "./types";
 
 export * from "./types";
 export * from "./blocks";
+export * from "./paragraph-id";
 export { resolveTableGridSkipCount, tableGridColumnBound, tableRowGridSkipCount } from "./table-grid";
 export {
   allocateBlockId,
