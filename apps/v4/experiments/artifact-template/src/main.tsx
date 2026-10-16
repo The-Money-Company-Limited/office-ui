@@ -131,6 +131,7 @@ function App() {
           ) : artifact?.kind === "xlsx" ? (
             <XlsxEditor
               {...documentProps}
+              cellAnchorIdPrefix=""
               scrollsWindow
               syncSheetToUrl
               isDark={isDark}

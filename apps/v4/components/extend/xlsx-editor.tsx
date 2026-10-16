@@ -13,7 +13,9 @@ import {
   type XlsxCellBorderEdgeInput,
   type XlsxCellRange,
   type XlsxCellStyleInput,
+  type XlsxCommentIndicatorRenderProps,
   type XlsxSheetData,
+  type XlsxSuggestionValue,
   type XlsxTableHeaderMenuRenderProps,
 } from "@extend-ai/react-xlsx"
 
@@ -34,6 +36,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Group, GroupSeparator, GroupText } from "@/components/ui/group"
 import { Input } from "@/components/ui/input"
+import { Popover, PopoverPopup } from "@/components/ui/popover"
 import {
   Select,
   SelectContent,
@@ -1310,6 +1313,7 @@ function EditorFileActionsMenu({
 function EditorToolbar({
   fileName,
   isDark,
+  onAddComment,
   onIsDarkChange,
   onUploadClick,
   showNightRenderToggle,
@@ -1317,6 +1321,7 @@ function EditorToolbar({
 }: {
   fileName?: string
   isDark: boolean
+  onAddComment: () => void
   onIsDarkChange: (checked: boolean) => void
   onUploadClick: () => void
   showNightRenderToggle: boolean
@@ -2237,6 +2242,22 @@ function EditorToolbar({
               onMergeCells={mergeSelectedCells}
               onUnmergeCells={unmergeSelectedCells}
             />
+            {readOnly ? null : (
+              <ToolbarIconButton
+                label="Comment"
+                disabled={!hasActiveCell}
+                onClick={onAddComment}
+              >
+                <IconPlaceholder
+                  lucide="MessageSquare"
+                  tabler="IconMessage"
+                  hugeicons="Comment01Icon"
+                  phosphor="ChatIcon"
+                  remixicon="RiChat1Line"
+                  className="size-4"
+                />
+              </ToolbarIconButton>
+            )}
           </div>
           <ToolbarSeparator />
           <div className="flex shrink-0 items-center gap-1">
@@ -2427,7 +2448,251 @@ function EditorToolbar({
   )
 }
 
+/** Author of new comments and replies when the editor names none. */
+const DEFAULT_COMMENT_AUTHOR = "Reviewer"
+
+/** A cell whose comment card is open; the thread is looked up live by cell. */
+type XlsxCommentTarget = {
+  anchor: Element
+  ref: string
+  sheet: string
+}
+
+function formatCommentDate(date: string) {
+  if (!date) return undefined
+  const parsed = new Date(date)
+  if (Number.isNaN(parsed.getTime())) return undefined
+
+  return parsed.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  })
+}
+
+const SUGGESTION_STATUS_LABELS = {
+  accepted: "Accepted",
+  open: "Suggestion",
+  rejected: "Rejected",
+  resolved: "Resolved",
+} as const
+
+function formatSuggestionValue(value: XlsxSuggestionValue) {
+  return typeof value === "string" ? value : String(value)
+}
+
+function CommentCardIconButton({
+  children,
+  label,
+  onClick,
+}: {
+  children: React.ReactNode
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-xs"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+    >
+      {children}
+    </Button>
+  )
+}
+
+function XlsxCommentPopover({
+  author,
+  onClose,
+  target,
+}: {
+  author?: string
+  onClose: () => void
+  target: XlsxCommentTarget
+}) {
+  const {
+    acceptSuggestion,
+    addComment,
+    commentThreads,
+    deleteComment,
+    rejectSuggestion,
+    replyToComment,
+    resolveComment,
+    suggestions,
+  } = useXlsxViewer()
+  const { readOnly } = useXlsxViewerEditing()
+  const [draft, setDraft] = React.useState("")
+  const inputRef = React.useRef<HTMLInputElement>(null)
+  const thread = commentThreads.find(
+    (candidate) =>
+      candidate.sheet === target.sheet && candidate.ref === target.ref
+  )
+  const suggestion = thread
+    ? (suggestions.find((candidate) => candidate.threadId === thread.id) ??
+      null)
+    : null
+  const commentAuthor = author?.trim() || DEFAULT_COMMENT_AUTHOR
+  const canReply = !readOnly && !thread?.resolved
+  const status =
+    suggestion && suggestion.status !== "open"
+      ? SUGGESTION_STATUS_LABELS[suggestion.status]
+      : thread?.resolved
+        ? "Resolved"
+        : null
+
+  function submit() {
+    const text = draft.trim()
+    if (!text) return
+
+    const threadId = thread
+      ? replyToComment(thread.id, text, commentAuthor)
+      : addComment(target.sheet, target.ref, text, commentAuthor)
+    if (threadId) setDraft("")
+  }
+
+  return (
+    <Popover open onOpenChange={(open) => !open && onClose()}>
+      <PopoverPopup
+        anchor={target.anchor}
+        side="right"
+        align="start"
+        sideOffset={6}
+        initialFocus={canReply ? inputRef : undefined}
+        className="w-72 [&_[data-slot=popover-viewport]]:py-2.5 [&_[data-slot=popover-viewport]]:[--viewport-inline-padding:--spacing(2.5)]"
+      >
+        <div className="flex flex-col gap-2 text-xs">
+          <div className="flex min-h-6 items-center justify-between gap-2">
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {status ? `${target.ref} · ${status}` : target.ref}
+            </span>
+            {thread && !readOnly ? (
+              <div className="flex items-center gap-0.5">
+                {suggestion?.status === "open" ? (
+                  <>
+                    <CommentCardIconButton
+                      label="Accept"
+                      onClick={() => acceptSuggestion(thread.id, author)}
+                    >
+                      <IconPlaceholder
+                        lucide="Check"
+                        tabler="IconCheck"
+                        hugeicons="Tick02Icon"
+                        phosphor="CheckIcon"
+                        remixicon="RiCheckLine"
+                        className="size-4"
+                      />
+                    </CommentCardIconButton>
+                    <CommentCardIconButton
+                      label="Reject"
+                      onClick={() => rejectSuggestion(thread.id, author)}
+                    >
+                      <IconPlaceholder
+                        lucide="X"
+                        tabler="IconX"
+                        hugeicons="Cancel01Icon"
+                        phosphor="XIcon"
+                        remixicon="RiCloseLine"
+                        className="size-4"
+                      />
+                    </CommentCardIconButton>
+                  </>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => resolveComment(thread.id, !thread.resolved)}
+                  >
+                    {thread.resolved ? "Reopen" : "Resolve"}
+                  </Button>
+                )}
+                <CommentCardIconButton
+                  label="Delete"
+                  onClick={() => {
+                    if (deleteComment(thread.id)) onClose()
+                  }}
+                >
+                  <IconPlaceholder
+                    lucide="Trash2Icon"
+                    tabler="IconTrash"
+                    hugeicons="Delete02Icon"
+                    phosphor="TrashIcon"
+                    remixicon="RiDeleteBinLine"
+                    className="size-4"
+                  />
+                </CommentCardIconButton>
+              </div>
+            ) : null}
+          </div>
+          {thread?.comments.map((comment, index) => {
+            const date = formatCommentDate(comment.date)
+            const isSuggestionRoot = index === 0 && suggestion
+            const text = isSuggestionRoot ? suggestion.note : comment.text
+
+            return (
+              <div key={comment.id} className="flex min-w-0 flex-col gap-0.5">
+                <div className="flex min-w-0 items-baseline gap-1.5">
+                  <span className="truncate font-medium">
+                    {comment.author.trim() || "Unknown author"}
+                  </span>
+                  {date ? (
+                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                      {date}
+                    </span>
+                  ) : null}
+                </div>
+                {isSuggestionRoot ? (
+                  <div className="rounded-md bg-muted px-2 py-1 leading-snug">
+                    <div className="break-words">
+                      Suggested:{" "}
+                      <span className="font-medium">
+                        {formatSuggestionValue(suggestion.value)}
+                      </span>
+                    </div>
+                    {suggestion.previous !== null ? (
+                      <div className="break-words text-muted-foreground">
+                        Was: {formatSuggestionValue(suggestion.previous)}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                {text ? (
+                  <p className="leading-snug break-words whitespace-pre-wrap">
+                    {text}
+                  </p>
+                ) : null}
+              </div>
+            )
+          })}
+          {canReply ? (
+            <Input
+              ref={inputRef}
+              size="sm"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                // Keys typed here belong to the comment, not the sheet; Escape still closes the card.
+                if (event.key !== "Escape") event.stopPropagation()
+                if (event.key !== "Enter") return
+                event.preventDefault()
+                submit()
+              }}
+              placeholder={thread ? "Reply" : "Comment"}
+              aria-label={thread ? "Reply" : "Comment"}
+              className="text-xs"
+            />
+          ) : null}
+        </div>
+      </PopoverPopup>
+    </Popover>
+  )
+}
+
 export function XlsxEditorSurface({
+  author,
+  cellAnchorIdPrefix,
   className,
   fileName,
   isDark,
@@ -2438,6 +2703,10 @@ export function XlsxEditorSurface({
   showNightRenderToggle,
   workbookIdentity,
 }: {
+  /** Author of new comments, replies, accepts and rejects. */
+  author?: string
+  /** Gives every drawn cell a transparent element with id `${prefix}c-${A1}` for a page comment layer. */
+  cellAnchorIdPrefix?: string
   className?: string
   fileName?: string
   isDark: boolean
@@ -2451,14 +2720,45 @@ export function XlsxEditorSurface({
   showNightRenderToggle: boolean
   workbookIdentity: string
 }) {
-  const { error } = useXlsxViewer()
+  const { activeSheet, error } = useXlsxViewer()
+  const { activeCell } = useXlsxViewerSelection()
   const toolbarRef = React.useRef<HTMLDivElement>(null)
   const toolbarHeight = useElementHeight(toolbarRef)
+  const [commentTarget, setCommentTarget] =
+    React.useState<XlsxCommentTarget | null>(null)
+  // The viewer reports which thread was clicked; the click itself says where it is.
+  const lastClickTargetRef = React.useRef<Element | null>(null)
+  const activeCellAnchorRef = React.useRef<HTMLDivElement>(null)
+  const openCommentTarget =
+    commentTarget?.sheet === activeSheet?.name ? commentTarget : null
+
+  const openThread = React.useCallback(
+    ({ thread }: XlsxCommentIndicatorRenderProps) => {
+      const anchor = lastClickTargetRef.current?.closest("[data-xlsx-comment]")
+      if (!anchor) return
+      setCommentTarget({ anchor, ref: thread.ref, sheet: thread.sheet })
+    },
+    []
+  )
+  const openActiveCellComment = React.useCallback(() => {
+    const anchor = activeCellAnchorRef.current
+    if (!activeCell || !activeSheet || !anchor) return
+    setCommentTarget({
+      anchor,
+      ref: cellAddressToA1(activeCell),
+      sheet: activeSheet.name,
+    })
+  }, [activeCell, activeSheet])
+  const renderActiveCellAnchor = React.useCallback(
+    () => <div ref={activeCellAnchorRef} className="size-full" />,
+    []
+  )
 
   const toolbar = (
     <EditorToolbar
       fileName={fileName}
       isDark={isDark}
+      onAddComment={openActiveCellComment}
       onIsDarkChange={onIsDarkChange}
       onUploadClick={onUploadClick}
       showNightRenderToggle={showNightRenderToggle}
@@ -2490,9 +2790,13 @@ export function XlsxEditorSurface({
               ? "xlsx-editor-canvas flex flex-1 flex-col bg-muted/20"
               : "xlsx-editor-canvas min-h-0 flex-1 bg-muted/20"
           }
+          onClickCapture={(event) => {
+            lastClickTargetRef.current = event.target as Element
+          }}
         >
           <XlsxViewer
             allowResizeInReadOnly
+            cellAnchorIdPrefix={cellAnchorIdPrefix}
             className={scrollsWindow ? "min-w-0" : "h-full min-h-0 min-w-0"}
             height={scrollsWindow ? undefined : "100%"}
             isDark={isDark}
@@ -2521,7 +2825,17 @@ export function XlsxEditorSurface({
               </div>
             }
             renderTableHeaderMenu={renderTableHeaderMenu}
+            onCommentClick={openThread}
+            renderActiveCellOverlay={renderActiveCellAnchor}
           />
+          {openCommentTarget ? (
+            <XlsxCommentPopover
+              key={`${openCommentTarget.sheet}!${openCommentTarget.ref}`}
+              author={author}
+              onClose={() => setCommentTarget(null)}
+              target={openCommentTarget}
+            />
+          ) : null}
         </div>
         {scrollsWindow ? (
           <div className="sticky bottom-0 z-30 bg-background">{sheetTabs}</div>
@@ -2552,6 +2866,8 @@ function useElementHeight(ref: React.RefObject<HTMLElement | null>) {
 }
 
 export function XlsxEditorPreview({
+  author,
+  cellAnchorIdPrefix,
   className,
   defaultReadOnly = false,
   fileName,
@@ -2561,6 +2877,10 @@ export function XlsxEditorPreview({
   src,
   syncSheetToUrl = false,
 }: {
+  /** Author of new comments, replies, accepts and rejects; unset uses a generic reviewer name. */
+  author?: string
+  /** Gives every drawn cell a transparent element with id `${prefix}c-${A1}` for a page comment layer. */
+  cellAnchorIdPrefix?: string
   className?: string
   /** Opens the workbook read-only. */
   defaultReadOnly?: boolean
@@ -2576,6 +2896,8 @@ export function XlsxEditorPreview({
   return (
     <XlsxEditorContent
       key={src}
+      author={author}
+      cellAnchorIdPrefix={cellAnchorIdPrefix}
       className={className}
       defaultReadOnly={defaultReadOnly}
       effectiveIsDark={isDark}
@@ -2590,6 +2912,8 @@ export function XlsxEditorPreview({
 }
 
 function XlsxEditorContent({
+  author,
+  cellAnchorIdPrefix,
   className,
   defaultReadOnly,
   effectiveIsDark,
@@ -2600,6 +2924,8 @@ function XlsxEditorContent({
   syncSheetToUrl,
   url,
 }: {
+  author?: string
+  cellAnchorIdPrefix?: string
   className?: string
   defaultReadOnly: boolean
   effectiveIsDark: boolean
@@ -2784,6 +3110,8 @@ function XlsxEditorContent({
         onChange={handleUpload}
       />
       <XlsxWorkbookLoadedEditor
+        author={author}
+        cellAnchorIdPrefix={cellAnchorIdPrefix}
         defaultReadOnly={defaultReadOnly}
         fileName={displayFileName}
         isDark={effectiveIsDark}
@@ -2803,6 +3131,8 @@ function XlsxEditorContent({
 }
 
 function XlsxWorkbookLoadedEditor({
+  author,
+  cellAnchorIdPrefix,
   defaultReadOnly,
   fileName,
   isDark,
@@ -2815,6 +3145,8 @@ function XlsxWorkbookLoadedEditor({
   workbookBuffer,
   workbookIdentity,
 }: {
+  author?: string
+  cellAnchorIdPrefix?: string
   defaultReadOnly: boolean
   fileName: string
   isDark: boolean
@@ -2872,6 +3204,8 @@ function XlsxWorkbookLoadedEditor({
   return (
     <XlsxViewerProvider controller={controller} isDark={isDark}>
       <XlsxEditorSurface
+        author={author}
+        cellAnchorIdPrefix={cellAnchorIdPrefix}
         fileName={fileName}
         isDark={isDark}
         onIsDarkChange={onIsDarkChange}
