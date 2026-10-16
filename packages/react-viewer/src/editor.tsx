@@ -54982,14 +54982,15 @@ export function DocxEditorViewer({
         (child) =>
           child.type === "image" && isFixedPositionWrappedFloatingImage(child)
       );
-      // Commented paragraphs render through the markup-aware run path so the
-      // comment range highlight applies (same static-run path special tab
-      // layouts already use in edit mode).
+      // Only annotated paragraphs need the markup-aware path. Sending every
+      // paragraph here in Suggesting bypasses the foreign float exclusions.
+      const paragraphHasTrackedMarkup =
+        trackedChangesEnabled && Boolean(resolveParagraphTrackedMarkup(paragraph));
       const paragraphHasCommentAnchors =
         commentsEnabled &&
         /commentRange|commentReference/i.test(paragraph.sourceXml ?? "");
       if (
-        (trackedChangesEnabled ||
+        (paragraphHasTrackedMarkup ||
           useSpecialTabLayout ||
           paragraphHasCommentAnchors) &&
         !hasFixedPositionWrappedImage
