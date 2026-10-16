@@ -16099,6 +16099,9 @@ function XlsxGrid({
         autoComplete="off"
         autoCorrect="off"
         data-xlsx-keyboard-input=""
+        // A tap only selects: no on-screen keyboard until editing starts, and none at all when read-only.
+        inputMode={editingCell ? "text" : "none"}
+        readOnly={readOnly}
         onCompositionEnd={(event) => commitKeyboardInputText(event.currentTarget)}
         onInput={(event) => {
           if (!(event.nativeEvent as InputEvent).isComposing) {
