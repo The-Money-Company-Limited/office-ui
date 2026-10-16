@@ -4,6 +4,7 @@ import * as React from "react"
 import {
   DocxEditorViewer,
   paragraphLetterheadFloatSideAtNodeIndex,
+  sameParagraphLocation,
   useDocxBorders,
   useDocxComments,
   useDocxEditor,
@@ -44,7 +45,7 @@ import {
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { Spinner } from "@/components/ui/spinner"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle"
+import { Toggle, ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle"
 import {
   Tooltip,
   TooltipContent,
@@ -1013,6 +1014,7 @@ function DocxEditorToolbar({
   showAppearanceToggle: boolean
   zoomScale: number
 }) {
+  const isViewing = mode === "viewing"
   const { layout: pageLayout } = useDocxPageLayout(editor)
   const { paragraphStyles, selectedParagraphStyleId, setParagraphStyle } =
     useDocxParagraphStyles(editor)
@@ -1375,7 +1377,7 @@ function DocxEditorToolbar({
             <div className="flex shrink-0 items-center gap-1">
               <ToolbarIconButton
                 label="Undo"
-                disabled={!editor.canUndo || mode === "viewing"}
+                disabled={!editor.canUndo || isViewing}
                 onClick={editor.undo}
               >
                 <IconPlaceholder
@@ -1389,7 +1391,7 @@ function DocxEditorToolbar({
               </ToolbarIconButton>
               <ToolbarIconButton
                 label="Redo"
-                disabled={!editor.canRedo || mode === "viewing"}
+                disabled={!editor.canRedo || isViewing}
                 onClick={editor.redo}
               >
                 <IconPlaceholder
@@ -2007,6 +2009,17 @@ function DocxEditorContent({
 }) {
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const imageInputRef = React.useRef<HTMLInputElement>(null)
+  const editorRootRef = React.useRef<HTMLDivElement | null>(null)
+  const findInputRef = React.useRef<HTMLInputElement | null>(null)
+  const [findOpen, setFindOpen] = React.useState(false)
+  const [replaceRequested, setReplaceOpen] = React.useState(false)
+  const [findQuery, setFindQuery] = React.useState("")
+  const [replaceQuery, setReplaceQuery] = React.useState("")
+  const [matchCase, setMatchCase] = React.useState(false)
+  const [findPosition, setFindPosition] = React.useState({
+    documentLoadNonce: -1,
+    index: 0,
+  })
   const viewportRef = React.useRef<HTMLDivElement | null>(null)
   const [viewportElement, setViewportElement] =
     React.useState<HTMLDivElement | null>(null)
@@ -2352,6 +2365,101 @@ function DocxEditorContent({
     ]
   )
 
+  const replaceOpen = replaceRequested && mode !== "viewing"
+  const { findText, documentLoadNonce } = editor
+  const findMatches = React.useMemo(
+    () => (findOpen ? findText(findQuery, { matchCase }) : []),
+    [findText, findOpen, findQuery, matchCase]
+  )
+  const { activeMatchIndex, activeFindMatch } = React.useMemo(() => {
+    const index =
+      findPosition.documentLoadNonce === documentLoadNonce
+        ? Math.min(findPosition.index, Math.max(0, findMatches.length - 1))
+        : 0
+    const match = findMatches[index]
+    return {
+      activeMatchIndex: index,
+      activeFindMatch: match ? { ...match } : undefined,
+    }
+  }, [findMatches, findPosition, documentLoadNonce])
+
+  function setMatchIndex(index: number) {
+    setFindPosition({ documentLoadNonce, index })
+  }
+
+  function closeFind() {
+    setFindOpen(false)
+    setReplaceOpen(false)
+    editor.setActiveTextRange(undefined)
+  }
+
+  function navigateFind(direction: number) {
+    if (!findMatches.length) return
+    setMatchIndex(
+      (activeMatchIndex + direction + findMatches.length) % findMatches.length
+    )
+  }
+
+  function replaceFind(all: boolean) {
+    if (controlsDisabled || mode === "viewing" || !activeFindMatch) return
+    const replaced = editor.replaceText(
+      all ? findMatches : [activeFindMatch],
+      replaceQuery
+    )
+    if (!replaced) return
+    if (all) {
+      setMatchIndex(0)
+    } else {
+      const next = editor.findText(findQuery, { matchCase })
+      const nextIndex = next.findIndex(
+        (match, index) =>
+          index >= activeMatchIndex &&
+          (!sameParagraphLocation(
+            match.start.location,
+            activeFindMatch.start.location
+          ) ||
+            match.start.offset >=
+              activeFindMatch.start.offset + replaceQuery.length)
+      )
+      setMatchIndex(nextIndex < 0 ? 0 : nextIndex)
+    }
+  }
+
+  const findShortcut = React.useEffectEvent((event: KeyboardEvent) => {
+    const target = event.target as Node | null
+    if (
+      target &&
+      target !== document.body &&
+      !editorRootRef.current?.contains(target)
+    )
+      return
+    if (event.key === "Escape" && findOpen) {
+      event.preventDefault()
+      closeFind()
+      return
+    }
+    const key = event.key.toLowerCase()
+    const replacing = key === "h" && event.shiftKey && mode !== "viewing"
+    if (
+      !(event.metaKey || event.ctrlKey) ||
+      event.altKey ||
+      !(replacing || (key === "f" && !event.shiftKey)) ||
+      controlsDisabled
+    )
+      return
+    event.preventDefault()
+    setFindOpen(true)
+    if (replacing) setReplaceOpen(true)
+    requestAnimationFrame(() => {
+      findInputRef.current?.focus()
+      findInputRef.current?.select()
+    })
+  })
+  React.useEffect(() => {
+    document.addEventListener("keydown", findShortcut, true)
+    return () => document.removeEventListener("keydown", findShortcut, true)
+  }, [])
+
   async function handleUpload(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     event.target.value = ""
@@ -2411,6 +2519,7 @@ function DocxEditorContent({
 
   return (
     <div
+      ref={editorRootRef}
       className={cn(
         scrollsWindow
           ? "flex min-h-dvh flex-col bg-background"
@@ -2459,6 +2568,127 @@ function DocxEditorContent({
           scrollsWindow ? "flex-1" : "min-h-0 flex-1 overflow-hidden"
         )}
       >
+        {findOpen ? (
+          <div className="pointer-events-none absolute inset-x-0 top-3 bottom-0 z-40 flex justify-end px-3">
+            <div
+              role="search"
+              aria-label="Find in document"
+              className="pointer-events-auto sticky top-16 h-fit w-[min(460px,100%)] rounded-lg border bg-background p-2 shadow-lg"
+              onKeyDown={(event) => {
+                if (
+                  event.key === "Enter" &&
+                  !event.nativeEvent.isComposing &&
+                  (event.target as HTMLElement).tagName === "INPUT"
+                ) {
+                  event.preventDefault()
+                  navigateFind(event.shiftKey ? -1 : 1)
+                }
+              }}
+            >
+              <div className="flex items-center gap-1">
+                <Input
+                  ref={findInputRef}
+                  aria-label="Find in document"
+                  placeholder="Find in document"
+                  value={findQuery}
+                  onChange={(event) => {
+                    setFindQuery(event.target.value)
+                    setMatchIndex(0)
+                  }}
+                  className="min-w-0 flex-1"
+                />
+                <span
+                  role="status"
+                  aria-live="polite"
+                  className="min-w-14 text-center text-xs whitespace-nowrap text-muted-foreground"
+                >
+                  {findMatches.length ? activeMatchIndex + 1 : 0} of{" "}
+                  {findMatches.length}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-label="Previous match"
+                  disabled={!findMatches.length}
+                  onClick={() => navigateFind(-1)}
+                >
+                  ↑
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-label="Next match"
+                  disabled={!findMatches.length}
+                  onClick={() => navigateFind(1)}
+                >
+                  ↓
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-label="Close find"
+                  onClick={closeFind}
+                >
+                  ×
+                </Button>
+              </div>
+              <div className="mt-1 flex items-center gap-2">
+                <Toggle
+                  size="sm"
+                  pressed={matchCase}
+                  onPressedChange={(pressed) => {
+                    setMatchCase(pressed)
+                    setMatchIndex(0)
+                  }}
+                >
+                  Match case
+                </Toggle>
+                {mode !== "viewing" ? (
+                  <Toggle
+                    size="sm"
+                    pressed={replaceOpen}
+                    aria-expanded={replaceOpen}
+                    onPressedChange={setReplaceOpen}
+                  >
+                    Replace
+                  </Toggle>
+                ) : null}
+              </div>
+              {replaceOpen ? (
+                <div className="mt-1 flex items-center gap-2">
+                  <Input
+                    aria-label="Replace with"
+                    placeholder="Replace with"
+                    value={replaceQuery}
+                    onChange={(event) => setReplaceQuery(event.target.value)}
+                    className="min-w-0 flex-1"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={controlsDisabled || !findMatches.length}
+                    onClick={() => replaceFind(false)}
+                  >
+                    Replace
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={controlsDisabled || !findMatches.length}
+                    onClick={() => replaceFind(true)}
+                  >
+                    Replace all
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         {linkEditorOpen ? (
           <div className="absolute top-3 left-1/2 z-50 flex w-[min(420px,calc(100%-2rem))] -translate-x-1/2 items-center gap-2 rounded-lg border bg-background p-2 shadow-lg">
             <Input
@@ -2604,6 +2834,8 @@ function DocxEditorContent({
               <div className="origin-top" style={{ zoom: zoomScale / 100 }}>
                 <DocxEditorViewer
                   editor={editor}
+                  findMatches={findMatches}
+                  activeFindMatch={activeFindMatch}
                   anchorIdPrefix={anchorIdPrefix}
                   mode={docxEditorModeOption(mode).viewerMode}
                   showTrackedChanges={editor.showTrackedChanges}
