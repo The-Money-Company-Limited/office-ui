@@ -992,12 +992,14 @@ export function joinParagraphsTracked(
   if (/<w:sectPr\b/.test(source.openXml)) {
     return { ok: false, reason: "unsupported" };
   }
+  // A break already proposed for removal waits for that decision, even when
+  // the author inserted it: joining now would drop the other proposal.
+  if (paragraphMarkRevision(source.openXml, "w:del")) {
+    return { ok: true, model };
+  }
   const insertion = paragraphMarkRevision(source.openXml, "w:ins");
   if (insertion && xmlAttribute(insertion.openTag, "w:author") === input.author) {
     return joinWithNext(model, input.nodeIndex);
-  }
-  if (paragraphMarkRevision(source.openXml, "w:del")) {
-    return { ok: true, model };
   }
   const deletion = markRevisionXml("w:del", createRevisionIdAllocator(model)(), input);
   return {

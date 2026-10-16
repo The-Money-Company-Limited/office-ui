@@ -283,7 +283,10 @@ function trackParagraphJoin(
   if (
     firstText === undefined ||
     secondText === undefined ||
-    paragraphVisibleText(joined) !== firstText + secondText
+    paragraphVisibleText(joined) !== firstText + secondText ||
+    // Accepting the join keeps the second paragraph's properties, so it must
+    // show the paragraph style the edit produced.
+    canonicalJson(joined.style) !== canonicalJson(second.style)
   ) {
     return { ok: false, reason: "unsupported" };
   }

@@ -19761,7 +19761,7 @@ function whitespaceChangeSnippet(value: string): string | undefined {
   if (!value || /\S/.test(value)) {
     return undefined;
   }
-  return value.includes("\t") ? "Tab" : "Space";
+  return /[\r\n]/.test(value) ? "Line break" : value.includes("\t") ? "Tab" : "Space";
 }
 
 function normalizeTrackedChangeSnippet(value?: string): string | undefined {
@@ -21070,9 +21070,10 @@ function resolveParagraphTrackedMarkup(
       if (deletedRawText) {
         const segments =
           deletedSegmentsByVisibleChildIndex.get(visibleChildIndex) ?? [];
-        // The page shows the deleted text as it was, spaces included.
+        // The page shows the deleted text with its spaces; a deleted tab or
+        // line break shows as a space, as it did before.
         segments.push({
-          text: deletedRawText,
+          text: deletedRawText.replace(/[\t\r\n]/g, " "),
           change,
           style: trackedRunStyle,
         });

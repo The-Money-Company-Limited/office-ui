@@ -583,6 +583,30 @@ describe("tracked paragraph joins", () => {
     expect(rejectAllRevisions(next).model.nodes).toHaveLength(1);
   });
 
+  it("refuses a join whose accepted result would change the paragraph style", async () => {
+    const model = await load(
+      '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Title</w:t></w:r></w:p>' +
+        "<w:p><w:r><w:t>Body</w:t></w:r></w:p>"
+    );
+    expect(trackModelTextEdits(model, joinedByEditor(model), AUTHOR)).toEqual({
+      ok: false,
+      reason: "unsupported",
+    });
+  });
+
+  it("leaves a break another author proposed removing for that decision", async () => {
+    const model = await load(PLAIN);
+    const bob = { author: "Bob", date: DATE };
+    const split = (splitParagraphTracked(model, { nodeIndex: 0, offset: 6, ...bob }) as {
+      model: DocModel;
+    }).model;
+    const proposed = (joinParagraphsTracked(split, { nodeIndex: 0, ...AUTHOR }) as {
+      model: DocModel;
+    }).model;
+    const again = joinParagraphsTracked(proposed, { nodeIndex: 0, ...bob });
+    expect(again).toEqual({ ok: true, model: proposed });
+  });
+
   it("refuses joining a paragraph with a table", async () => {
     const model = await load(
       `${PLAIN}<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>`
