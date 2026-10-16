@@ -8,6 +8,7 @@ export type {
   XlsxSuggestionStatus,
   XlsxSuggestionValue
 } from "./comments";
+export { useXlsxFormulaAssist, XlsxFormulaAssistPopup, type XlsxFormulaAssistState } from "./FormulaAssist";
 export { initWasm, setWasmSource, type XlsxWasmSource } from "./wasm";
 export {
   DefaultXlsxToolbar,
@@ -18,6 +19,7 @@ export {
   useXlsxViewerSelection,
   useXlsxViewerThumbnails,
   useXlsxViewerZoom,
+  useXlsxViewerPalette,
   useXlsxViewerTables,
   XlsxViewer,
   XlsxViewerProvider

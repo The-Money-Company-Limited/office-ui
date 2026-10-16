@@ -14,6 +14,7 @@ import { resolveWorkbookColor, resolveWorkbookFillStyle } from "./colors";
 import { listCellAnchors } from "./cell-anchors";
 import { parseCellRef, type XlsxSuggestion } from "./comments";
 import { useXlsxViewerController, XlsxFileSizeLimitExceededError } from "./controller";
+import { useXlsxFormulaAssist, XlsxFormulaAssistPopup } from "./FormulaAssist";
 import { MemoChartSvg } from "./chart-renderer";
 import {
   emuToPixels,
@@ -2901,6 +2902,12 @@ function resolveImageHandleStyle(
   }
 
   return style;
+}
+
+/** The viewer's palette, for host UI drawn with the viewer (the formula bar's suggestions). */
+export function useXlsxViewerPalette(): ViewerPalette {
+  const { headerBackgroundColor, headerTextColor, isDark } = React.useContext(ViewerAppearanceContext);
+  return useViewerPalette(isDark, headerBackgroundColor, headerTextColor);
 }
 
 function useViewerPalette(
@@ -7445,6 +7452,7 @@ function XlsxGrid({
   >(null);
   const [editingCell, setEditingCell] = React.useState<XlsxCellAddress | null>(null);
   const [editingValue, setEditingValue] = React.useState("");
+  const formulaAssist = useXlsxFormulaAssist(editingValue, setEditingValue, editingInputRef);
   const [openTableMenu, setOpenTableMenu] = React.useState<{ col: number; row: number; tableName: string } | null>(null);
   const [fillPreviewRange, setFillPreviewRange] = React.useState<XlsxCellRange | null>(null);
   const [chartPreviewRect, setChartPreviewRect] = React.useState<{ id: string; rect: XlsxImageRect } | null>(null);
@@ -16358,8 +16366,12 @@ function XlsxGrid({
                       autoFocus
                       onBlur={handleEditingBlur}
                       onChange={(event) => setEditingValue(event.target.value)}
+                      onSelect={formulaAssist.onSelect}
                       onKeyDown={(event) => {
                         event.stopPropagation();
+                        if (formulaAssist.handleKeyDown(event)) {
+                          return;
+                        }
                         if (event.key === "Enter") {
                           event.preventDefault();
                           commitEditing();
@@ -16399,6 +16411,11 @@ function XlsxGrid({
                         width: "100%"
                       }}
                       value={editingValue}
+                    />
+                    <XlsxFormulaAssistPopup
+                      palette={palette}
+                      state={formulaAssist}
+                      style={{ left: 0, marginTop: 4, top: "100%" }}
                     />
                   </div>
                   );
