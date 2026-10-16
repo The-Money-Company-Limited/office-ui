@@ -121,8 +121,14 @@ const CHART_SOURCE_HIGHLIGHT_COLOR_BY_ROLE = {
   point: CHART_SOURCE_HIGHLIGHT_COLORS[5] ?? "#db2777",
   value: CHART_SOURCE_HIGHLIGHT_COLORS[4] ?? "#ea580c"
 };
+// The sheet draws in the workbook's own colors in either viewer theme, as
+// Excel does: recoloring only unfilled cells for a dark theme leaves filled
+// cells, text boxes and charts in their authored colors around them, and shows
+// text the author hid by matching it to the background.
 const SHEET_SURFACE = "#ffffff";
-const SHEET_GRIDLINE = "#d9d9d9";
+const SHEET_GRIDLINE = resolveViewerPalette(false).border;
+const SHEET_TEXT = "#000000";
+const SHEET_CHART_PALETTE = resolveViewerPalette(false);
 const DRAWING_SELECTION_STROKE = "#64748b";
 const DRAWING_SELECTION_HANDLE_FILL = "#ffffff";
 const DRAWING_SELECTION_HANDLE_SHADOW = "rgba(15, 23, 42, 0.18)";
@@ -1180,14 +1186,8 @@ function classNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
-function resolveDarkModeSurface(themePalette: XlsxSheetData["themePalette"] | undefined, palette: ViewerPalette) {
-  return "hsl(225 4% 6%)";
-}
-
-function resolveSheetSurface(sheet: XlsxSheetData | null, palette: ViewerPalette) {
-  return paletteIsDark(palette)
-    ? resolveDarkModeSurface(sheet?.themePalette, palette)
-    : sheet?.themePalette.colorsByIndex[0] ?? SHEET_SURFACE;
+function resolveSheetSurface(sheet: XlsxSheetData | null) {
+  return sheet?.themePalette.colorsByIndex[0] ?? SHEET_SURFACE;
 }
 
 function normalizeRange(range: XlsxCellRange): XlsxCellRange {
@@ -3317,57 +3317,6 @@ function applyAlphaToColor(color: string, alpha: number) {
   return `rgba(${red}, ${green}, ${blue}, ${Math.max(0, Math.min(1, alpha))})`;
 }
 
-function relativeLuminance(color: string) {
-  const rgb = parseHexColor(color);
-  if (!rgb) {
-    return null;
-  }
-
-  const [red, green, blue] = rgb.map((channel) => {
-    const normalized = channel / 255;
-    return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
-  });
-
-  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-}
-
-function contrastRatio(foreground: string, background: string) {
-  const foregroundLuminance = relativeLuminance(foreground);
-  const backgroundLuminance = relativeLuminance(background);
-  if (foregroundLuminance === null || backgroundLuminance === null) {
-    return null;
-  }
-
-  const lighter = Math.max(foregroundLuminance, backgroundLuminance);
-  const darker = Math.min(foregroundLuminance, backgroundLuminance);
-  return (lighter + 0.05) / (darker + 0.05);
-}
-
-function resolveReadableTextColor(
-  requestedColor: string | null,
-  backgroundColor: string,
-  palette: ViewerPalette
-) {
-  if (!paletteIsDark(palette)) {
-    return requestedColor ?? "#000000";
-  }
-
-  if (!requestedColor) {
-    return palette.text;
-  }
-
-  const requestedContrast = contrastRatio(requestedColor, backgroundColor);
-  const paletteContrast = contrastRatio(palette.text, backgroundColor);
-  if (requestedContrast !== null && requestedContrast >= 4.5) {
-    return requestedColor;
-  }
-  if (paletteContrast !== null && (requestedContrast === null || paletteContrast > requestedContrast)) {
-    return palette.text;
-  }
-
-  return requestedColor;
-}
-
 function rgbToHsl(red: number, green: number, blue: number): [number, number, number] {
   const normalizedRed = red / 255;
   const normalizedGreen = green / 255;
@@ -3529,21 +3478,17 @@ function buildGridlineShadow(color: string, options?: { bottom?: boolean; right?
 
 function buildCellStyle(
   style: Record<string, unknown> | null | undefined,
-  palette: ViewerPalette,
   themePalette?: XlsxSheetData["themePalette"],
   options?: { showGridLines?: boolean }
 ): React.CSSProperties {
   const showGridLines = options?.showGridLines ?? true;
-  const baseSurface = paletteIsDark(palette)
-    ? resolveDarkModeSurface(themePalette, palette)
-    : themePalette?.colorsByIndex[0] ?? SHEET_SURFACE;
-  const gridlineShadow = showGridLines ? buildGridlineShadow(palette.border) : undefined;
+  const gridlineShadow = showGridLines ? buildGridlineShadow(SHEET_GRIDLINE) : undefined;
   const css: React.CSSProperties = {
-    backgroundColor: baseSurface,
+    backgroundColor: themePalette?.colorsByIndex[0] ?? SHEET_SURFACE,
     borderBottom: "none",
     borderRight: "none",
     boxShadow: gridlineShadow,
-    color: resolveReadableTextColor(null, baseSurface, palette),
+    color: SHEET_TEXT,
     fontFamily: buildSpreadsheetFontFamily({ scheme: "minor" }, themePalette) ?? "\"Segoe UI\", Tahoma, Arial, sans-serif",
     fontSize: "12px",
     lineHeight: String(resolveSpreadsheetLineHeight(11)),
@@ -3559,13 +3504,9 @@ function buildCellStyle(
   }
 
   const fill = style.fill as Record<string, unknown> | undefined;
-  let resolvedFillColor: string | null = null;
-  let hasExplicitFill = false;
   if (fill) {
     const fillStyle = resolveWorkbookFillStyle(fill, themePalette);
     if (fillStyle.backgroundColor || fillStyle.backgroundImage) {
-      hasExplicitFill = true;
-      resolvedFillColor = fillStyle.backgroundColor;
       if (fillStyle.backgroundColor) {
         css.backgroundColor = fillStyle.backgroundColor;
       }
@@ -3576,7 +3517,6 @@ function buildCellStyle(
   }
 
   const font = style.font as Record<string, unknown> | undefined;
-  let resolvedFontColor: string | null = null;
   let resolvedFontSizePt = 11;
   if (font) {
     if (font.bold) {
@@ -3593,7 +3533,6 @@ function buildCellStyle(
     }
     const fontColor = resolveWorkbookColor(font.color as Record<string, unknown> | undefined, themePalette);
     if (fontColor) {
-      resolvedFontColor = fontColor;
       css.color = fontColor;
     }
     if (typeof font.size === "number" && font.size !== 11) {
@@ -3610,13 +3549,6 @@ function buildCellStyle(
   }
 
   css.lineHeight = String(resolveSpreadsheetLineHeight(resolvedFontSizePt));
-
-  if (paletteIsDark(palette) && !css.backgroundImage) {
-    const effectiveBackgroundColor = typeof css.backgroundColor === "string" ? css.backgroundColor : baseSurface;
-    css.color = resolveReadableTextColor(resolvedFontColor, effectiveBackgroundColor, palette);
-  } else if (!hasExplicitFill) {
-    css.color = resolveReadableTextColor(resolvedFontColor, baseSurface, palette);
-  }
 
   const alignment = style.alignment as Record<string, unknown> | undefined;
   if (alignment) {
@@ -3645,7 +3577,7 @@ function buildCellStyle(
     const hasRightBorder = Boolean(border.right?.style && border.right.style !== "none");
     const hasBottomBorder = Boolean(border.bottom?.style && border.bottom.style !== "none");
     if (showGridLines && (hasRightBorder || hasBottomBorder)) {
-      css.boxShadow = buildGridlineShadow(palette.border, {
+      css.boxShadow = buildGridlineShadow(SHEET_GRIDLINE, {
         bottom: !hasBottomBorder,
         right: !hasRightBorder
       }) || undefined;
@@ -8302,7 +8234,7 @@ function XlsxGrid({
               }
 
               const rawStyle = (worksheet.getCellStyleAt(row, col) as Record<string, unknown> | null | undefined) ?? null;
-              const cellStyle = buildCellStyle(rawStyle, palette, activeSheet?.themePalette, {
+              const cellStyle = buildCellStyle(rawStyle, activeSheet?.themePalette, {
                 showGridLines: activeSheet?.showGridLines
               });
               if (cellStyle.whiteSpace !== "pre-wrap" && !cellValue.includes("\n") && !cellValue.includes("\r")) {
@@ -9992,10 +9924,10 @@ function XlsxGrid({
       const emptyData: CellRenderData = {
         isMergedSecondary: false,
         style: scaleCssProperties({
-          backgroundColor: resolveSheetSurface(activeSheet, palette),
+          backgroundColor: resolveSheetSurface(activeSheet),
           borderBottom: "none",
           borderRight: "none",
-          boxShadow: activeSheet?.showGridLines ? buildGridlineShadow(palette.border) : undefined,
+          boxShadow: activeSheet?.showGridLines ? buildGridlineShadow(SHEET_GRIDLINE) : undefined,
           padding: DEFAULT_CELL_PADDING,
           verticalAlign: "bottom",
           whiteSpace: "nowrap"
@@ -10167,7 +10099,7 @@ function XlsxGrid({
       isTableHeader: Boolean(table && row >= table.start.row && row < table.start.row + headerRowCount),
       rowSpan: merge?.rowSpan,
       sparkline: sparkline && sparklineValues ? { config: sparkline, values: sparklineValues } : null,
-      style: scaleCssProperties(buildCellStyle(finalResolvedStyle, palette, activeSheet?.themePalette, {
+      style: scaleCssProperties(buildCellStyle(finalResolvedStyle, activeSheet?.themePalette, {
         showGridLines: activeSheet?.showGridLines
       }), zoomFactor),
       textRotationDeg,
@@ -12657,7 +12589,7 @@ function XlsxGrid({
       return;
     }
     const showGridLines = activeSheet?.showGridLines ?? true;
-    const sheetSurface = resolveSheetSurface(activeSheet, palette);
+    const sheetSurface = resolveSheetSurface(activeSheet);
     const deferredSpillTextsByPane: Record<FrozenDrawingPane, Array<{
       align: CanvasTextAlign;
       clipHeight: number;
@@ -12991,7 +12923,7 @@ function XlsxGrid({
           if (!hasPendingGridlinePath) {
             return;
           }
-          paneContext.strokeStyle = palette.border;
+          paneContext.strokeStyle = SHEET_GRIDLINE;
           paneContext.lineWidth = 1;
           paneContext.stroke();
           hasPendingGridlinePath = false;
@@ -13363,7 +13295,7 @@ function XlsxGrid({
                 const zeroY = sparkTop + sparkHeight - clampSparklineValue(0, minValue, maxValue) * sparkHeight;
                 const barWidth = Math.max(2 * zoomFactor, sparkWidth / Math.max(points.length * 1.8, 1));
                 const gap = points.length > 1 ? (sparkWidth - barWidth * points.length) / (points.length - 1) : 0;
-                paneContext.strokeStyle = palette.border;
+                paneContext.strokeStyle = SHEET_GRIDLINE;
                 paneContext.lineWidth = 1;
                 paneContext.beginPath();
                 paneContext.moveTo(sparkLeft, zeroY);
@@ -14127,7 +14059,7 @@ function XlsxGrid({
                           chart={chart}
                           onChartElementDoubleClick={handleChartElementDoubleClick}
                           onChartElementPointerDown={handleChartElementPointerDown}
-                          palette={palette}
+                          palette={SHEET_CHART_PALETTE}
                           rect={chartsheetRect}
                           selectedChartElement={selectedChartElement}
                         />
@@ -15153,7 +15085,7 @@ function XlsxGrid({
                     chart={chart}
                     onChartElementDoubleClick={handleChartElementDoubleClick}
                     onChartElementPointerDown={handleChartElementPointerDown}
-                    palette={palette}
+                    palette={SHEET_CHART_PALETTE}
                     rect={rect}
                     selectedChartElement={selectedChartElement}
                   />
@@ -16300,7 +16232,7 @@ function XlsxGrid({
   const scrollerContent = (
     <div
           style={{
-            backgroundColor: resolveSheetSurface(activeSheet, palette),
+            backgroundColor: resolveSheetSurface(activeSheet),
             minHeight: "100%",
             minWidth: "100%",
             position: "relative",
@@ -16403,11 +16335,11 @@ function XlsxGrid({
                   const editingBackground =
                     typeof editingCellStyle.backgroundColor === "string"
                       ? editingCellStyle.backgroundColor
-                      : resolveSheetSurface(activeSheet, palette);
+                      : resolveSheetSurface(activeSheet);
                   const editingColor =
                     typeof editingCellStyle.color === "string"
                       ? editingCellStyle.color
-                      : resolveReadableTextColor(null, editingBackground, palette);
+                      : SHEET_TEXT;
                   return (
                   <div
                     style={{
@@ -17803,7 +17735,7 @@ export function useXlsxViewerThumbnails(
 
         context.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
         context.clearRect(0, 0, Math.max(1, sourceWidth), Math.max(1, sourceHeight));
-        const thumbnailSheetSurface = resolveSheetSurface(sheet, palette);
+        const thumbnailSheetSurface = resolveSheetSurface(sheet);
         context.fillStyle = palette.canvas;
         context.fillRect(0, 0, Math.max(1, sourceWidth), Math.max(1, sourceHeight));
         context.fillStyle = thumbnailSheetSurface;
@@ -17905,7 +17837,7 @@ export function useXlsxViewerThumbnails(
             isMergedSecondary: false,
             rowSpan: merge?.rowSpan,
             sparkline: sparkline && sparklineValues ? { config: sparkline, values: sparklineValues } : null,
-            style: buildCellStyle(finalResolvedStyle, palette, sheet.themePalette, {
+            style: buildCellStyle(finalResolvedStyle, sheet.themePalette, {
               showGridLines
             }),
             textRotationDeg: resolveSpreadsheetTextRotation(alignment?.textRotation),
