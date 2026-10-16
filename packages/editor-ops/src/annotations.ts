@@ -1021,3 +1021,98 @@ export function deleteComment(
     },
   };
 }
+
+export interface ParagraphRevisionInfo {
+  /** OOXML `w:id` shared by every element of this revision. */
+  id: string;
+  kind: "insertion" | "deletion";
+  author?: string;
+  date?: string;
+  /** Inserted visible text, or the deleted text. */
+  text: string;
+}
+
+export interface ParagraphCommentRange {
+  commentId: number;
+  /** Offsets into the paragraph's visible text. */
+  startOffset: number;
+  endOffset: number;
+  /** Visible text the comment covers in this paragraph. */
+  text: string;
+}
+
+export interface ParagraphAnnotations {
+  revisions: ParagraphRevisionInfo[];
+  /** Comments whose range starts in this paragraph. */
+  comments: ParagraphCommentRange[];
+}
+
+/**
+ * Reads the run-level revisions and comment ranges of one top-level paragraph
+ * from its source XML. Paragraphs without readable source report none.
+ */
+export function readParagraphAnnotations(
+  model: DocModel,
+  nodeIndex: number
+): ParagraphAnnotations {
+  const node = model.nodes[nodeIndex];
+  const source =
+    node?.type === "paragraph" && node.sourceXml
+      ? parseParagraphSource(node.sourceXml)
+      : undefined;
+  if (!source) {
+    return { revisions: [], comments: [] };
+  }
+
+  const revisions = new Map<string, ParagraphRevisionInfo>();
+  const open = new Map<number, ParagraphCommentRange>();
+  const comments: ParagraphCommentRange[] = [];
+  let offset = 0;
+  for (const item of source.items) {
+    if (item.kind === "marker") {
+      const element = /^<(w:commentRange(?:Start|End))\b[^>]*>/.exec(item.xml);
+      const id = element ? markerId(element[0]) : undefined;
+      if (id === undefined) {
+        continue;
+      }
+      if (element![1] === "w:commentRangeStart") {
+        const range = { commentId: id, startOffset: offset, endOffset: offset, text: "" };
+        open.set(id, range);
+        comments.push(range);
+      } else {
+        open.delete(id);
+      }
+      continue;
+    }
+    for (const wrapper of item.wrappers) {
+      const kind =
+        wrapper.tagName === "w:ins" && item.kind === "text"
+          ? "insertion"
+          : wrapper.tagName === "w:del" && item.kind === "deleted"
+          ? "deletion"
+          : undefined;
+      const id = kind && revisionWrapperId(wrapper);
+      if (!kind || id === undefined) {
+        continue;
+      }
+      const key = `${kind}:${id}`;
+      const revision = revisions.get(key) ?? {
+        id,
+        kind,
+        author: xmlAttribute(wrapper.openTag, "w:author"),
+        date: xmlAttribute(wrapper.openTag, "w:date"),
+        text: "",
+      };
+      revision.text += item.text;
+      revisions.set(key, revision);
+    }
+    if (item.kind === "text") {
+      offset += item.text.length;
+      for (const range of open.values()) {
+        range.endOffset = offset;
+        range.text += item.text;
+      }
+    }
+  }
+  return { revisions: [...revisions.values()], comments };
+}

@@ -29,11 +29,20 @@
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
+    "./agent": {
+      "types": "./dist/agent.d.ts",
+      "import": "./dist/agent.js",
+      "require": "./dist/agent.cjs"
+    },
     "./docx_wasm_bg.wasm": "./dist/docx_wasm_bg.wasm",
     "./package.json": "./package.json"
   },
+  "bin": {
+    "react-docx-agent": "./agent-cli.mjs"
+  },
   "files": [
-    "dist"
+    "dist",
+    "agent-cli.mjs"
   ],
   "publishConfig": {
     "access": "public"
