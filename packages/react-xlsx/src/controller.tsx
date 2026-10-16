@@ -1927,6 +1927,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   const [revision, setRevision] = React.useState(0);
   const selectionAnchorRef = React.useRef<XlsxCellAddress | null>(null);
   const undoStackRef = React.useRef<HistoryEntry[]>([]);
+  // Last sheet name sent to onActiveSheetChange; cleared on every load so a new workbook always reports.
+  const reportedActiveSheetNameRef = React.useRef<string | null>(null);
   const redoStackRef = React.useRef<HistoryEntry[]>([]);
   const isApplyingHistoryRef = React.useRef(false);
   const [historyRevision, setHistoryRevision] = React.useState(0);
@@ -2279,6 +2281,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       setSelectedChartElement(null);
       setSelectedImageId(null);
       selectionAnchorRef.current = null;
+      reportedActiveSheetNameRef.current = null;
       undoStackRef.current = [];
       redoStackRef.current = [];
       setHistoryRevision(0);
@@ -2310,6 +2313,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     setSelectedChartElement(null);
     setSelectedImageId(null);
     selectionAnchorRef.current = null;
+    reportedActiveSheetNameRef.current = null;
     undoStackRef.current = [];
     redoStackRef.current = [];
     setHistoryRevision(0);
@@ -2473,7 +2477,6 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   const activeSheetName = activeTab?.name ?? null;
   const onActiveSheetChangeRef = React.useRef(onActiveSheetChange);
   onActiveSheetChangeRef.current = onActiveSheetChange;
-  const reportedActiveSheetNameRef = React.useRef<string | null>(null);
   React.useEffect(() => {
     if (isLoading || activeSheetName === null || reportedActiveSheetNameRef.current === activeSheetName) {
       return;
