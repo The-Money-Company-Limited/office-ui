@@ -16372,9 +16372,15 @@ function XlsxGrid({
                         if (formulaAssist.handleKeyDown(event)) {
                           return;
                         }
-                        if (event.key === "Enter") {
+                        // As in Sheets: Enter saves and moves down, Tab right;
+                        // with Shift, up and left.
+                        if (event.key === "Enter" || event.key === "Tab") {
                           event.preventDefault();
-                          commitEditing();
+                          const direction =
+                            event.key === "Enter"
+                              ? event.shiftKey ? "ArrowUp" : "ArrowDown"
+                              : event.shiftKey ? "ArrowLeft" : "ArrowRight";
+                          handleEditingNavigate(direction, event.currentTarget.value);
                           return;
                         }
 
