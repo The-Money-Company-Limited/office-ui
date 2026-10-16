@@ -220,6 +220,40 @@ describe("agent document API", () => {
     expect(doc.paragraphs().map((paragraph) => paragraph.id)).toEqual(ids);
   });
 
+  it("suggests paragraph breaks that survive a save and reject back to one paragraph", async () => {
+    const doc = await fixture();
+    const created = doc.suggest({
+      paragraphId: "p-n1",
+      find: ", ",
+      replace: ".\nAnd ",
+      author: "Agent",
+      date: DATE,
+    });
+    expect(created.map(({ kind, text }) => [kind, text])).toEqual([
+      ["deletion", ", "],
+      ["insertion", "."],
+      ["paragraph-insertion", ""],
+      ["insertion", "And "],
+    ]);
+    const after = await reopened(doc);
+    expect(after.paragraphs().map((paragraph) => paragraph.text)).toEqual([
+      "Demonstration of the agent tools",
+      "Hello world.",
+      "And hello again",
+      "The quick fox",
+    ]);
+    const breaks = after
+      .revisions()
+      .revisions.filter((revision) => revision.kind === "paragraph-insertion");
+    expect(breaks).toHaveLength(1);
+    after.reject(breaks[0]!.id);
+    expect(after.paragraphs().map((paragraph) => paragraph.text)[1]).toBe(
+      "Hello world.And hello again"
+    );
+    after.reject("all");
+    expect(after.paragraphs()[1]!.text).toBe("Hello world, hello again");
+  });
+
   it("reports revisions it cannot list instead of claiming none remain", async () => {
     const table =
       `<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc>` +

@@ -19,6 +19,7 @@ import {
   rejectAllRevisions,
   rejectParagraphRevision,
   replaceParagraphTextTracked,
+  splitParagraphTracked,
   replyToComment,
   setCommentResolved,
   type AnnotationMutationResult,
@@ -79,6 +80,7 @@ export interface SuggestInput {
   range?: TextRange;
   /** Text to replace inside `paragraphId`; empty or absent inserts at the end. */
   find?: string;
+  /** Replacement text; each `\n` is a suggested paragraph break. */
   replace: string;
   author: string;
   date?: string;
@@ -116,7 +118,7 @@ export interface DocComment {
 
 /**
  * Body revisions: those `revisions` can list, and the nodes holding revision
- * markup it cannot list (paragraph-mark changes, moves, revisions inside
+ * markup it cannot list (deleted paragraph marks, moves, revisions inside
  * tables, unreadable markup). Accepting or rejecting "all" leaves the
  * unlisted ones in place.
  */
@@ -136,7 +138,8 @@ export interface UnlistedRevisions {
 export interface DocRevision {
   /** OOXML `w:id`. */
   id: string;
-  kind: "insertion" | "deletion";
+  /** `paragraph-insertion`: a suggested break ending this paragraph. */
+  kind: "insertion" | "deletion" | "paragraph-insertion";
   author?: string;
   date?: string;
   text: string;
@@ -269,17 +272,35 @@ export class Doc {
   suggest(input: SuggestInput): DocRevision[] {
     const range = this.targetRange(input.range, input.paragraphId, input.find, "end");
     const before = new Set(this.listedRevisions().map(revisionKey));
-    this.model = required(
+    const lines = input.replace.split("\n");
+    const nodeIndex = this.paragraphOrThrow(range.paragraphId).index;
+    let model = required(
       replaceParagraphTextTracked(this.model, {
-        nodeIndex: this.paragraphOrThrow(range.paragraphId).index,
+        nodeIndex,
         startOffset: range.start,
         endOffset: range.end,
-        text: input.replace,
+        text: lines.join(""),
         author: input.author,
         date: input.date,
       }),
       "suggest"
     ).model;
+    // Each break splits the paragraph holding the rest of the new text.
+    let offset = range.start;
+    lines.slice(0, -1).forEach((line, index) => {
+      offset += line.length;
+      model = required(
+        splitParagraphTracked(model, {
+          nodeIndex: nodeIndex + index,
+          offset,
+          author: input.author,
+          date: input.date,
+        }),
+        "suggest"
+      ).model;
+      offset = 0;
+    });
+    this.model = model;
     return this.listedRevisions().filter((revision) => !before.has(revisionKey(revision)));
   }
 
@@ -428,8 +449,9 @@ export class Doc {
   }
 }
 
+// Ids are unique in a document; paragraph ids shift when a break is added.
 function revisionKey(revision: DocRevision): string {
-  return `${revision.paragraphId}:${revision.kind}:${revision.id}`;
+  return `${revision.kind}:${revision.id}`;
 }
 
 function initials(author: string): string | undefined {

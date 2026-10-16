@@ -30,7 +30,9 @@ import {
   directChildElements,
   elementsNamed,
   scanBalancedXml,
+  setXmlAttribute,
   xmlAttribute,
+  type XmlElementRange,
 } from "./xml";
 
 export type AnnotationMutationFailureReason =
@@ -51,7 +53,7 @@ export type RevisionBatchResult = {
   model: DocModel;
   /**
    * Body nodes (paragraphs or tables) that still carry revision markup this
-   * batch could not resolve: paragraph-mark changes, moves, tables, or
+   * batch could not resolve: deleted paragraph marks, moves, tables, or
    * markup it cannot parse.
    */
   remainingNodeIndexes: number[];
@@ -63,7 +65,9 @@ export type ParagraphRevisionKind =
   | "move-from"
   | "move-to"
   | "format-change"
-  | "paragraph-format-change";
+  | "paragraph-format-change"
+  /** An inserted paragraph mark: a paragraph break someone added. */
+  | "paragraph-insertion";
 
 export interface ParagraphRevisionTarget {
   /** Top-level body node containing the revision. Table locations are unsupported. */
@@ -87,6 +91,13 @@ export interface TrackedTextReplacementInput extends RevisionAuthorship {
   endOffset: number;
   /** Replacement text; empty for a pure deletion. */
   text: string;
+}
+
+export interface TrackedParagraphSplitInput extends RevisionAuthorship {
+  /** Top-level body paragraph index. */
+  nodeIndex: number;
+  /** UTF-16 offset into the paragraph's visible text where the break goes. */
+  offset: number;
 }
 
 export interface CreateParagraphCommentInput {
@@ -616,6 +627,254 @@ export function replaceParagraphTextTracked(
   return { ok: true, model: withParagraph(model, input.nodeIndex, paragraph) };
 }
 
+/**
+ * A paragraph's properties and its mark's properties. `openXml` (a `<w:p>`
+ * start tag and its `w:pPr`) is scanned closed, so ranges index into it.
+ */
+function scanParagraphOpen(openXml: string) {
+  return scanParagraphProperties(`${openXml}</w:p>`);
+}
+
+function scanParagraphProperties(paragraphXml: string) {
+  const scan = scanBalancedXml(paragraphXml);
+  const paragraph = scan.elements.find(
+    (element) => element.tagName === "w:p" && element.parentStart === undefined
+  );
+  const properties =
+    paragraph &&
+    directChildElements(scan, paragraph).find((element) => element.tagName === "w:pPr");
+  const mark =
+    properties &&
+    directChildElements(scan, properties).find((element) => element.tagName === "w:rPr");
+  const childrenOf = (parent: XmlElementRange | undefined) =>
+    parent ? directChildElements(scan, parent) : [];
+  return { properties, mark, childrenOf };
+}
+
+/** The `w:ins` on a paragraph's mark: the break was inserted as a tracked change. */
+function paragraphMarkInsertion(openXml: string): XmlElementRange | undefined {
+  const { mark, childrenOf } = scanParagraphOpen(openXml);
+  return childrenOf(mark).find((element) => element.tagName === "w:ins");
+}
+
+export interface ParagraphMarkInsertion {
+  /** OOXML `w:id`. */
+  id: string;
+  author?: string;
+  date?: string;
+}
+
+/** The tracked insertion of a paragraph's break, read from its `w:p` XML. */
+export function readParagraphMarkInsertion(
+  paragraphXml: string
+): ParagraphMarkInsertion | undefined {
+  const { mark, childrenOf } = scanParagraphProperties(paragraphXml);
+  const insertion = childrenOf(mark).find((element) => element.tagName === "w:ins");
+  const id = insertion && xmlAttribute(insertion.openTag, "w:id");
+  return id === undefined
+    ? undefined
+    : {
+        id,
+        author: xmlAttribute(insertion!.openTag, "w:author"),
+        date: xmlAttribute(insertion!.openTag, "w:date"),
+      };
+}
+
+function withoutRanges(xml: string, ranges: XmlElementRange[]): string {
+  return [...ranges]
+    .sort((left, right) => right.start - left.start)
+    .reduce((rest, range) => rest.slice(0, range.start) + rest.slice(range.end), xml);
+}
+
+/** Drops the paragraph mark's `w:ins`, and the mark properties if that empties them. */
+function withoutParagraphMarkInsertion(openXml: string): string {
+  const { mark, childrenOf } = scanParagraphOpen(openXml);
+  const children = childrenOf(mark);
+  const insertion = children.find((element) => element.tagName === "w:ins");
+  if (!mark || !insertion) {
+    return openXml;
+  }
+  return withoutRanges(openXml, [children.length === 1 ? mark : insertion]);
+}
+
+/**
+ * The opening of the first half of a split paragraph: its mark is new, so it
+ * carries `insertionXml` (a self-closing `w:ins`) and none of the original
+ * mark's insertion, and the section break stays with the original mark.
+ */
+function insertedParagraphOpen(openXml: string, insertionXml: string): string {
+  const cleared = (() => {
+    const { properties, childrenOf } = scanParagraphOpen(openXml);
+    const sections = childrenOf(properties).filter(
+      (element) => element.tagName === "w:sectPr"
+    );
+    return withoutParagraphMarkInsertion(withoutRanges(openXml, sections));
+  })();
+  const { properties, mark, childrenOf } = scanParagraphOpen(cleared);
+  const insertAt = (at: number, xml: string) =>
+    cleared.slice(0, at) + xml + cleared.slice(at);
+  if (!properties) {
+    return `${cleared}<w:pPr><w:rPr>${insertionXml}</w:rPr></w:pPr>`;
+  }
+  if (properties.selfClosing) {
+    return (
+      cleared.slice(0, properties.start) +
+      `<w:pPr><w:rPr>${insertionXml}</w:rPr></w:pPr>` +
+      cleared.slice(properties.end)
+    );
+  }
+  if (mark?.selfClosing) {
+    return (
+      cleared.slice(0, mark.start) +
+      `<w:rPr>${insertionXml}</w:rPr>` +
+      cleared.slice(mark.end)
+    );
+  }
+  if (mark) {
+    // Revision marks lead the mark properties (CT_ParaRPr).
+    return insertAt(mark.openEnd, insertionXml);
+  }
+  // The mark properties come before a section break or a property change.
+  const next = childrenOf(properties).find(
+    (element) => element.tagName === "w:sectPr" || element.tagName === "w:pPrChange"
+  );
+  return insertAt(next ? next.start : properties.closeStart, `<w:rPr>${insertionXml}</w:rPr>`);
+}
+
+/** Paragraph properties a split cannot copy to two paragraphs and keep valid. */
+const UNSPLITTABLE_PARAGRAPH_OPEN =
+  /<w:(?:del|moveFrom|moveTo|pPrChange|rPrChange|numberingChange)\b/;
+
+const PARAGRAPH_IDENTITY_ATTRIBUTES = /\s+w14:(?:paraId|textId)\s*=\s*"[^"]*"/g;
+
+/**
+ * Splits a paragraph at a visible-text offset as a tracked change, as Word
+ * records Enter while tracking: the first half ends in a new paragraph mark
+ * inside `w:ins`, the second keeps the original mark and properties. The
+ * first half keeps the paragraph's identity (`w14:paraId`); the second gets
+ * none, so saving stamps a fresh one. Revisions that span the break get a
+ * fresh id in the second half, so every revision id stays unique.
+ */
+export function splitParagraphTracked(
+  model: DocModel,
+  input: TrackedParagraphSplitInput
+): AnnotationMutationResult {
+  if (!validAuthorship(input)) {
+    return { ok: false, reason: "unsupported" };
+  }
+  const prepared = prepareParagraph(model, input.nodeIndex);
+  if (!prepared.ok) {
+    return prepared;
+  }
+  const { paragraph, source } = prepared;
+  if (UNSPLITTABLE_PARAGRAPH_OPEN.test(source.openXml)) {
+    return { ok: false, reason: "unsupported" };
+  }
+  const items = splitItemsAt(source.items, input.offset);
+  if (!validRange(visibleText(items), input.offset, input.offset)) {
+    return { ok: false, reason: "stale" };
+  }
+  const allocate = createRevisionIdAllocator(model);
+  const at = insertionIndexAt(items, input.offset);
+  const first = items.slice(0, at);
+  const firstKeys = new Set(first.flatMap((item) => item.wrappers.map((wrapper) => wrapper.key)));
+  const renamed = new Map<string, SourceWrapper>();
+  const second = items.slice(at).map((item) => ({
+    ...item,
+    wrappers: item.wrappers.map((wrapper) => {
+      if (wrapper.tagName === "w:hyperlink" || !firstKeys.has(wrapper.key)) {
+        return wrapper;
+      }
+      const fresh = renamed.get(wrapper.key) ?? {
+        ...wrapper,
+        openTag: setXmlAttribute(wrapper.openTag, "w:id", String(allocate())),
+        key: `${wrapper.key}:split`,
+      };
+      renamed.set(wrapper.key, fresh);
+      return fresh;
+    }),
+  })) as SourceItem[];
+
+  const insertion = revisionWrapper("w:ins", allocate(), input).openTag.replace(/>$/, "/>");
+  const firstHalf = paragraphWithSource(
+    paragraph,
+    { openXml: insertedParagraphOpen(source.openXml, insertion), items: first },
+    allocate
+  );
+  const secondHalf = paragraphWithSource(
+    { ...paragraph, blockId: undefined, paraId: undefined },
+    { openXml: source.openXml.replace(PARAGRAPH_IDENTITY_ATTRIBUTES, ""), items: second },
+    allocate
+  );
+  const nodes = [...model.nodes];
+  nodes.splice(input.nodeIndex, 1, firstHalf, secondHalf);
+  return { ok: true, model: { ...model, nodes } };
+}
+
+/**
+ * Accepting an inserted paragraph mark keeps the break; rejecting it joins
+ * the paragraph with the next one, which keeps its own mark and properties
+ * and takes this paragraph's identity.
+ */
+function decideParagraphMarkInsertion(
+  model: DocModel,
+  target: ParagraphRevisionTarget,
+  decision: RevisionDecision
+): AnnotationMutationResult {
+  const prepared = prepareParagraph(model, target.nodeIndex);
+  if (!prepared.ok) {
+    return prepared;
+  }
+  const { paragraph, source } = prepared;
+  const insertion = paragraphMarkInsertion(source.openXml);
+  if (
+    !insertion ||
+    xmlAttribute(insertion.openTag, "w:id")?.trim() !== String(target.revisionId).trim()
+  ) {
+    return { ok: false, reason: "stale" };
+  }
+  if (decision === "accept") {
+    return {
+      ok: true,
+      model: withParagraph(
+        model,
+        target.nodeIndex,
+        paragraphWithSource(paragraph, {
+          ...source,
+          openXml: withoutParagraphMarkInsertion(source.openXml),
+        })
+      ),
+    };
+  }
+  const next = prepareParagraph(model, target.nodeIndex + 1);
+  if (!next.ok) {
+    return next.reason === "stale" ? { ok: false, reason: "unsupported" } : next;
+  }
+  const paraId = xmlAttribute(/^<w:p\b[^>]*>/.exec(source.openXml)?.[0] ?? "", "w14:paraId");
+  const nextTag = /^<w:p\b[^>]*>/.exec(next.source.openXml)?.[0] ?? "<w:p>";
+  const joinedTag = paraId
+    ? setXmlAttribute(nextTag.replace(PARAGRAPH_IDENTITY_ATTRIBUTES, ""), "w14:paraId", paraId)
+    : nextTag;
+  const joined = paragraphWithSource(
+    { ...next.paragraph, blockId: paragraph.blockId, paraId: paragraph.paraId },
+    {
+      openXml: joinedTag + next.source.openXml.slice(nextTag.length),
+      items: [
+        ...source.items,
+        // Keys come from each paragraph's own offsets; keep them apart.
+        ...next.source.items.map((item) => ({
+          ...item,
+          wrappers: item.wrappers.map((wrapper) => ({ ...wrapper, key: `joined:${wrapper.key}` })),
+        })),
+      ],
+    },
+    createRevisionIdAllocator(model)
+  );
+  const nodes = [...model.nodes];
+  nodes.splice(target.nodeIndex, 2, joined);
+  return { ok: true, model: { ...model, nodes } };
+}
+
 type RevisionDecision = "accept" | "reject";
 
 /**
@@ -671,6 +930,9 @@ function decideParagraphRevision(
   target: ParagraphRevisionTarget,
   decision: RevisionDecision
 ): AnnotationMutationResult {
+  if (target.kind === "paragraph-insertion") {
+    return decideParagraphMarkInsertion(model, target, decision);
+  }
   const tagName =
     target.kind === "insertion"
       ? "w:ins"
@@ -724,8 +986,7 @@ function decideAllRevisions(
     if (node.type !== "paragraph" || !RUN_REVISION_XML.test(node.sourceXml ?? "")) {
       return;
     }
-    // Paragraph-mark revisions (in source.openXml) would merge or split
-    // paragraphs, so they stay, and the node is reported below.
+    // Paragraph-mark revisions (in source.openXml) are decided below.
     const source = paragraphSourceForModel(node);
     if (!source) {
       return;
@@ -743,18 +1004,47 @@ function decideAllRevisions(
       items: resolveRevisions(source.items, isRevision, decision),
     });
   });
-  const remainingNodeIndexes = nodes.flatMap((node, nodeIndex) =>
+  // Inserted paragraph marks next, from the end, so a rejection that joins
+  // two paragraphs never moves one still to be decided.
+  let decided: DocModel = { ...model, nodes };
+  for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex -= 1) {
+    const node = decided.nodes[nodeIndex];
+    const source =
+      node?.type === "paragraph" && node.sourceXml
+        ? parseParagraphSource(node.sourceXml)
+        : undefined;
+    const insertion = source && paragraphMarkInsertion(source.openXml);
+    const revisionId = insertion && xmlAttribute(insertion.openTag, "w:id");
+    if (revisionId === undefined) {
+      continue;
+    }
+    const result = decideParagraphMarkInsertion(
+      decided,
+      { nodeIndex, revisionId, kind: "paragraph-insertion" },
+      decision
+    );
+    if (result.ok) {
+      decided = result.model;
+    }
+  }
+  const remainingNodeIndexes = decided.nodes.flatMap((node, nodeIndex) =>
     RUN_REVISION_XML.test(node.sourceXml ?? "") ? [nodeIndex] : []
   );
-  return { ok: true, model: { ...model, nodes }, remainingNodeIndexes };
+  return { ok: true, model: decided, remainingNodeIndexes };
 }
 
-/** Accepts every run-level insertion and deletion in top-level paragraphs. */
+/**
+ * Accepts every run-level insertion and deletion and every inserted
+ * paragraph break in top-level paragraphs.
+ */
 export function acceptAllRevisions(model: DocModel): RevisionBatchResult {
   return decideAllRevisions(model, "accept");
 }
 
-/** Rejects every run-level insertion and deletion in top-level paragraphs. */
+/**
+ * Rejects every run-level insertion and deletion and every inserted
+ * paragraph break (joining the paragraphs) in top-level paragraphs.
+ */
 export function rejectAllRevisions(model: DocModel): RevisionBatchResult {
   return decideAllRevisions(model, "reject");
 }
@@ -1067,10 +1357,11 @@ export function deleteComment(
 export interface ParagraphRevisionInfo {
   /** OOXML `w:id` shared by every element of this revision. */
   id: string;
-  kind: "insertion" | "deletion";
+  /** `paragraph-insertion`: the paragraph ends in a break someone inserted. */
+  kind: "insertion" | "deletion" | "paragraph-insertion";
   author?: string;
   date?: string;
-  /** Inserted visible text, or the deleted text. */
+  /** Inserted visible text, or the deleted text; empty for a break. */
   text: string;
 }
 
@@ -1090,8 +1381,9 @@ export interface ParagraphAnnotations {
 }
 
 /**
- * Reads the run-level revisions and comment ranges of one top-level paragraph
- * from its source XML. Paragraphs without readable source report none.
+ * Reads the run-level revisions, an inserted paragraph mark, and the comment
+ * ranges of one top-level paragraph from its source XML. Paragraphs without
+ * readable source report none.
  */
 export function readParagraphAnnotations(
   model: DocModel,
@@ -1155,6 +1447,17 @@ export function readParagraphAnnotations(
         range.text += item.text;
       }
     }
+  }
+  const markInsertion = paragraphMarkInsertion(source.openXml);
+  const markId = markInsertion && xmlAttribute(markInsertion.openTag, "w:id");
+  if (markInsertion && markId !== undefined) {
+    revisions.set(`paragraph-insertion:${markId}`, {
+      id: markId,
+      kind: "paragraph-insertion",
+      author: xmlAttribute(markInsertion.openTag, "w:author"),
+      date: xmlAttribute(markInsertion.openTag, "w:date"),
+      text: "",
+    });
   }
   return { revisions: [...revisions.values()], comments };
 }

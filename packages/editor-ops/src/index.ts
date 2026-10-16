@@ -52,10 +52,12 @@ export {
   deleteComment,
   rejectAllRevisions,
   readParagraphAnnotations,
+  readParagraphMarkInsertion,
   rejectParagraphRevision,
   replaceParagraphTextTracked,
   replyToComment,
   setCommentResolved,
+  splitParagraphTracked,
 } from "./annotations";
 export type {
   AnnotationMutationFailureReason,
@@ -64,12 +66,14 @@ export type {
   CreateParagraphCommentInput,
   ParagraphAnnotations,
   ParagraphCommentRange,
+  ParagraphMarkInsertion,
   ParagraphRevisionInfo,
   ParagraphRevisionKind,
   ParagraphRevisionTarget,
   ReplyToCommentInput,
   RevisionAuthorship,
   RevisionBatchResult,
+  TrackedParagraphSplitInput,
   TrackedTextReplacementInput,
 } from "./annotations";
 export { textReplacementBetween, trackModelTextEdits } from "./suggestions";

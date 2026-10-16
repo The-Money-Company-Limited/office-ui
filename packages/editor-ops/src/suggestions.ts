@@ -2,6 +2,7 @@ import type { DocModel, ParagraphNode } from "@extend-ai/react-docx-doc-model";
 
 import {
   replaceParagraphTextTracked,
+  splitParagraphTracked,
   type AnnotationMutationResult,
   type RevisionAuthorship,
 } from "./annotations";
@@ -9,9 +10,9 @@ import {
 /**
  * Suggesting mode: the editor computes every edit as a plain model change,
  * and this module turns it into Word tracked changes on the model the edit
- * started from. Only edits that change the visible text of existing
- * top-level paragraphs can be expressed that way; anything else (splitting
- * or merging paragraphs, formatting, tables, headers) fails closed so an
+ * started from. Edits that change the visible text of existing top-level
+ * paragraphs, and Enter splitting one, can be expressed that way; anything
+ * else (merging paragraphs, formatting, tables, headers) fails closed so an
  * untracked change never slips through. That includes an edit that changes
  * text and formatting together, such as a styled paste: the tracked text
  * would lose the formatting.
@@ -124,7 +125,8 @@ function sameFormatting(tracked: ParagraphNode, edited: ParagraphNode): boolean 
  * `authorship.author`, applied to `before`. Every changed node must be a
  * top-level paragraph whose visible text changed and whose formatting the
  * tracked replacement reproduces; each one becomes one tracked replacement.
- * Fails with "unsupported" for any other change.
+ * One paragraph becoming two with the same text and formatting is a tracked
+ * paragraph break. Fails with "unsupported" for any other change.
  */
 export function trackModelTextEdits(
   before: DocModel,
@@ -142,6 +144,9 @@ export function trackModelTextEdits(
     ) {
       return { ok: false, reason: "unsupported" };
     }
+  }
+  if (after.nodes.length === before.nodes.length + 1) {
+    return trackParagraphSplit(before, after, authorship);
   }
   if (before.nodes.length !== after.nodes.length) {
     return { ok: false, reason: "unsupported" };
@@ -182,4 +187,58 @@ export function trackModelTextEdits(
     model = tracked.model;
   }
   return { ok: true, model };
+}
+
+/** Enter: one top-level paragraph became two, with every other node kept. */
+function trackParagraphSplit(
+  before: DocModel,
+  after: DocModel,
+  authorship: RevisionAuthorship
+): AnnotationMutationResult {
+  let index = 0;
+  while (index < before.nodes.length && before.nodes[index] === after.nodes[index]) {
+    index += 1;
+  }
+  for (let rest = index + 1; rest < before.nodes.length; rest += 1) {
+    if (before.nodes[rest] !== after.nodes[rest + 1]) {
+      return { ok: false, reason: "unsupported" };
+    }
+  }
+  const previous = before.nodes[index];
+  const first = after.nodes[index];
+  const second = after.nodes[index + 1];
+  if (
+    previous?.type !== "paragraph" ||
+    first?.type !== "paragraph" ||
+    second?.type !== "paragraph"
+  ) {
+    return { ok: false, reason: "unsupported" };
+  }
+  const firstText = paragraphVisibleText(first);
+  const secondText = paragraphVisibleText(second);
+  if (
+    firstText === undefined ||
+    secondText === undefined ||
+    firstText + secondText !== paragraphVisibleText(previous)
+  ) {
+    return { ok: false, reason: "unsupported" };
+  }
+  const tracked = splitParagraphTracked(before, {
+    nodeIndex: index,
+    offset: firstText.length,
+    ...authorship,
+  });
+  if (!tracked.ok) {
+    return tracked;
+  }
+  const nodes = [...tracked.model.nodes];
+  const trackedFirst = nodes[index] as ParagraphNode;
+  const trackedSecond = nodes[index + 1] as ParagraphNode;
+  if (!sameFormatting(trackedFirst, first) || !sameFormatting(trackedSecond, second)) {
+    return { ok: false, reason: "unsupported" };
+  }
+  // The editor's block ids keep its layout caches and caret on the new halves.
+  nodes[index] = { ...trackedFirst, blockId: first.blockId };
+  nodes[index + 1] = { ...trackedSecond, blockId: second.blockId };
+  return { ok: true, model: { ...tracked.model, nodes } };
 }

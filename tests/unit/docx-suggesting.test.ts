@@ -13,6 +13,11 @@ import {
   type ParagraphNode,
 } from "@extend-ai/react-docx-doc-model";
 import {
+  acceptParagraphRevision,
+  readParagraphAnnotations,
+  rejectAllRevisions,
+  rejectParagraphRevision,
+  splitParagraphTracked,
   textReplacementBetween,
   trackModelTextEdits,
   updateParagraphText,
@@ -323,5 +328,142 @@ describe("suggesting controller", () => {
     ]);
     expect(visible(editor.model)).toBe("Hello brave world");
     expect(sourceXml(editor.model)).not.toContain("<w:ins ");
+  });
+});
+
+/** The model the editor makes when Enter splits paragraph 0 at `offset`. */
+function splitByEditor(model: DocModel, offset: number): DocModel {
+  const paragraph = model.nodes[0] as ParagraphNode;
+  const text = visible(model);
+  const half = (part: string, blockId?: string): ParagraphNode => ({
+    type: "paragraph",
+    blockId,
+    style: paragraph.style,
+    children: [{ type: "text", text: part }],
+  });
+  return {
+    ...model,
+    nodes: [
+      half(text.slice(0, offset), paragraph.blockId),
+      half(text.slice(offset), "new-block"),
+      ...model.nodes.slice(1),
+    ],
+  };
+}
+
+describe("tracked paragraph breaks", () => {
+  it("records Enter as an inserted paragraph mark on the first half", async () => {
+    const model = await load(TWO_PARAGRAPHS);
+    const tracked = trackModelTextEdits(model, splitByEditor(model, 6), AUTHOR);
+    expect(tracked.ok).toBe(true);
+    const next = (tracked as { model: DocModel }).model;
+    expect(next.nodes).toHaveLength(3);
+    expect([visible(next, 0), visible(next, 1), visible(next, 2)]).toEqual([
+      "Hello ",
+      "world",
+      "Second",
+    ]);
+    expect(sourceXml(next, 0)).toMatch(
+      /^<w:p\b[^>]*><w:pPr><w:rPr><w:ins w:id="\d+" w:author="Grace" w:date="2026-10-16T09:00:00Z"\/><\/w:rPr><\/w:pPr>/
+    );
+    expect(sourceXml(next, 1)).not.toContain("<w:ins");
+    expect((next.nodes[1] as ParagraphNode).blockId).toBe("new-block");
+    expect(next.nodes[2]).toBe(model.nodes[1]);
+    expect(readParagraphAnnotations(next, 0).revisions).toEqual([
+      expect.objectContaining({ kind: "paragraph-insertion", author: "Grace", text: "" }),
+    ]);
+  });
+
+  it("joins the paragraphs again on reject and keeps the break on accept", async () => {
+    const model = await load(PLAIN);
+    const split = splitParagraphTracked(model, { nodeIndex: 0, offset: 6, ...AUTHOR });
+    expect(split.ok).toBe(true);
+    const next = (split as { model: DocModel }).model;
+    const [revision] = readParagraphAnnotations(next, 0).revisions;
+    const target = { nodeIndex: 0, revisionId: revision!.id, kind: "paragraph-insertion" as const };
+
+    const rejected = rejectParagraphRevision(next, target);
+    expect(rejected.ok).toBe(true);
+    const joined = (rejected as { model: DocModel }).model;
+    expect(joined.nodes).toHaveLength(1);
+    expect(visible(joined)).toBe("Hello world");
+    expect(sourceXml(joined)).not.toContain("<w:ins");
+
+    const accepted = acceptParagraphRevision(next, target);
+    expect(accepted.ok).toBe(true);
+    const kept = (accepted as { model: DocModel }).model;
+    expect([visible(kept, 0), visible(kept, 1)]).toEqual(["Hello ", "world"]);
+    expect(sourceXml(kept, 0)).not.toContain("<w:ins");
+    expect(sourceXml(kept, 0)).not.toContain("<w:rPr>");
+  });
+
+  it("rejects a break and the typing after it back to the original paragraph", async () => {
+    const model = await load(PLAIN);
+    let next = (splitParagraphTracked(model, { nodeIndex: 0, offset: 11, ...AUTHOR }) as {
+      model: DocModel;
+    }).model;
+    const typed = updateParagraphText(next, 1, "New line");
+    next = (trackModelTextEdits(next, typed, AUTHOR) as { model: DocModel }).model;
+    expect(visible(next, 1)).toBe("New line");
+
+    const result = rejectAllRevisions(next);
+    expect(result.remainingNodeIndexes).toEqual([]);
+    expect(result.model.nodes).toHaveLength(1);
+    expect(visible(result.model)).toBe("Hello world");
+  });
+
+  it("gives a revision that spans the break a fresh id in the second half", async () => {
+    const model = await load(
+      '<w:p><w:ins w:id="3" w:author="Bob"><w:r><w:t>Hello world</w:t></w:r></w:ins></w:p>'
+    );
+    const next = (splitParagraphTracked(model, { nodeIndex: 0, offset: 6, ...AUTHOR }) as {
+      model: DocModel;
+    }).model;
+    const ids = [0, 1].map((index) =>
+      readParagraphAnnotations(next, index)
+        .revisions.filter((revision) => revision.kind === "insertion")
+        .map((revision) => revision.id)
+    );
+    expect(ids[0]).toEqual(["3"]);
+    expect(ids[1]).toHaveLength(1);
+    expect(ids[1]![0]).not.toBe("3");
+  });
+
+  it("refuses a split that also changes text", async () => {
+    const model = await load(PLAIN);
+    const edited = splitByEditor(model, 6);
+    (edited.nodes[1] as ParagraphNode).children = [{ type: "text", text: "there" }];
+    expect(trackModelTextEdits(model, edited, AUTHOR)).toEqual({
+      ok: false,
+      reason: "unsupported",
+    });
+  });
+});
+
+describe("suggesting controller paragraph breaks", () => {
+  it("tracks Enter and accepts the break by revision id", async () => {
+    const model = await load(PLAIN);
+    const editor = runControllerSteps(model, [
+      (editor) => {
+        editor.registerSuggestingMode();
+        editor.splitParagraphAtSelection("Hello world", 6, 6, {
+          kind: "paragraph",
+          nodeIndex: 0,
+        });
+      },
+      (editor) => {
+        const change = editor.trackedChanges.find(
+          (candidate) => candidate.kind === "paragraph-insertion"
+        );
+        expect(change).toMatchObject({ author: "Grace", nodeIndex: 0 });
+        expect(editor.acceptRevision(change!.revisionId!)).toEqual({ ok: true });
+      },
+    ]);
+    expect(editor.suggestionRefusalNonce).toBe(0);
+    expect([visible(editor.model, 0), visible(editor.model, 1)]).toEqual([
+      "Hello ",
+      "world",
+    ]);
+    expect(editor.trackedChanges).toHaveLength(0);
   });
 });

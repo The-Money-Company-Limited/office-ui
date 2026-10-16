@@ -64,6 +64,7 @@ import {
   planTableGridColumnDeletion,
   planTableGridColumnInsertion,
   rejectAllRevisions as rejectAllRevisionsInModel,
+  readParagraphMarkInsertion,
   rejectParagraphRevision,
   replyToComment as replyToCommentInModel,
   setCommentResolved as setCommentResolvedInModel,
@@ -4203,7 +4204,9 @@ export type DocxTrackedChangeKind =
   | "move-from"
   | "move-to"
   | "format-change"
-  | "paragraph-format-change";
+  | "paragraph-format-change"
+  /** A paragraph break inserted as a tracked change (Enter while suggesting). */
+  | "paragraph-insertion";
 
 export interface DocxTrackedChange {
   id: string;
@@ -21148,6 +21151,17 @@ function resolveParagraphTrackedMarkup(
     );
   });
 
+  const markInsertion = readParagraphMarkInsertion(sourceXml);
+  if (markInsertion) {
+    getOrCreateChange(
+      "paragraph-insertion",
+      markInsertion.id,
+      markInsertion.author,
+      markInsertion.date,
+      undefined
+    );
+  }
+
   const hasInlineChanges = inlineChangeByVisibleChildIndex.some(Boolean);
   const hasDeletedSegments = deletedSegmentsByVisibleChildIndex.size > 0;
   if (!hasInlineChanges && !hasDeletedSegments && changes.length === 0) {
@@ -27874,6 +27888,8 @@ function trackedChangeKindLabel(kind: DocxTrackedChangeKind): string {
       return "Formatted";
     case "paragraph-format-change":
       return "Paragraph formatting";
+    case "paragraph-insertion":
+      return "Paragraph break";
     default:
       return kind;
   }
@@ -30798,7 +30814,9 @@ export function useDocxEditor(
       if (
         !change.revisionId ||
         change.location.kind !== "paragraph" ||
-        (change.kind !== "insertion" && change.kind !== "deletion")
+        (change.kind !== "insertion" &&
+          change.kind !== "deletion" &&
+          change.kind !== "paragraph-insertion")
       ) {
         const failure = { ok: false, reason: "unsupported" } as const;
         setStatus(
@@ -31037,7 +31055,9 @@ export function useDocxEditor(
           if (
             change.revisionId === id &&
             change.location.kind === "paragraph" &&
-            (change.kind === "insertion" || change.kind === "deletion")
+            (change.kind === "insertion" ||
+              change.kind === "deletion" ||
+              change.kind === "paragraph-insertion")
           ) {
             const target = {
               nodeIndex: change.location.nodeIndex,
@@ -33488,7 +33508,12 @@ export function useDocxEditor(
         | undefined;
 
       applyModelChange((current) => {
-        const next = cloneDocModel(current);
+        // A body paragraph is split on a copy of it alone, so every other
+        // node keeps its identity (suggesting compares nodes by identity).
+        const next =
+          targetLocation.kind === "paragraph"
+            ? copyModelForParagraphEdits(current, [targetLocation])
+            : cloneDocModel(current);
         let containingNodes = next.nodes;
         let containingTable: TableNode | undefined;
         if (targetLocation.kind === "table-cell") {
@@ -66033,6 +66058,8 @@ export function DocxEditorViewer({
                       (trackedChange.kind === "format-change" ||
                       trackedChange.kind === "paragraph-format-change"
                         ? "Formatting"
+                        : trackedChange.kind === "paragraph-insertion"
+                        ? "New paragraph"
                         : "Change")
                     : comment?.text || "Comment";
                   const cardWidthPx = Math.max(
@@ -66153,7 +66180,8 @@ export function DocxEditorViewer({
                       {trackedChange?.revisionId &&
                       trackedChange.location.kind === "paragraph" &&
                       (trackedChange.kind === "insertion" ||
-                        trackedChange.kind === "deletion") ? (
+                        trackedChange.kind === "deletion" ||
+                        trackedChange.kind === "paragraph-insertion") ? (
                         <div
                           style={{
                             display: "flex",
