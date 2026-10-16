@@ -4519,12 +4519,15 @@ fn merge_comments_xml(
     if let Some(existing) = existing {
         let ranges = extract_balanced_tag_ranges(existing, "w:comment");
         let mut seen = std::collections::HashSet::new();
+        // A source comment the model no longer holds was deleted in the editor.
         let replacements = ranges
             .into_iter()
             .filter_map(|range| {
                 let block = &existing[range.start..range.end];
                 let id = comment_id_from_block(block)?;
-                let rendered = rendered_by_id.get(&id)?;
+                let Some(rendered) = rendered_by_id.get(&id) else {
+                    return Some((range.start, range.end, String::new()));
+                };
                 seen.insert(id);
                 Some((range.start, range.end, rendered.clone()))
             })
@@ -4589,8 +4592,9 @@ fn patch_comment_extended_block(
 fn merge_comments_extended_xml(
     existing: Option<&str>,
     desired: &HashMap<String, CommentExtendedState>,
+    deleted_paragraph_ids: &std::collections::HashSet<String>,
 ) -> Option<String> {
-    if desired.is_empty() {
+    if desired.is_empty() && deleted_paragraph_ids.is_empty() {
         return existing.map(str::to_string);
     }
     if let Some(existing) = existing {
@@ -4602,6 +4606,9 @@ fn merge_comments_extended_xml(
                 let block = &existing[range.start..range.end];
                 let open_end = opening_tag_end(block, 0)?;
                 let paragraph_id = get_attribute(&block[..open_end], "w15:paraId")?;
+                if deleted_paragraph_ids.contains(&paragraph_id) {
+                    return Some((range.start, range.end, String::new()));
+                }
                 let state = desired.get(&paragraph_id)?;
                 seen.insert(paragraph_id);
                 Some((
@@ -4634,6 +4641,9 @@ fn merge_comments_extended_xml(
         return Some(merged);
     }
 
+    if desired.is_empty() {
+        return None;
+    }
     let mut states = desired.iter().collect::<Vec<_>>();
     states.sort_by_key(|(paragraph_id, _)| *paragraph_id);
     let entries = states
@@ -4712,9 +4722,36 @@ fn ensure_document_relationship(pkg: &mut OoxmlPackage, relationship_type: &str,
 
 fn serialize_comment_parts(model: &DocModel, pkg: &mut OoxmlPackage) {
     let source_part_name = crate::package::related_document_part_name(pkg, "comments");
-    let Some(comments) = model.metadata.comments.as_ref().filter(|comments| !comments.is_empty()) else {
+    let Some(comments) = model.metadata.comments.as_ref() else {
         return;
     };
+    let source_comments_xml = pkg
+        .parts
+        .get(&source_part_name)
+        .map(|part| part.content.clone());
+    if comments.is_empty() && source_comments_xml.is_none() {
+        return;
+    }
+    let kept_comment_ids = comments
+        .iter()
+        .map(|comment| comment.id)
+        .collect::<std::collections::HashSet<_>>();
+    let deleted_paragraph_ids = source_comments_xml
+        .as_deref()
+        .map(|xml| {
+            extract_balanced_tag_ranges(xml, "w:comment")
+                .into_iter()
+                .filter_map(|range| {
+                    let block = &xml[range.start..range.end];
+                    let id = comment_id_from_block(block)?;
+                    if kept_comment_ids.contains(&id) {
+                        return None;
+                    }
+                    source_comment_paragraph_id(block)
+                })
+                .collect::<std::collections::HashSet<_>>()
+        })
+        .unwrap_or_default();
 
     let extended_comment_ids = comments
         .iter()
@@ -4741,10 +4778,7 @@ fn serialize_comment_parts(model: &DocModel, pkg: &mut OoxmlPackage) {
         })
         .collect::<HashMap<_, _>>();
 
-    let comments_xml = merge_comments_xml(
-        pkg.parts.get(&source_part_name).map(|part| part.content.as_str()),
-        &rendered_by_id,
-    );
+    let comments_xml = merge_comments_xml(source_comments_xml.as_deref(), &rendered_by_id);
     pkg.parts.insert(
         source_part_name.clone(),
         OoxmlPart {
@@ -4778,6 +4812,7 @@ fn serialize_comment_parts(model: &DocModel, pkg: &mut OoxmlPackage) {
             .get("word/commentsExtended.xml")
             .map(|part| part.content.as_str()),
         &desired_extended,
+        &deleted_paragraph_ids,
     ) {
         pkg.parts.insert(
             "word/commentsExtended.xml".to_string(),

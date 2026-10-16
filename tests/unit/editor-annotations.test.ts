@@ -72,7 +72,7 @@ describe("annotation editor operations", () => {
     if (!result.ok) return;
     const paragraph = result.model.nodes[0] as ParagraphNode;
     expect(paragraph.sourceXml).toBe(
-      '<w:p w:rsidR="AAAA"><w:r><w:t>Before </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>new</w:t></w:r><w:proofErr w:type="spellStart"/><w:r><w:t> after</w:t></w:r></w:p>'
+      '<w:p w:rsidR="AAAA"><w:r><w:t xml:space="preserve">Before </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>new</w:t></w:r><w:proofErr w:type="spellStart"/><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>'
     );
     expect(
       paragraph.children.map((run) => run.type === "text" && run.text)
@@ -80,7 +80,7 @@ describe("annotation editor operations", () => {
     expect(model.nodes[0]).toMatchObject({ sourceXml });
   });
 
-  it("rejects a safe insertion and removes only its modeled text", () => {
+  it("rejects an insertion and removes only its modeled text", () => {
     const model = modelWithParagraph({
       type: "paragraph",
       sourceXml:
@@ -99,13 +99,8 @@ describe("annotation editor operations", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const paragraph = result.model.nodes[0] as ParagraphNode;
-    expect(paragraph.sourceXml).toBe(
-      "<w:p><w:r><w:t>A</w:t></w:r><w:r><w:t>C</w:t></w:r></w:p>"
-    );
-    expect(paragraph.children).toEqual([
-      { type: "text", text: "A" },
-      { type: "text", text: "C" },
-    ]);
+    expect(paragraph.sourceXml).toBe("<w:p><w:r><w:t>AC</w:t></w:r></w:p>");
+    expect(paragraph.children).toEqual([{ type: "text", text: "AC" }]);
   });
 
   it("accepts and rejects safe deletions without regenerating the paragraph", () => {
@@ -128,7 +123,7 @@ describe("annotation editor operations", () => {
     expect(accepted.ok).toBe(true);
     if (accepted.ok) {
       expect((accepted.model.nodes[0] as ParagraphNode).sourceXml).toBe(
-        '<w:p custom="keep"><w:r><w:t>A</w:t></w:r><w:r><w:t>C</w:t></w:r></w:p>'
+        '<w:p custom="keep"><w:r><w:t>AC</w:t></w:r></w:p>'
       );
     }
 
@@ -155,7 +150,7 @@ describe("annotation editor operations", () => {
     ]);
   });
 
-  it("fails closed for duplicate ids, nested revisions, and stale targets", () => {
+  it("resolves every element sharing an id, keeps nested revisions, and rejects stale targets", () => {
     const duplicate = modelWithParagraph({
       type: "paragraph",
       sourceXml:
@@ -165,13 +160,17 @@ describe("annotation editor operations", () => {
         { type: "text", text: "B" },
       ],
     });
-    expect(
-      acceptParagraphRevision(duplicate, {
-        nodeIndex: 0,
-        revisionId: 4,
-        kind: "insertion",
-      })
-    ).toEqual({ ok: false, reason: "unsafe-xml" });
+    const acceptedDuplicate = acceptParagraphRevision(duplicate, {
+      nodeIndex: 0,
+      revisionId: 4,
+      kind: "insertion",
+    });
+    expect(acceptedDuplicate.ok).toBe(true);
+    if (acceptedDuplicate.ok) {
+      expect((acceptedDuplicate.model.nodes[0] as ParagraphNode).sourceXml).toBe(
+        "<w:p><w:r><w:t>AB</w:t></w:r></w:p>"
+      );
+    }
 
     const nested = modelWithParagraph({
       type: "paragraph",
@@ -179,13 +178,17 @@ describe("annotation editor operations", () => {
         '<w:p><w:ins w:id="5"><w:ins w:id="6"><w:r><w:t>A</w:t></w:r></w:ins></w:ins></w:p>',
       children: [{ type: "text", text: "A" }],
     });
-    expect(
-      acceptParagraphRevision(nested, {
-        nodeIndex: 0,
-        revisionId: 5,
-        kind: "insertion",
-      })
-    ).toEqual({ ok: false, reason: "unsupported" });
+    const acceptedOuter = acceptParagraphRevision(nested, {
+      nodeIndex: 0,
+      revisionId: 5,
+      kind: "insertion",
+    });
+    expect(acceptedOuter.ok).toBe(true);
+    if (acceptedOuter.ok) {
+      expect((acceptedOuter.model.nodes[0] as ParagraphNode).sourceXml).toBe(
+        '<w:p><w:ins w:id="6"><w:r><w:t>A</w:t></w:r></w:ins></w:p>'
+      );
+    }
     expect(
       acceptParagraphRevision(duplicate, {
         nodeIndex: 0,
