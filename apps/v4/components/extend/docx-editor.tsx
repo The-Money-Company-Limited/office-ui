@@ -824,8 +824,7 @@ function DocxModeMenu({
   )
 }
 
-// Card actions sit under the card the viewer draws, inside the box the
-// viewer positions, so the card itself keeps its look.
+// The review card's actions, at the bottom of the card.
 function TrackedChangeCardActions({
   accept,
   reject,
@@ -2140,47 +2139,34 @@ function DocxEditorContent({
     <EditorLoadingSurface showSpinner={shouldShowDocumentSpinner} />
   )
   const canReview = mode !== "viewing"
-  const renderTrackedChangeCard = React.useMemo(() => {
-    const renderCard = createDocxTrackedChangeCardRenderer(editor.documentTheme)
-    if (!canReview) return renderCard
-    return function renderReviewableTrackedChangeCard(
-      props: DocxTrackedChangeCardRenderProps
-    ) {
-      return (
-        <div
-          style={props.style}
-          className="pointer-events-auto flex flex-col gap-1"
-        >
-          {renderCard({ ...props, style: {} })}
-          <TrackedChangeCardActions
-            accept={props.accept}
-            reject={props.reject}
-          />
-        </div>
-      )
-    }
-  }, [canReview, editor.documentTheme])
-  const renderCommentCard = React.useMemo(() => {
-    const renderCard = createDocxCommentCardRenderer(editor.documentTheme)
-    if (!canReview) return renderCard
-    return function renderReviewableCommentCard(
-      props: DocxCommentCardRenderProps
-    ) {
-      return (
-        <div
-          style={props.style}
-          className="pointer-events-auto flex flex-col gap-1"
-        >
-          {renderCard({ ...props, style: {} })}
-          <CommentCardActions
-            comment={props.comment}
-            reply={props.reply}
-            setResolved={props.setResolved}
-          />
-        </div>
-      )
-    }
-  }, [canReview, editor.documentTheme])
+  const renderTrackedChangeCard = React.useMemo(
+    () =>
+      createDocxTrackedChangeCardRenderer(
+        editor.documentTheme,
+        canReview
+          ? ({ accept, reject }) => (
+              <TrackedChangeCardActions accept={accept} reject={reject} />
+            )
+          : undefined
+      ),
+    [canReview, editor.documentTheme]
+  )
+  const renderCommentCard = React.useMemo(
+    () =>
+      createDocxCommentCardRenderer(
+        editor.documentTheme,
+        canReview
+          ? ({ comment, reply, setResolved }) => (
+              <CommentCardActions
+                comment={comment}
+                reply={reply}
+                setResolved={setResolved}
+              />
+            )
+          : undefined
+      ),
+    [canReview, editor.documentTheme]
+  )
   const hasDocument = Boolean(url || uploadedDocxFile)
   const sidebarInline = useInlineThumbnailSidebar(viewerShellWidth)
   const pageCount =

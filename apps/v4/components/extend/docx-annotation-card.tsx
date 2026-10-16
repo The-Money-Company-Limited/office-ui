@@ -55,6 +55,7 @@ function trackedChangeBadgeLabel({
 }
 
 function DocxAnnotationCard({
+  actions,
   anchorText,
   badge,
   badgeVariant = "outline",
@@ -64,6 +65,7 @@ function DocxAnnotationCard({
   snippet,
   style,
 }: {
+  actions?: React.ReactNode
   anchorText?: string
   badge: string
   badgeVariant?: AnnotationBadgeVariant
@@ -76,9 +78,8 @@ function DocxAnnotationCard({
   const isDarkDocument = documentTheme === "dark"
   const cardStyle: React.CSSProperties = {
     ...style,
-    backgroundColor: isDarkDocument
-      ? "rgb(24 24 27 / 0.95)"
-      : "rgb(255 255 255 / 0.95)",
+    // Opaque: the card opens over the document's text.
+    backgroundColor: isDarkDocument ? "rgb(24 24 27)" : "rgb(255 255 255)",
     color: isDarkDocument ? "#f4f4f5" : "#18181b",
   }
   const mutedTextColor = isDarkDocument ? "#a1a1aa" : "#71717a"
@@ -92,7 +93,7 @@ function DocxAnnotationCard({
   return (
     <Card
       style={cardStyle}
-      className="pointer-events-auto box-border gap-2 rounded-lg p-2 shadow-sm before:rounded-[7px]"
+      className="pointer-events-auto box-border gap-2 rounded-lg p-2 shadow-md before:rounded-[7px]"
     >
       <div className="flex min-w-0 items-start justify-between gap-2">
         <div
@@ -128,22 +129,22 @@ function DocxAnnotationCard({
         </div>
       ) : null}
       <div className="text-xs leading-snug break-words">{snippet}</div>
+      {actions}
     </Card>
   )
 }
 
 export function createDocxTrackedChangeCardRenderer(
-  documentTheme: DocxDocumentTheme
+  documentTheme: DocxDocumentTheme,
+  renderActions?: (props: DocxTrackedChangeCardRenderProps) => React.ReactNode
 ) {
-  return function renderDocxTrackedChangeCard({
-    change,
-    formattedDate,
-    kindLabel,
-    snippet,
-    style,
-  }: DocxTrackedChangeCardRenderProps) {
+  return function renderDocxTrackedChangeCard(
+    props: DocxTrackedChangeCardRenderProps
+  ) {
+    const { change, formattedDate, kindLabel, snippet, style } = props
     return (
       <DocxAnnotationCard
+        actions={renderActions?.(props)}
         badge={trackedChangeBadgeLabel({ change, kindLabel })}
         badgeVariant={trackedChangeBadgeVariant(change.kind)}
         date={formattedDate}
@@ -157,14 +158,11 @@ export function createDocxTrackedChangeCardRenderer(
 }
 
 export function createDocxCommentCardRenderer(
-  documentTheme: DocxDocumentTheme
+  documentTheme: DocxDocumentTheme,
+  renderActions?: (props: DocxCommentCardRenderProps) => React.ReactNode
 ) {
-  return function renderDocxCommentCard({
-    comment,
-    formattedDate,
-    snippet,
-    style,
-  }: DocxCommentCardRenderProps) {
+  return function renderDocxCommentCard(props: DocxCommentCardRenderProps) {
+    const { comment, formattedDate, snippet, style } = props
     const badge = comment.resolved
       ? "Resolved"
       : comment.parentId !== undefined
@@ -173,6 +171,7 @@ export function createDocxCommentCardRenderer(
 
     return (
       <DocxAnnotationCard
+        actions={renderActions?.(props)}
         anchorText={comment.anchorText}
         badge={badge}
         badgeVariant={comment.resolved ? "secondary" : "info"}

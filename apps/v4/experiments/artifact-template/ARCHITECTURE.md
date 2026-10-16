@@ -269,7 +269,9 @@ The editors are three MIT engines forked into the organization, with
 4. **Review in the editor.** Done: DOCX Viewing, Suggesting, and Editing
    modes, accept and reject, comment replies; XLSX comment cards and
    suggestion accept and reject. Enter and Backspace across paragraphs
-   while suggesting are tracked paragraph breaks, as in Word.
+   while suggesting are tracked paragraph breaks, as in Word. Changes and
+   Word comments show in the text with no review column, so the page keeps
+   its place in every mode; clicking one opens its card under it.
 5. **PPTX editing.** Not started; the PPTX engine is a viewer.
 
 ## Open questions
@@ -283,8 +285,6 @@ The editors are three MIT engines forked into the organization, with
   Viewing and Suggesting re-renders paragraphs, and a pin can stay on the
   detached element (it was seen at the top of the window) until the next
   resize. A layer that re-resolves detached targets would fix it.
-- **Layout per mode.** Suggesting adds a review gutter and moves the page, so
-  Ink drawn in Viewing is shown off its content in Suggesting.
 - **Bundle storage per computer.** R2 content is addressed per computer, so
   every new document artifact uploads the bundle once. A platform-side
   template could share bundle bytes across computers.
