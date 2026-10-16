@@ -134,7 +134,7 @@ describe("round-trip", () => {
     expect(xml).not.toContain("<w14:textOutline");
   });
 
-  it("does not rewrite text inside an existing revision wrapper", async () => {
+  it("keeps text typed inside an existing insertion part of that insertion", async () => {
     const seed = createMinimalDocxPackage(DOCUMENT_WITH_REVISION_XML);
     const pkg = await parseDocx(await packageToArrayBuffer(seed));
     const model = await buildDocModel(pkg);
@@ -142,9 +142,9 @@ describe("round-trip", () => {
     const serialized = await serializeDocModel(edited, pkg);
     const xml = serialized.parts.get("word/document.xml")?.content ?? "";
 
-    expect(xml).toContain("<w:t>B</w:t>");
-    expect(xml).not.toContain("<w:ins");
-    expect(xml).not.toContain("Original Author");
+    expect(xml).toContain(
+      '<w:ins w:id="1" w:author="Original Author" w:date="2026-01-01T00:00:00Z"><w:r><w:t>B</w:t></w:r></w:ins>'
+    );
   });
 
   it("updates an existing xml:space value without duplicating it", async () => {

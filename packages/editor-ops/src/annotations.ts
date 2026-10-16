@@ -3,22 +3,33 @@ import type {
   DocumentCommentDefinition,
   ParagraphNode,
   TextLigatures,
-  TextRunNode,
   TextStyle,
 } from "@extend-ai/react-docx-doc-model";
 import { cloneDocModel } from "@extend-ai/react-docx-doc-model";
 
 import {
-  decodeXmlText,
+  createRevisionIdAllocator,
+  escapeXmlAttribute,
+  formattingAnchorAt,
+  insertionIndexAt,
+  mapBodySourceXml,
+  paragraphSourceForModel,
+  parseParagraphSource,
+  paragraphWithSource,
+  revisionWrapperId,
+  splitItemsAt,
+  textItemIndexAt,
+  textItemOffsets,
+  visibleText,
+  type ParagraphSource,
+  type SourceItem,
+  type SourceWrapper,
+} from "./paragraph-source";
+import {
   directChildElements,
   elementsNamed,
-  enclosingElements,
-  escapeXmlText,
   scanBalancedXml,
-  setXmlAttribute,
   xmlAttribute,
-  type XmlElementRange,
-  type XmlScanResult,
 } from "./xml";
 
 export type AnnotationMutationFailureReason =
@@ -34,6 +45,13 @@ export type CommentCreationResult =
   | { ok: true; model: DocModel; commentId: number }
   | { ok: false; reason: AnnotationMutationFailureReason };
 
+export type RevisionBatchResult = {
+  ok: true;
+  model: DocModel;
+  /** Top-level paragraphs whose revision markup could not be resolved and was left as is. */
+  remainingNodeIndexes: number[];
+};
+
 export type ParagraphRevisionKind =
   | "insertion"
   | "deletion"
@@ -45,9 +63,25 @@ export type ParagraphRevisionKind =
 export interface ParagraphRevisionTarget {
   /** Top-level body node containing the revision. Table locations are unsupported. */
   nodeIndex: number;
-  /** OOXML `w:id` from the `w:ins` or `w:del` wrapper. */
+  /** OOXML `w:id` of the `w:ins` or `w:del` element(s). */
   revisionId: string | number;
   kind: ParagraphRevisionKind;
+}
+
+export interface RevisionAuthorship {
+  author: string;
+  /** ISO 8601 date-time written to `w:date`. */
+  date?: string;
+}
+
+export interface TrackedTextReplacementInput extends RevisionAuthorship {
+  /** Top-level body paragraph index. */
+  nodeIndex: number;
+  /** UTF-16 offsets into the paragraph's visible text (deleted text excluded). */
+  startOffset: number;
+  endOffset: number;
+  /** Replacement text; empty for a pure deletion. */
+  text: string;
 }
 
 export interface CreateParagraphCommentInput {
@@ -62,381 +96,17 @@ export interface CreateParagraphCommentInput {
   date?: string;
 }
 
-interface VisibleTextToken {
-  range: XmlElementRange;
+export interface ReplyToCommentInput {
+  /** The comment being answered; replies attach to the thread's root comment. */
+  commentId: number;
   text: string;
-  enclosingRun: XmlElementRange;
-}
-
-interface SafeParagraphContext {
-  paragraph: ParagraphNode;
-  sourceXml: string;
-  scan: XmlScanResult;
-  paragraphRange: XmlElementRange;
-  visibleTokens: VisibleTextToken[];
-}
-
-const FORBIDDEN_PARAGRAPH_ELEMENTS = new Set([
-  "w:fldChar",
-  "w:instrText",
-  "w:fldSimple",
-  "w:sdt",
-  "w:bookmarkStart",
-  "w:bookmarkEnd",
-  "w:drawing",
-  "w:pict",
-  "w:object",
-  "w:hyperlink",
-  "w:moveFrom",
-  "w:moveTo",
-  "w:rPrChange",
-  "w:pPrChange",
-  "w:sectPrChange",
-  "w:tblPrChange",
-  "w:trPrChange",
-  "w:tcPrChange",
-  "w:numberingChange",
-  "w:footnoteReference",
-  "w:endnoteReference",
-  "w:tab",
-  "w:br",
-  "w:cr",
-  "mc:AlternateContent",
-  "a:t",
-]);
-
-function textContent(xml: string, range: XmlElementRange): string | undefined {
-  if (range.selfClosing) {
-    return "";
-  }
-  const content = xml.slice(range.openEnd, range.closeStart);
-  return content.includes("<") ? undefined : decodeXmlText(content);
-}
-
-function parentElement(
-  scan: XmlScanResult,
-  element: XmlElementRange
-): XmlElementRange | undefined {
-  return element.parentStart === undefined
-    ? undefined
-    : scan.elements.find(
-        (candidate) => candidate.start === element.parentStart
-      );
-}
-
-function isInsideNamedElement(
-  scan: XmlScanResult,
-  element: XmlElementRange,
-  tagName: string
-): boolean {
-  return enclosingElements(scan, element).some(
-    (candidate) => candidate.tagName === tagName
-  );
-}
-
-function visibleTextTokens(
-  sourceXml: string,
-  scan: XmlScanResult
-): VisibleTextToken[] | undefined {
-  const tokens: VisibleTextToken[] = [];
-  for (const range of elementsNamed(scan, "w:t")) {
-    if (isInsideNamedElement(scan, range, "w:del")) {
-      continue;
-    }
-    const text = textContent(sourceXml, range);
-    if (text === undefined) {
-      return undefined;
-    }
-    if (text.length === 0) {
-      continue;
-    }
-    const enclosingRun = enclosingElements(scan, range).find(
-      (candidate) => candidate.tagName === "w:r"
-    );
-    if (!enclosingRun) {
-      return undefined;
-    }
-    tokens.push({ range, text, enclosingRun });
-  }
-  return tokens.sort((left, right) => left.range.start - right.range.start);
-}
-
-function modelMatchesVisibleText(
-  paragraph: ParagraphNode,
-  tokens: VisibleTextToken[]
-): boolean {
-  if (
-    paragraph.children.some(
-      (child) =>
-        child.type !== "text" ||
-        child.link !== undefined ||
-        child.noteReference !== undefined
-    )
-  ) {
-    return false;
-  }
-  const modeled = paragraph.children as TextRunNode[];
-  if (tokens.length === 0) {
-    return modeled.length === 1 && modeled[0]?.text === "";
-  }
-  return (
-    modeled.length === tokens.length &&
-    modeled.every((run, index) => run.text === tokens[index]?.text)
-  );
-}
-
-function cloneTextStyle(style?: TextStyle): TextStyle | undefined {
-  return style
-    ? {
-        ...style,
-        runBorder: style.runBorder ? { ...style.runBorder } : undefined,
-      }
-    : undefined;
-}
-
-function canonicalJsonValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(canonicalJsonValue);
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .filter(([, entry]) => entry !== undefined)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, canonicalJsonValue(entry)])
-    );
-  }
-  return value;
-}
-
-function metadataValuesEqual(left: unknown, right: unknown): boolean {
-  return (
-    JSON.stringify(canonicalJsonValue(left)) ===
-    JSON.stringify(canonicalJsonValue(right))
-  );
-}
-
-function sourceRunProvenanceForChildren(
-  children: ParagraphNode["children"]
-): ParagraphNode["sourceRunProvenance"] | undefined {
-  if (children.some((child) => child.type !== "text")) {
-    return undefined;
-  }
-  return {
-    runs: (children as TextRunNode[]).map((run) => ({
-      style: cloneTextStyle(run.style),
-      link: run.link,
-      noteReference: run.noteReference ? { ...run.noteReference } : undefined,
-    })),
-  };
-}
-
-function modelMatchesSourceRunProvenance(paragraph: ParagraphNode): boolean {
-  const provenance = paragraph.sourceRunProvenance;
-  if (!provenance || paragraph.children.length !== provenance.runs.length) {
-    return false;
-  }
-  return paragraph.children.every((child, index) => {
-    if (child.type !== "text") {
-      return false;
-    }
-    const source = provenance.runs[index];
-    return (
-      Boolean(source) &&
-      metadataValuesEqual(child.style, source?.style) &&
-      child.link === source?.link &&
-      metadataValuesEqual(child.noteReference, source?.noteReference)
-    );
-  });
-}
-
-function safeParagraphContext(
-  model: DocModel,
-  nodeIndex: number
-):
-  | { ok: true; context: SafeParagraphContext }
-  | { ok: false; reason: AnnotationMutationFailureReason } {
-  const paragraph = model.nodes[nodeIndex];
-  if (!paragraph) {
-    return { ok: false, reason: "stale" };
-  }
-  if (paragraph.type !== "paragraph") {
-    return { ok: false, reason: "unsupported" };
-  }
-  if (!paragraph.sourceXml || paragraph.sourceTextPatch) {
-    return { ok: false, reason: "stale" };
-  }
-
-  const sourceXml = paragraph.sourceXml;
-  const scan = scanBalancedXml(sourceXml);
-  if (scan.malformed) {
-    return { ok: false, reason: "unsafe-xml" };
-  }
-  const paragraphs = elementsNamed(scan, "w:p").filter(
-    (candidate) => candidate.parentStart === undefined
-  );
-  if (paragraphs.length !== 1) {
-    return { ok: false, reason: "unsafe-xml" };
-  }
-  if (
-    scan.elements.some((element) =>
-      FORBIDDEN_PARAGRAPH_ELEMENTS.has(element.tagName)
-    )
-  ) {
-    return { ok: false, reason: "unsupported" };
-  }
-
-  const paragraphRange = paragraphs[0]!;
-  for (const revision of [
-    ...elementsNamed(scan, "w:ins"),
-    ...elementsNamed(scan, "w:del"),
-  ]) {
-    if (revision.parentStart !== paragraphRange.start) {
-      return { ok: false, reason: "unsupported" };
-    }
-  }
-
-  const tokens = visibleTextTokens(sourceXml, scan);
-  if (!tokens) {
-    return { ok: false, reason: "unsafe-xml" };
-  }
-  if (!modelMatchesVisibleText(paragraph, tokens)) {
-    return { ok: false, reason: "stale" };
-  }
-  if (!modelMatchesSourceRunProvenance(paragraph)) {
-    return { ok: false, reason: "stale" };
-  }
-
-  return {
-    ok: true,
-    context: {
-      paragraph,
-      sourceXml,
-      scan,
-      paragraphRange,
-      visibleTokens: tokens,
-    },
-  };
-}
-
-function hasNonWhitespaceOutsideChildren(
-  xml: string,
-  parent: XmlElementRange,
-  children: XmlElementRange[]
-): boolean {
-  let cursor = parent.openEnd;
-  for (const child of [...children].sort(
-    (left, right) => left.start - right.start
-  )) {
-    if (xml.slice(cursor, child.start).trim().length > 0) {
-      return true;
-    }
-    cursor = child.end;
-  }
-  return xml.slice(cursor, parent.closeStart).trim().length > 0;
-}
-
-function revisionRangeIsSafe(
-  context: SafeParagraphContext,
-  revision: XmlElementRange,
-  kind: "insertion" | "deletion"
-): boolean {
-  const runs = directChildElements(context.scan, revision);
-  if (
-    runs.length === 0 ||
-    runs.some((run) => run.tagName !== "w:r") ||
-    hasNonWhitespaceOutsideChildren(context.sourceXml, revision, runs)
-  ) {
-    return false;
-  }
-
-  const expectedTextTag = kind === "insertion" ? "w:t" : "w:delText";
-  for (const run of runs) {
-    const children = directChildElements(context.scan, run);
-    if (
-      children.some((child) => {
-        const name = child.tagName;
-        return name !== "w:rPr" && name !== expectedTextTag;
-      }) ||
-      hasNonWhitespaceOutsideChildren(context.sourceXml, run, children)
-    ) {
-      return false;
-    }
-    const textElements = children.filter(
-      (child) => child.tagName === expectedTextTag
-    );
-    if (
-      textElements.length === 0 ||
-      textElements.some(
-        (textElement) =>
-          textContent(context.sourceXml, textElement) === undefined
-      )
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function matchingRevisionRanges(
-  context: SafeParagraphContext,
-  target: ParagraphRevisionTarget,
-  kind: "insertion" | "deletion"
-): XmlElementRange[] {
-  const tagName = kind === "insertion" ? "w:ins" : "w:del";
-  const revisionId = String(target.revisionId).trim();
-  return elementsNamed(context.scan, tagName).filter(
-    (range) =>
-      range.parentStart === context.paragraphRange.start &&
-      xmlAttribute(range.openTag, "w:id")?.trim() === revisionId
-  );
-}
-
-function replaceRanges(
-  source: string,
-  replacements: Array<{ start: number; end: number; value: string }>
-): string {
-  let updated = source;
-  for (const replacement of [...replacements].sort(
-    (left, right) => right.start - left.start
-  )) {
-    updated =
-      updated.slice(0, replacement.start) +
-      replacement.value +
-      updated.slice(replacement.end);
-  }
-  return updated;
-}
-
-function renameBalancedElements(
-  xml: string,
-  fromTagName: string,
-  toTagName: string
-): string | undefined {
-  const scan = scanBalancedXml(xml);
-  if (scan.malformed) {
-    return undefined;
-  }
-  const replacements: Array<{ start: number; end: number; value: string }> = [];
-  for (const range of elementsNamed(scan, fromTagName)) {
-    replacements.push({
-      start: range.start + 1,
-      end: range.start + 1 + range.tagName.length,
-      value: toTagName,
-    });
-    if (!range.selfClosing) {
-      replacements.push({
-        start: range.closeStart + 2,
-        end: range.closeStart + 2 + range.tagName.length,
-        value: toTagName,
-      });
-    }
-  }
-  return replaceRanges(xml, replacements);
+  author?: string;
+  initials?: string;
+  date?: string;
 }
 
 function booleanElementValue(
-  scan: XmlScanResult,
+  scan: ReturnType<typeof scanBalancedXml>,
   tagName: string
 ): boolean | undefined {
   const element = elementsNamed(scan, tagName)[0];
@@ -595,161 +265,6 @@ function styleFromRunXml(runXml: string): TextStyle | undefined {
     : undefined;
 }
 
-function deletedRunsForTargets(
-  context: SafeParagraphContext,
-  targets: XmlElementRange[]
-): Array<{ position: number; run: TextRunNode }> | undefined {
-  const deleted: Array<{ position: number; run: TextRunNode }> = [];
-  for (const target of targets) {
-    const targetRuns = directChildElements(context.scan, target).filter(
-      (element) => element.tagName === "w:r"
-    );
-    for (const run of targetRuns) {
-      const style = styleFromRunXml(
-        context.sourceXml.slice(run.start, run.end)
-      );
-      const deletedTexts = directChildElements(context.scan, run).filter(
-        (element) => element.tagName === "w:delText"
-      );
-      for (const deletedText of deletedTexts) {
-        const text = textContent(context.sourceXml, deletedText);
-        if (text === undefined) {
-          return undefined;
-        }
-        if (text.length > 0) {
-          deleted.push({
-            position: deletedText.start,
-            run: {
-              type: "text",
-              text,
-              style: style ? { ...style } : undefined,
-            },
-          });
-        }
-      }
-    }
-  }
-  return deleted;
-}
-
-function mutateParagraphRevision(
-  model: DocModel,
-  target: ParagraphRevisionTarget,
-  action: "accept" | "reject"
-): AnnotationMutationResult {
-  const kind =
-    target.kind === "insertion"
-      ? "insertion"
-      : target.kind === "deletion"
-      ? "deletion"
-      : undefined;
-  if (!kind) {
-    return { ok: false, reason: "unsupported" };
-  }
-  const prepared = safeParagraphContext(model, target.nodeIndex);
-  if (!prepared.ok) {
-    return prepared;
-  }
-  const context = prepared.context;
-  const targets = matchingRevisionRanges(context, target, kind);
-  if (targets.length === 0) {
-    return { ok: false, reason: "stale" };
-  }
-  if (targets.length !== 1) {
-    return { ok: false, reason: "unsafe-xml" };
-  }
-  if (targets.some((range) => !revisionRangeIsSafe(context, range, kind))) {
-    return { ok: false, reason: "unsupported" };
-  }
-
-  const keepRevisionContent =
-    (kind === "insertion" && action === "accept") ||
-    (kind === "deletion" && action === "reject");
-  const replacements: Array<{ start: number; end: number; value: string }> = [];
-  for (const range of targets) {
-    let value = keepRevisionContent
-      ? context.sourceXml.slice(range.openEnd, range.closeStart)
-      : "";
-    if (kind === "deletion" && action === "reject") {
-      const renamed = renameBalancedElements(value, "w:delText", "w:t");
-      if (renamed === undefined) {
-        return { ok: false, reason: "unsafe-xml" };
-      }
-      value = renamed;
-    }
-    replacements.push({ start: range.start, end: range.end, value });
-  }
-
-  const next = cloneDocModel(model);
-  const paragraph = next.nodes[target.nodeIndex];
-  if (!paragraph || paragraph.type !== "paragraph") {
-    return { ok: false, reason: "stale" };
-  }
-  paragraph.sourceXml = replaceRanges(context.sourceXml, replacements);
-  paragraph.sourceTextPatch = undefined;
-
-  if (kind === "insertion" && action === "reject") {
-    const targetRanges = targets;
-    paragraph.children = context.visibleTokens
-      .map((token, index) => ({ token, run: paragraph.children[index] }))
-      .filter(
-        ({ token }) =>
-          !targetRanges.some(
-            (range) =>
-              token.range.start >= range.start && token.range.end <= range.end
-          )
-      )
-      .map(({ run }) => run!) as TextRunNode[];
-  } else if (kind === "deletion" && action === "reject") {
-    const deletedRuns = deletedRunsForTargets(context, targets);
-    if (!deletedRuns) {
-      return { ok: false, reason: "unsafe-xml" };
-    }
-    const events: Array<
-      | { position: number; order: 0; run: TextRunNode }
-      | { position: number; order: 1; run: TextRunNode }
-    > = context.visibleTokens.map((token, index) => ({
-      position: token.range.start,
-      order: 1,
-      run: paragraph.children[index] as TextRunNode,
-    }));
-    events.push(
-      ...deletedRuns.map(({ position, run }) => ({
-        position,
-        order: 0 as const,
-        run,
-      }))
-    );
-    events.sort(
-      (left, right) =>
-        left.position - right.position || left.order - right.order
-    );
-    paragraph.children = events.map((event) => event.run);
-  }
-
-  if (paragraph.children.length === 0) {
-    paragraph.children = [{ type: "text", text: "" }];
-  }
-  paragraph.sourceRunProvenance = sourceRunProvenanceForChildren(
-    paragraph.children
-  );
-  return { ok: true, model: next };
-}
-
-export function acceptParagraphRevision(
-  model: DocModel,
-  target: ParagraphRevisionTarget
-): AnnotationMutationResult {
-  return mutateParagraphRevision(model, target, "accept");
-}
-
-export function rejectParagraphRevision(
-  model: DocModel,
-  target: ParagraphRevisionTarget
-): AnnotationMutationResult {
-  return mutateParagraphRevision(model, target, "reject");
-}
-
 export function setCommentResolved(
   model: DocModel,
   commentId: number,
@@ -902,222 +417,607 @@ function isUtf16Boundary(text: string, offset: number): boolean {
   );
 }
 
-function textOpeningTagForSegment(openTag: string, text: string): string {
-  if (!/^\s|\s$/.test(text)) {
-    return openTag;
+type PreparedParagraph =
+  | { ok: true; paragraph: ParagraphNode; source: ParagraphSource }
+  | { ok: false; reason: AnnotationMutationFailureReason };
+
+function prepareParagraph(model: DocModel, nodeIndex: number): PreparedParagraph {
+  const paragraph = model.nodes[nodeIndex];
+  if (!paragraph) {
+    return { ok: false, reason: "stale" };
   }
-  return setXmlAttribute(openTag, "xml:space", "preserve");
+  if (paragraph.type !== "paragraph" || !paragraph.sourceXml) {
+    return { ok: false, reason: "unsupported" };
+  }
+  if (scanBalancedXml(paragraph.sourceXml).malformed) {
+    return { ok: false, reason: "unsafe-xml" };
+  }
+  if (!parseParagraphSource(paragraph.sourceXml)) {
+    return { ok: false, reason: "unsupported" };
+  }
+  const source = paragraphSourceForModel(paragraph);
+  if (!source) {
+    return { ok: false, reason: "stale" };
+  }
+  return { ok: true, paragraph, source };
 }
 
-function runXmlWithText(
-  sourceXml: string,
-  run: XmlElementRange,
-  textRange: XmlElementRange,
-  text: string
-): string {
-  const runXml = sourceXml.slice(run.start, run.end);
-  const relativeTextStart = textRange.start - run.start;
-  const relativeTextEnd = textRange.end - run.start;
-  const openTag = textOpeningTagForSegment(textRange.openTag, text);
-  const textXml = textRange.selfClosing
-    ? `<w:t${
-        /^\s|\s$/.test(text) ? ' xml:space="preserve"' : ""
-      }>${escapeXmlText(text)}</w:t>`
-    : `${openTag}${escapeXmlText(text)}${sourceXml.slice(
-        textRange.closeStart,
-        textRange.end
-      )}`;
+function withParagraph(
+  model: DocModel,
+  nodeIndex: number,
+  paragraph: ParagraphNode
+): DocModel {
+  const nodes = [...model.nodes];
+  nodes[nodeIndex] = paragraph;
+  return { ...model, nodes };
+}
+
+let newWrapperCounter = 0;
+
+function revisionWrapper(
+  tagName: "w:ins" | "w:del",
+  id: number,
+  authorship: RevisionAuthorship
+): SourceWrapper {
+  newWrapperCounter += 1;
+  const date =
+    authorship.date === undefined
+      ? ""
+      : ` w:date="${escapeXmlAttribute(authorship.date)}"`;
+  return {
+    tagName,
+    openTag: `<${tagName} w:id="${id}" w:author="${escapeXmlAttribute(
+      authorship.author
+    )}"${date}>`,
+    key: `new:${newWrapperCounter}`,
+  };
+}
+
+function isInsertionBy(wrapper: SourceWrapper, author: string): boolean {
   return (
-    runXml.slice(0, relativeTextStart) + textXml + runXml.slice(relativeTextEnd)
+    wrapper.tagName === "w:ins" &&
+    xmlAttribute(wrapper.openTag, "w:author") === author
+  );
+}
+
+function withoutFormatChange(propertiesXml: string): string {
+  return propertiesXml.replace(
+    /<w:rPrChange\b[^>]*?(?:\/>|>[\s\S]*?<\/w:rPrChange>)/g,
+    ""
+  );
+}
+
+function validRange(text: string, start: number, end: number): boolean {
+  return (
+    Number.isInteger(start) &&
+    Number.isInteger(end) &&
+    start >= 0 &&
+    end >= start &&
+    end <= text.length &&
+    isUtf16Boundary(text, start) &&
+    isUtf16Boundary(text, end)
+  );
+}
+
+function validAuthorship(authorship: RevisionAuthorship): boolean {
+  return (
+    authorship.author.trim().length > 0 &&
+    isValidXml10Text(authorship.author) &&
+    (authorship.date === undefined || isValidXmlDateTime(authorship.date))
   );
 }
 
 /**
- * Creates a comment over a plain-text range in one top-level paragraph. The
- * operation splits only the boundary runs and preserves their original rPr.
+ * Replaces `[startOffset, endOffset)` of a paragraph's visible text as a
+ * tracked change: removed text becomes `w:del`/`w:delText`, new text a
+ * `w:ins`, both copying the surrounding run's formatting. Text the same
+ * author inserted earlier is removed outright and new text joins that
+ * author's insertion, as Word does. Existing revisions and comment anchors
+ * are kept in place.
+ */
+export function replaceParagraphTextTracked(
+  model: DocModel,
+  input: TrackedTextReplacementInput
+): AnnotationMutationResult {
+  if (!validAuthorship(input) || !isValidXml10Text(input.text)) {
+    return { ok: false, reason: "unsupported" };
+  }
+  const prepared = prepareParagraph(model, input.nodeIndex);
+  if (!prepared.ok) {
+    return prepared;
+  }
+  const { startOffset: start, endOffset: end } = input;
+  const items = splitItemsAt(
+    splitItemsAt(prepared.source.items, start),
+    end
+  );
+  const current = visibleText(items);
+  if (!validRange(current, start, end)) {
+    return { ok: false, reason: "stale" };
+  }
+  if (start === end && input.text === "") {
+    return { ok: true, model };
+  }
+
+  const allocate = createRevisionIdAllocator(model);
+  const offsets = textItemOffsets(items);
+  const anchor =
+    start < end ? items[textItemIndexAt(items, start)!] : formattingAnchorAt(items, start);
+  const insertAt =
+    start < end ? textItemIndexAt(items, end - 1)! + 1 : insertionIndexAt(items, start);
+
+  const inserted: SourceItem[] = [];
+  if (input.text) {
+    const anchorRun = anchor && anchor.kind !== "marker" ? anchor : undefined;
+    const anchorWrappers = (anchorRun?.wrappers ?? []).filter(
+      (wrapper) => wrapper.tagName !== "w:del"
+    );
+    const joinsOwnInsertion = anchorWrappers.some((wrapper) =>
+      isInsertionBy(wrapper, input.author)
+    );
+    const run = {
+      openTag: anchorRun?.run.openTag ?? "<w:r>",
+      propertiesXml: withoutFormatChange(anchorRun?.run.propertiesXml ?? ""),
+    };
+    inserted.push({
+      kind: "text",
+      text: input.text,
+      run,
+      wrappers: joinsOwnInsertion
+        ? anchorWrappers
+        : [
+            ...anchorWrappers.filter((wrapper) => wrapper.tagName !== "w:ins"),
+            revisionWrapper("w:ins", allocate(), input),
+          ],
+      style:
+        anchorRun?.kind === "text"
+          ? anchorRun.style
+          : styleFromRunXml(`${run.openTag}${run.propertiesXml}</w:r>`),
+      link: anchorRun?.kind === "text" ? anchorRun.link : undefined,
+    });
+  }
+
+  let deletion: SourceWrapper | undefined;
+  const next: SourceItem[] = [];
+  items.forEach((item, index) => {
+    if (index === insertAt) {
+      next.push(...inserted);
+    }
+    const offset = offsets.get(index);
+    if (item.kind !== "text" || offset === undefined || offset < start || offset >= end) {
+      next.push(item);
+      return;
+    }
+    if (item.wrappers.some((wrapper) => isInsertionBy(wrapper, input.author))) {
+      return;
+    }
+    deletion ??= revisionWrapper("w:del", allocate(), input);
+    next.push({
+      kind: "deleted",
+      text: item.text,
+      run: item.run,
+      wrappers: [...item.wrappers, deletion],
+    });
+  });
+  if (insertAt >= items.length) {
+    next.push(...inserted);
+  }
+
+  const paragraph = paragraphWithSource(
+    prepared.paragraph,
+    { ...prepared.source, items: next },
+    allocate
+  );
+  return { ok: true, model: withParagraph(model, input.nodeIndex, paragraph) };
+}
+
+type RevisionDecision = "accept" | "reject";
+
+/**
+ * Accepts or rejects the selected `w:ins`/`w:del` wrappers. Kept content
+ * loses the wrapper (rejected deletions become visible text again); dropped
+ * content is removed. Zero-width markers inside a dropped wrapper stay.
+ */
+function resolveRevisions(
+  items: SourceItem[],
+  selected: (wrapper: SourceWrapper) => boolean,
+  decision: RevisionDecision
+): SourceItem[] {
+  const next: SourceItem[] = [];
+  for (const item of items) {
+    const targets = item.wrappers.filter(selected);
+    if (targets.length === 0) {
+      next.push(item);
+      continue;
+    }
+    const dropsContent = targets.some(
+      (wrapper) => (wrapper.tagName === "w:ins") === (decision === "reject")
+    );
+    const wrappers = item.wrappers.filter((wrapper) => !selected(wrapper));
+    if (item.kind === "marker") {
+      next.push({ ...item, wrappers });
+      continue;
+    }
+    if (dropsContent) {
+      continue;
+    }
+    if (
+      item.kind === "deleted" &&
+      !wrappers.some((wrapper) => wrapper.tagName === "w:del")
+    ) {
+      next.push({
+        kind: "text",
+        text: item.text,
+        run: item.run,
+        wrappers,
+        style: styleFromRunXml(
+          `${item.run.openTag}${item.run.propertiesXml}</w:r>`
+        ),
+      });
+      continue;
+    }
+    next.push({ ...item, wrappers });
+  }
+  return next;
+}
+
+function decideParagraphRevision(
+  model: DocModel,
+  target: ParagraphRevisionTarget,
+  decision: RevisionDecision
+): AnnotationMutationResult {
+  const tagName =
+    target.kind === "insertion"
+      ? "w:ins"
+      : target.kind === "deletion"
+      ? "w:del"
+      : undefined;
+  if (!tagName) {
+    return { ok: false, reason: "unsupported" };
+  }
+  const prepared = prepareParagraph(model, target.nodeIndex);
+  if (!prepared.ok) {
+    return prepared;
+  }
+  const revisionId = String(target.revisionId).trim();
+  const selected = (wrapper: SourceWrapper) =>
+    wrapper.tagName === tagName && revisionWrapperId(wrapper) === revisionId;
+  if (!prepared.source.items.some((item) => item.wrappers.some(selected))) {
+    return { ok: false, reason: "stale" };
+  }
+  const paragraph = paragraphWithSource(prepared.paragraph, {
+    ...prepared.source,
+    items: resolveRevisions(prepared.source.items, selected, decision),
+  });
+  return { ok: true, model: withParagraph(model, target.nodeIndex, paragraph) };
+}
+
+/** Accepts every `w:ins`/`w:del` element carrying the target id in one paragraph. */
+export function acceptParagraphRevision(
+  model: DocModel,
+  target: ParagraphRevisionTarget
+): AnnotationMutationResult {
+  return decideParagraphRevision(model, target, "accept");
+}
+
+/** Rejects every `w:ins`/`w:del` element carrying the target id in one paragraph. */
+export function rejectParagraphRevision(
+  model: DocModel,
+  target: ParagraphRevisionTarget
+): AnnotationMutationResult {
+  return decideParagraphRevision(model, target, "reject");
+}
+
+const RUN_REVISION_XML = /<w:(?:ins|del|moveFrom|moveTo)\b/;
+
+function decideAllRevisions(
+  model: DocModel,
+  decision: RevisionDecision
+): RevisionBatchResult {
+  const remainingNodeIndexes: number[] = [];
+  let nodes = model.nodes;
+  model.nodes.forEach((node, nodeIndex) => {
+    if (node.type !== "paragraph" || !RUN_REVISION_XML.test(node.sourceXml ?? "")) {
+      return;
+    }
+    const source = paragraphSourceForModel(node);
+    if (!source) {
+      remainingNodeIndexes.push(nodeIndex);
+      return;
+    }
+    if (RUN_REVISION_XML.test(source.openXml)) {
+      // Paragraph-mark revisions would merge or split paragraphs.
+      remainingNodeIndexes.push(nodeIndex);
+    }
+    const isRevision = (wrapper: SourceWrapper) =>
+      wrapper.tagName === "w:ins" || wrapper.tagName === "w:del";
+    if (!source.items.some((item) => item.wrappers.some(isRevision))) {
+      return;
+    }
+    if (nodes === model.nodes) {
+      nodes = [...model.nodes];
+    }
+    nodes[nodeIndex] = paragraphWithSource(node, {
+      ...source,
+      items: resolveRevisions(source.items, isRevision, decision),
+    });
+  });
+  return { ok: true, model: { ...model, nodes }, remainingNodeIndexes };
+}
+
+/** Accepts every run-level insertion and deletion in top-level paragraphs. */
+export function acceptAllRevisions(model: DocModel): RevisionBatchResult {
+  return decideAllRevisions(model, "accept");
+}
+
+/** Rejects every run-level insertion and deletion in top-level paragraphs. */
+export function rejectAllRevisions(model: DocModel): RevisionBatchResult {
+  return decideAllRevisions(model, "reject");
+}
+
+function validCommentFields(input: {
+  text: string;
+  author?: string;
+  initials?: string;
+  date?: string;
+}): boolean {
+  const fields = [input.text, input.author, input.initials, input.date].filter(
+    (value): value is string => value !== undefined
+  );
+  return (
+    input.text.trim().length > 0 &&
+    fields.every(isValidXml10Text) &&
+    (input.date === undefined || isValidXmlDateTime(input.date))
+  );
+}
+
+function newCommentDefinition(
+  comments: DocumentCommentDefinition[],
+  input: { text: string; author?: string; initials?: string; date?: string },
+  parentId?: number
+): DocumentCommentDefinition {
+  const id = nextCommentId(comments);
+  return {
+    id,
+    author: input.author,
+    initials: input.initials,
+    date: input.date,
+    text: input.text,
+    ...(parentId === undefined ? {} : { parentId }),
+    resolved: false,
+    extendedParagraphId: allocateExtendedParagraphId(comments, id),
+    sourceResolved: false,
+    resolutionDirty: false,
+    isNew: true,
+  };
+}
+
+/** Wrapper chain shared by both neighbours, so a new marker never splits a wrapper. */
+function sharedWrappers(
+  left: SourceItem | undefined,
+  right: SourceItem | undefined
+): SourceWrapper[] {
+  if (!left || !right) {
+    return [];
+  }
+  const shared: SourceWrapper[] = [];
+  for (const [index, wrapper] of left.wrappers.entries()) {
+    if (wrapper.key !== right.wrappers[index]?.key || wrapper.tagName === "w:del") {
+      break;
+    }
+    shared.push(wrapper);
+  }
+  return shared;
+}
+
+function commentReferenceRunXml(id: number): string {
+  return `<w:r><w:commentReference w:id="${id}"/></w:r>`;
+}
+
+/**
+ * Creates a comment over a visible-text range in one top-level paragraph,
+ * including paragraphs that already carry revisions or other comments.
  */
 export function createParagraphComment(
   model: DocModel,
   input: CreateParagraphCommentInput
 ): CommentCreationResult {
-  const prepared = safeParagraphContext(model, input.nodeIndex);
+  if (!validCommentFields(input)) {
+    return { ok: false, reason: "unsupported" };
+  }
+  const prepared = prepareParagraph(model, input.nodeIndex);
   if (!prepared.ok) {
     return prepared;
   }
-  const context = prepared.context;
-  const stringFields = [
-    input.text,
-    input.author,
-    input.initials,
-    input.date,
-  ].filter((value): value is string => value !== undefined);
-  if (
-    !input.text.trim() ||
-    stringFields.some((value) => !isValidXml10Text(value)) ||
-    (input.date !== undefined && !isValidXmlDateTime(input.date)) ||
-    !Number.isInteger(input.startOffset) ||
-    !Number.isInteger(input.endOffset) ||
-    input.startOffset < 0 ||
-    input.endOffset <= input.startOffset
-  ) {
+  const { startOffset: start, endOffset: end } = input;
+  const current = visibleText(prepared.source.items);
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start) {
     return { ok: false, reason: "unsupported" };
   }
-
-  // Keep creation intentionally narrower than resolution/revision mutation:
-  // only direct, one-text-node runs with no existing annotation/revision markup.
-  const forbiddenForCreation = new Set([
-    "w:ins",
-    "w:del",
-    "w:commentRangeStart",
-    "w:commentRangeEnd",
-    "w:commentReference",
-  ]);
-  if (
-    context.scan.elements.some((element) =>
-      forbiddenForCreation.has(element.tagName)
-    )
-  ) {
-    return { ok: false, reason: "unsupported" };
-  }
-  const directChildren = directChildElements(
-    context.scan,
-    context.paragraphRange
-  );
-  if (
-    directChildren.some((child) => {
-      const name = child.tagName;
-      return name !== "w:pPr" && name !== "w:r";
-    })
-  ) {
-    return { ok: false, reason: "unsupported" };
-  }
-  const runs = directChildren.filter((child) => child.tagName === "w:r");
-  if (runs.length !== context.visibleTokens.length) {
-    return { ok: false, reason: "unsupported" };
-  }
-  for (let index = 0; index < runs.length; index += 1) {
-    const run = runs[index]!;
-    const token = context.visibleTokens[index]!;
-    const runChildren = directChildElements(context.scan, run);
-    const textChildren = runChildren.filter((child) => child.tagName === "w:t");
-    const hasCanonicalShape =
-      (runChildren.length === 1 && runChildren[0]?.tagName === "w:t") ||
-      (runChildren.length === 2 &&
-        runChildren[0]?.tagName === "w:rPr" &&
-        runChildren[1]?.tagName === "w:t");
-    if (
-      token.enclosingRun.start !== run.start ||
-      !hasCanonicalShape ||
-      textChildren.length !== 1 ||
-      textChildren[0]!.start !== token.range.start ||
-      hasNonWhitespaceOutsideChildren(context.sourceXml, run, runChildren)
-    ) {
-      return { ok: false, reason: "unsupported" };
-    }
-  }
-
-  const visibleText = context.visibleTokens.map((token) => token.text).join("");
-  const totalLength = visibleText.length;
-  if (input.endOffset > totalLength) {
+  if (end > current.length) {
     return { ok: false, reason: "stale" };
   }
-  if (
-    !isUtf16Boundary(visibleText, input.startOffset) ||
-    !isUtf16Boundary(visibleText, input.endOffset)
-  ) {
+  if (!isUtf16Boundary(current, start) || !isUtf16Boundary(current, end)) {
+    return { ok: false, reason: "unsupported" };
+  }
+
+  const comments = model.metadata.comments ?? [];
+  const definition = newCommentDefinition(comments, input);
+  const items = splitItemsAt(splitItemsAt(prepared.source.items, start), end);
+  const startIndex = textItemIndexAt(items, start)!;
+  const endIndex = textItemIndexAt(items, end - 1)! + 1;
+  const endWrappers = sharedWrappers(items[endIndex - 1], items[endIndex]);
+  items.splice(
+    endIndex,
+    0,
+    { kind: "marker", xml: `<w:commentRangeEnd w:id="${definition.id}"/>`, wrappers: endWrappers },
+    { kind: "marker", xml: commentReferenceRunXml(definition.id), wrappers: endWrappers }
+  );
+  items.splice(startIndex, 0, {
+    kind: "marker",
+    xml: `<w:commentRangeStart w:id="${definition.id}"/>`,
+    wrappers: sharedWrappers(items[startIndex - 1], items[startIndex]),
+  });
+
+  const paragraph = paragraphWithSource(prepared.paragraph, {
+    ...prepared.source,
+    items,
+  });
+  const next = withParagraph(model, input.nodeIndex, paragraph);
+  return {
+    ok: true,
+    model: {
+      ...next,
+      metadata: { ...next.metadata, comments: [...comments, definition] },
+    },
+    commentId: definition.id,
+  };
+}
+
+function markerId(openTag: string): number | undefined {
+  const raw = xmlAttribute(openTag, "w:id")?.trim();
+  return raw !== undefined && /^-?\d+$/.test(raw) ? Number(raw) : undefined;
+}
+
+function replaceXmlRanges(
+  xml: string,
+  replacements: Array<{ start: number; end: number; value: string }>
+): string {
+  let result = xml;
+  for (const replacement of [...replacements].sort((a, b) => b.start - a.start)) {
+    result = result.slice(0, replacement.start) + replacement.value + result.slice(replacement.end);
+  }
+  return result;
+}
+
+function withReplyMarkers(xml: string, parentId: number, replyId: number): string {
+  if (!xml.includes("w:comment")) {
+    return xml;
+  }
+  const scan = scanBalancedXml(xml);
+  if (scan.malformed) {
+    return xml;
+  }
+  const replacements: Array<{ start: number; end: number; value: string }> = [];
+  for (const element of scan.elements) {
+    if (markerId(element.openTag) !== parentId) {
+      continue;
+    }
+    if (element.tagName === "w:commentRangeStart" || element.tagName === "w:commentRangeEnd") {
+      replacements.push({
+        start: element.end,
+        end: element.end,
+        value: `<${element.tagName} w:id="${replyId}"/>`,
+      });
+    } else if (element.tagName === "w:commentReference") {
+      const run = scan.elements.find((candidate) => candidate.start === element.parentStart);
+      const after = run?.tagName === "w:r" ? run.end : element.end;
+      replacements.push({ start: after, end: after, value: commentReferenceRunXml(replyId) });
+    }
+  }
+  return replaceXmlRanges(xml, replacements);
+}
+
+/**
+ * Adds a Word reply to a comment thread: the reply is linked to the thread's
+ * root through `commentsExtended` and gets its own range markers and
+ * reference next to the root's.
+ */
+export function replyToComment(
+  model: DocModel,
+  input: ReplyToCommentInput
+): CommentCreationResult {
+  if (!validCommentFields(input)) {
     return { ok: false, reason: "unsupported" };
   }
   const comments = model.metadata.comments ?? [];
-  const commentId = nextCommentId(comments);
-  const extendedParagraphId = allocateExtendedParagraphId(comments, commentId);
-  const startMarker = `<w:commentRangeStart w:id="${commentId}"/>`;
-  const endMarker = `<w:commentRangeEnd w:id="${commentId}"/><w:r><w:commentReference w:id="${commentId}"/></w:r>`;
-  const replacements: Array<{ start: number; end: number; value: string }> = [];
-  const nextChildren: TextRunNode[] = [];
-  let offset = 0;
-  let insertedStart = false;
-  let insertedEnd = false;
-
-  for (let index = 0; index < runs.length; index += 1) {
-    const run = runs[index]!;
-    const token = context.visibleTokens[index]!;
-    const modeledRun = context.paragraph.children[index] as TextRunNode;
-    const runStart = offset;
-    const runEnd = offset + token.text.length;
-    const cuts = [0, token.text.length];
-    if (input.startOffset > runStart && input.startOffset < runEnd) {
-      cuts.push(input.startOffset - runStart);
-    }
-    if (input.endOffset > runStart && input.endOffset < runEnd) {
-      cuts.push(input.endOffset - runStart);
-    }
-    cuts.sort((left, right) => left - right);
-    const uniqueCuts = cuts.filter(
-      (value, cutIndex) => value !== cuts[cutIndex - 1]
-    );
-    let runReplacement = "";
-
-    for (let cutIndex = 0; cutIndex < uniqueCuts.length - 1; cutIndex += 1) {
-      const localStart = uniqueCuts[cutIndex]!;
-      const localEnd = uniqueCuts[cutIndex + 1]!;
-      const globalStart = runStart + localStart;
-      const globalEnd = runStart + localEnd;
-      if (!insertedStart && globalStart === input.startOffset) {
-        runReplacement += startMarker;
-        insertedStart = true;
-      }
-      const segment = token.text.slice(localStart, localEnd);
-      if (segment.length > 0) {
-        runReplacement += runXmlWithText(
-          context.sourceXml,
-          run,
-          token.range,
-          segment
-        );
-        nextChildren.push({
-          type: "text",
-          text: segment,
-          style: modeledRun.style ? { ...modeledRun.style } : undefined,
-        });
-      }
-      if (!insertedEnd && globalEnd === input.endOffset) {
-        runReplacement += endMarker;
-        insertedEnd = true;
-      }
-    }
-    replacements.push({
-      start: run.start,
-      end: run.end,
-      value: runReplacement,
-    });
-    offset = runEnd;
-  }
-
-  if (!insertedStart || !insertedEnd) {
+  const byId = new Map(comments.map((comment) => [comment.id, comment]));
+  let root = byId.get(input.commentId);
+  if (!root) {
     return { ok: false, reason: "stale" };
   }
-
-  const next = cloneDocModel(model);
-  const paragraph = next.nodes[input.nodeIndex];
-  if (!paragraph || paragraph.type !== "paragraph") {
-    return { ok: false, reason: "stale" };
+  const visited = new Set<number>();
+  while (root.parentId !== undefined && byId.has(root.parentId) && !visited.has(root.id)) {
+    visited.add(root.id);
+    root = byId.get(root.parentId)!;
   }
-  paragraph.sourceXml = replaceRanges(context.sourceXml, replacements);
-  paragraph.sourceTextPatch = undefined;
-  paragraph.children = nextChildren;
-  paragraph.sourceRunProvenance = sourceRunProvenanceForChildren(nextChildren);
-  const definition: DocumentCommentDefinition = {
-    id: commentId,
-    author: input.author,
-    initials: input.initials,
-    date: input.date,
-    text: input.text,
-    resolved: false,
-    extendedParagraphId,
-    sourceResolved: false,
-    resolutionDirty: false,
-    isNew: true,
+  const rootId = root.id;
+  const definition = newCommentDefinition(comments, input, rootId);
+  return {
+    ok: true,
+    model: {
+      ...model,
+      nodes: mapBodySourceXml(model.nodes, (xml) =>
+        withReplyMarkers(xml, rootId, definition.id)
+      ),
+      metadata: { ...model.metadata, comments: [...comments, definition] },
+    },
+    commentId: definition.id,
   };
-  next.metadata.comments = [...(next.metadata.comments ?? []), definition];
-  return { ok: true, model: next, commentId };
+}
+
+function withoutCommentMarkers(xml: string, ids: Set<number>): string {
+  if (!xml.includes("w:comment")) {
+    return xml;
+  }
+  const scan = scanBalancedXml(xml);
+  if (scan.malformed) {
+    return xml;
+  }
+  const replacements: Array<{ start: number; end: number; value: string }> = [];
+  for (const element of scan.elements) {
+    const id = markerId(element.openTag);
+    if (id === undefined || !ids.has(id)) {
+      continue;
+    }
+    if (element.tagName === "w:commentRangeStart" || element.tagName === "w:commentRangeEnd") {
+      replacements.push({ start: element.start, end: element.end, value: "" });
+    } else if (element.tagName === "w:commentReference") {
+      const run = scan.elements.find((candidate) => candidate.start === element.parentStart);
+      const referenceOnlyRun =
+        run?.tagName === "w:r" &&
+        directChildElements(scan, run).every(
+          (child) => child === element || child.tagName === "w:rPr"
+        );
+      const removed = referenceOnlyRun ? run : element;
+      replacements.push({ start: removed.start, end: removed.end, value: "" });
+    }
+  }
+  return replaceXmlRanges(xml, replacements);
+}
+
+/**
+ * Deletes a comment with its range markers and reference. Deleting a thread's
+ * root deletes its replies too, as Word does.
+ */
+export function deleteComment(
+  model: DocModel,
+  commentId: number
+): AnnotationMutationResult {
+  const comments = model.metadata.comments ?? [];
+  if (!comments.some((comment) => comment.id === commentId)) {
+    return { ok: false, reason: "stale" };
+  }
+  const deleted = new Set([commentId]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const comment of comments) {
+      if (comment.parentId !== undefined && deleted.has(comment.parentId) && !deleted.has(comment.id)) {
+        deleted.add(comment.id);
+        grew = true;
+      }
+    }
+  }
+  return {
+    ok: true,
+    model: {
+      ...model,
+      nodes: mapBodySourceXml(model.nodes, (xml) => withoutCommentMarkers(xml, deleted)),
+      metadata: {
+        ...model.metadata,
+        comments: comments.filter((comment) => !deleted.has(comment.id)),
+      },
+    },
+  };
 }

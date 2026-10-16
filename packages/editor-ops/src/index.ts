@@ -33,11 +33,27 @@ export type {
   TableGridColumnInsertionPlan,
   TableGridColumnInsertionRowPlan,
 } from "./table-grid";
+import {
+  ANNOTATION_MARKUP_XML,
+  paragraphSourceForModel,
+  paragraphWithSource,
+  splitItemsAt,
+  formattingAnchorAt,
+  insertionIndexAt,
+  textItemOffsets,
+  visibleText,
+  type SourceItem,
+} from "./paragraph-source";
 
 export {
+  acceptAllRevisions,
   acceptParagraphRevision,
   createParagraphComment,
+  deleteComment,
+  rejectAllRevisions,
   rejectParagraphRevision,
+  replaceParagraphTextTracked,
+  replyToComment,
   setCommentResolved,
 } from "./annotations";
 export type {
@@ -47,6 +63,10 @@ export type {
   CreateParagraphCommentInput,
   ParagraphRevisionKind,
   ParagraphRevisionTarget,
+  ReplyToCommentInput,
+  RevisionAuthorship,
+  RevisionBatchResult,
+  TrackedTextReplacementInput,
 } from "./annotations";
 
 export interface InsertParagraphOptions {
@@ -356,13 +376,84 @@ function paragraphTextEditIsFailClosed(
   paragraph: ParagraphNode,
   text: string
 ): boolean {
+  if (paragraphEditableText(paragraph) === text || !paragraph.sourceXml) {
+    return false;
+  }
+  // Regenerating these paragraphs would drop revisions or comment anchors.
   return (
-    paragraphEditableText(paragraph) !== text &&
-    Boolean(
-      paragraph.sourceXml &&
-        FAIL_CLOSED_SOURCE_TEXT_EDIT_XML.test(paragraph.sourceXml)
-    )
+    FAIL_CLOSED_SOURCE_TEXT_EDIT_XML.test(paragraph.sourceXml) ||
+    (ANNOTATION_MARKUP_XML.test(paragraph.sourceXml) &&
+      !paragraphSourceForModel(paragraph))
   );
+}
+
+/**
+ * Applies a plain (untracked) text edit to a paragraph that carries
+ * revisions or comment anchors by rewriting its source XML, so deleted text,
+ * revision wrappers and comment markers survive. New text joins the run
+ * before it (or after it at the paragraph start), including that run's
+ * `w:ins`, and takes its formatting; zero-width items inside the replaced
+ * range collapse to the edit point.
+ */
+function annotatedParagraphWithText(
+  source: ParagraphNode,
+  text: string
+): ParagraphNode | undefined {
+  if (!source.sourceXml || !ANNOTATION_MARKUP_XML.test(source.sourceXml)) {
+    return undefined;
+  }
+  const parsed = paragraphSourceForModel(source);
+  if (!parsed) {
+    return undefined;
+  }
+  const current = visibleText(parsed.items);
+  const prefix = commonPrefixLength(current, text);
+  const suffix = commonSuffixLength(current, text, prefix);
+  const start = prefix;
+  const end = current.length - suffix;
+  const insertedText = text.slice(prefix, text.length - suffix);
+  const items = splitItemsAt(splitItemsAt(parsed.items, start), end);
+  const anchor = formattingAnchorAt(items, start);
+  const insertAt = insertionIndexAt(items, start);
+  const inserted: SourceItem[] =
+    insertedText && anchor
+      ? [
+          {
+            kind: "text",
+            text: insertedText,
+            run: anchor.run,
+            wrappers: anchor.wrappers.filter(
+              (wrapper) => wrapper.tagName !== "w:del"
+            ),
+            style: anchor.kind === "text" ? anchor.style : undefined,
+            link: anchor.kind === "text" ? anchor.link : undefined,
+          },
+        ]
+      : insertedText
+      ? [
+          {
+            kind: "text",
+            text: insertedText,
+            run: { openTag: "<w:r>", propertiesXml: "" },
+            wrappers: [],
+          },
+        ]
+      : [];
+  const offsets = textItemOffsets(items);
+  const next: SourceItem[] = [];
+  items.forEach((item, index) => {
+    if (index === insertAt) {
+      next.push(...inserted);
+    }
+    const offset = offsets.get(index);
+    if (offset === undefined || offset < start || offset >= end) {
+      next.push(item);
+    }
+  });
+  if (insertAt >= items.length) {
+    next.push(...inserted);
+  }
+  return paragraphWithSource(source, { ...parsed, items: next });
 }
 
 function updatedParagraphNodeText(
@@ -372,6 +463,10 @@ function updatedParagraphNodeText(
 ): ParagraphNode {
   if (paragraphEditableText(source) === text) {
     return source;
+  }
+  const annotated = annotatedParagraphWithText(source, text);
+  if (annotated) {
+    return annotated;
   }
 
   const paragraph: ParagraphNode = {
