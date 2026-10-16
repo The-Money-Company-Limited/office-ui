@@ -1337,7 +1337,6 @@ function EditorToolbar({
   const { activeCell, activeCellAddress, selectRange, selection } =
     useXlsxViewerSelection()
   const {
-    addSheet,
     canRedo,
     canUndo,
     mergeSelection,
@@ -2323,25 +2322,6 @@ function EditorToolbar({
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            <ToolbarTooltip label="Add sheet">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Add sheet"
-                disabled={!hasWorkbook || readOnly}
-                onClick={() => addSheet()}
-              >
-                <IconPlaceholder
-                  lucide="Plus"
-                  tabler="IconPlus"
-                  hugeicons="Add01Icon"
-                  phosphor="PlusIcon"
-                  remixicon="RiAddLine"
-                  className="size-4"
-                />
-              </Button>
-            </ToolbarTooltip>
             <ToolbarTooltip label="Remove active sheet">
               <Button
                 type="button"
@@ -2714,7 +2694,16 @@ export function XlsxEditorSurface({
   workbookIdentity: string
 }) {
   const { activeSheet, error } = useXlsxViewer()
-  const { activeCell } = useXlsxViewerSelection()
+  const { activeCell, selectCell } = useXlsxViewerSelection()
+  const { addSheet, readOnly } = useXlsxViewerEditing()
+  // A sheet opens with A1 selected, as in Excel and Sheets, so the name box
+  // and formula bar always say where typing goes.
+  const activeSheetName = activeSheet?.name
+  React.useEffect(() => {
+    if (activeSheetName !== undefined && !activeCell) {
+      selectCell({ col: 0, row: 0 })
+    }
+  }, [activeCell, activeSheetName, selectCell])
   const toolbarRef = React.useRef<HTMLDivElement>(null)
   const toolbarHeight = useElementHeight(toolbarRef)
   const [commentTarget, setCommentTarget] =
@@ -2758,7 +2747,12 @@ export function XlsxEditorSurface({
       workbookIdentity={workbookIdentity}
     />
   )
-  const sheetTabs = <WorkbookSheetTabs workbookIdentity={workbookIdentity} />
+  const sheetTabs = (
+    <WorkbookSheetTabs
+      onAddSheet={readOnly ? undefined : () => addSheet()}
+      workbookIdentity={workbookIdentity}
+    />
+  )
 
   return (
     <div

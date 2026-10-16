@@ -993,12 +993,11 @@ export function PptxViewerPreview({
     React.useState<HTMLDivElement | null>(null)
   const [uploadedPresentation, setUploadedPresentation] =
     React.useState<UploadedPresentation | null>(null)
-  const [sidebarOpen, setSidebarOpen] = React.useState(
-    defaultThumbnailSidebarOpen
-  )
-  const [thumbnailSidebarMounted, setThumbnailSidebarMounted] = React.useState(
-    defaultThumbnailSidebarOpen
-  )
+  // Null until the reader toggles the slide strip; until then it is open by
+  // default only where it fits beside the slides, as in Google Slides.
+  const [sidebarChoice, setSidebarChoice] = React.useState<boolean | null>(null)
+  const [thumbnailSidebarMounted, setThumbnailSidebarMounted] =
+    React.useState(false)
   const [activeSlideIndex, setActiveSlideIndex] = React.useState(
     requestedInitialSlideIndex
   )
@@ -1013,6 +1012,8 @@ export function PptxViewerPreview({
   const [controller, setController] =
     React.useState<PptxViewerController | null>(null)
   const sidebarInline = useInlineThumbnailSidebar(viewerShellWidth)
+  const sidebarOpen =
+    sidebarChoice ?? (defaultThumbnailSidebarOpen && sidebarInline)
   const activeUploadedPresentation =
     uploadedPresentation?.sourceUrl === src ? uploadedPresentation : null
   const source: PresentationSource | undefined =
@@ -1391,7 +1392,7 @@ export function PptxViewerPreview({
       isPreparingDownload={isPreparingDownload}
       onDownload={handleDownload}
       onSlideChange={handleSlideChange}
-      onToggleSidebar={() => setSidebarOpen((open) => !open)}
+      onToggleSidebar={() => setSidebarChoice(!sidebarOpen)}
       onUploadClick={() => fileInputRef.current?.click()}
       onZoomChange={setZoomLevel}
       resolvedZoom={resolvedZoom}
@@ -1444,7 +1445,7 @@ export function PptxViewerPreview({
       showThumbnails={false}
       virtualization={virtualization}
       slideIdPrefix={slideIdPrefix}
-      className="min-h-full !border-0 !bg-background [&_.rpv-stage]:min-h-full [&_.rpv-stage]:!bg-background [&_.rpv-status]:!bg-background [&_.rpv-workspace]:min-h-full [&_[data-rpv-list-item]]:[contain:layout_paint_style]"
+      className="min-h-full !border-0 !bg-transparent [&_.rpv-stage]:min-h-full [&_.rpv-stage]:!bg-transparent [&_.rpv-status]:!bg-transparent [&_.rpv-workspace]:min-h-full [&_[data-rpv-list-item]]:[contain:layout_paint_style]"
       viewportClassName="!min-h-full !px-4 !py-6"
       renderLoading={() => (
         <ViewerLoadingSurface showSpinner={shouldShowLoadingSpinner} />
@@ -1498,8 +1499,8 @@ export function PptxViewerPreview({
         ref={viewerShellRef}
         className={
           scrollsWindow
-            ? "relative flex flex-1 bg-background"
-            : "relative flex min-h-0 flex-1 overflow-hidden bg-background"
+            ? "relative flex flex-1 bg-muted/30"
+            : "relative flex min-h-0 flex-1 overflow-hidden bg-muted/30"
         }
       >
         <DocumentViewerThumbnailSidebar
@@ -1529,14 +1530,14 @@ export function PptxViewerPreview({
           <div
             ref={setViewportElement}
             aria-label="PowerPoint presentation"
-            className="min-w-0 flex-1 bg-background"
+            className="min-w-0 flex-1"
             onPointerDown={handleViewerUserScrollIntent}
           >
             {slides}
           </div>
         ) : (
           <ScrollArea
-            className="min-h-0 flex-1 bg-background"
+            className="min-h-0 flex-1"
             viewportClassName="p-0"
             viewportProps={{
               "aria-label": "PowerPoint presentation",

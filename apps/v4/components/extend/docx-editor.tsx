@@ -6,7 +6,6 @@ import {
   paragraphLetterheadFloatSideAtNodeIndex,
   useDocxBorders,
   useDocxComments,
-  useDocxDocumentTheme,
   useDocxEditor,
   useDocxLineSpacing,
   useDocxPageLayout,
@@ -16,7 +15,6 @@ import {
   type DocxBorderContext,
   type DocxBorderPreset,
   type DocxCommentCardRenderProps,
-  type DocxDocumentTheme,
   type DocxEditorController,
   type DocxEditorViewerMode,
   type DocxTrackedChangeCardRenderProps,
@@ -607,32 +605,8 @@ function resolveHighlightPreview(value?: string) {
   return HIGHLIGHT_PREVIEW_COLORS[normalized]
 }
 
-function themedPreviewColor(
-  color: string | undefined,
-  documentTheme: DocxDocumentTheme
-) {
-  if (documentTheme !== "dark") return color
-  if (!color) return "#f3f4f6"
-
-  const normalized = color.trim().toLowerCase()
-  if (
-    normalized === "#000" ||
-    normalized === "#000000" ||
-    normalized === "#111111" ||
-    normalized === "#111827" ||
-    normalized === "black" ||
-    normalized === "rgb(0,0,0)" ||
-    normalized === "rgb(0, 0, 0)"
-  ) {
-    return "#f3f4f6"
-  }
-
-  return color
-}
-
 function paragraphStylePreviewStyle(
-  option: ParagraphStyleDefinition,
-  documentTheme: DocxDocumentTheme
+  option: ParagraphStyleDefinition
 ): React.CSSProperties {
   const runStyle = resolveParagraphStyleRunPreview(option)
   const textDecoration = [
@@ -652,7 +626,7 @@ function paragraphStylePreviewStyle(
     textDecoration: textDecoration || undefined,
     color:
       runStyle?.color !== undefined
-        ? themedPreviewColor(normalizeHexColor(runStyle.color), documentTheme)
+        ? normalizeHexColor(runStyle.color)
         : undefined,
     backgroundColor: resolveHighlightPreview(runStyle?.highlight),
     lineHeight: 1,
@@ -982,39 +956,23 @@ function DocxSidebarThumbnail({
 }
 
 function ParagraphStylePreviewCard({
-  documentTheme,
   option,
 }: {
-  documentTheme: DocxDocumentTheme
   option: ParagraphStyleDefinition
 }) {
-  const surfaceStyle: React.CSSProperties =
-    documentTheme === "dark"
-      ? {
-          backgroundColor: "#111827",
-          borderColor: "#374151",
-          color: "#f3f4f6",
-        }
-      : {
-          backgroundColor: "#ffffff",
-          borderColor: "#d4d4d8",
-          color: "#111827",
-        }
-  const secondaryTextColor = documentTheme === "dark" ? "#9ca3af" : "#6b7280"
-
   return (
     <div className="w-[260px] p-3">
       <p className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
         Style Preview
       </p>
-      <div className="mt-2 rounded-sm border p-2.5" style={surfaceStyle}>
-        <p style={paragraphStylePreviewStyle(option, documentTheme)}>
+      <div className="mt-2 rounded-sm border border-zinc-300 bg-white p-2.5 text-zinc-900">
+        <p style={paragraphStylePreviewStyle(option)}>
           {option.name}
         </p>
         <p
           className="mt-1 text-[11px]"
           style={{
-            color: secondaryTextColor,
+            color: "#6b7280",
             textAlign: option.align ?? "left",
           }}
         >
@@ -1029,6 +987,7 @@ function DocxEditorToolbar({
   controlsDisabled,
   editor,
   fileName,
+  isDark,
   mode,
   onImageUploadClick,
   onIsDarkChange,
@@ -1037,12 +996,13 @@ function DocxEditorToolbar({
   onToggleSidebar,
   onUploadClick,
   setZoomScale,
-  showNightRenderToggle,
+  showAppearanceToggle,
   zoomScale,
 }: {
   controlsDisabled: boolean
   editor: DocxEditorController
   fileName: string
+  isDark: boolean
   mode: DocxEditorMode
   onImageUploadClick: () => void
   onIsDarkChange: (checked: boolean) => void
@@ -1052,10 +1012,9 @@ function DocxEditorToolbar({
   /** Opens a file picker to replace the document; no button without it. */
   onUploadClick?: () => void
   setZoomScale: React.Dispatch<React.SetStateAction<number>>
-  showNightRenderToggle: boolean
+  showAppearanceToggle: boolean
   zoomScale: number
 }) {
-  const { documentTheme, setDocumentTheme } = useDocxDocumentTheme(editor)
   const { layout: pageLayout } = useDocxPageLayout(editor)
   const { paragraphStyles, selectedParagraphStyleId, setParagraphStyle } =
     useDocxParagraphStyles(editor)
@@ -1280,22 +1239,13 @@ function DocxEditorToolbar({
             </span>
           </div>
           {mode === "viewing" ? zoomControls : null}
-          {showNightRenderToggle ? (
+          {showAppearanceToggle ? (
             <>
               <ToolbarIconButton
-                label={
-                  documentTheme === "dark"
-                    ? "Use light document"
-                    : "Use dark document"
-                }
-                disabled={controlsDisabled}
-                onClick={() => {
-                  const nextIsDark = documentTheme !== "dark"
-                  setDocumentTheme(nextIsDark ? "dark" : "light")
-                  onIsDarkChange(nextIsDark)
-                }}
+                label={isDark ? "Use light appearance" : "Use dark appearance"}
+                onClick={() => onIsDarkChange(!isDark)}
               >
-                {documentTheme === "dark" ? (
+                {isDark ? (
                   <Sun03Glyph className="size-4" />
                 ) : (
                   <Moon02Glyph className="size-4" />
@@ -1516,10 +1466,7 @@ function DocxEditorToolbar({
                       data-slot="paragraph-style-preview-card"
                       className="origin-(--transform-origin) rounded-lg border bg-popover text-popover-foreground shadow-lg/5 transition-opacity duration-100 outline-none not-dark:bg-clip-padding before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:opacity-0 data-starting-style:opacity-0 dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
                     >
-                      <ParagraphStylePreviewCard
-                        documentTheme={documentTheme}
-                        option={option}
-                      />
+                      <ParagraphStylePreviewCard option={option} />
                     </PreviewCardContent>
                   </PreviewCard>
                 ))}
@@ -2026,7 +1973,7 @@ export function DocxEditorPreview({
       effectiveIsDark={isDark}
       fileName={fileName}
       setIsDark={onIsDarkChange}
-      shouldRenderNightMode
+      showAppearanceToggle
       showUpload={showUpload}
       url={src}
     />
@@ -2043,7 +1990,7 @@ function DocxEditorContent({
   fileName,
   scrollsWindow = false,
   setIsDark,
-  shouldRenderNightMode,
+  showAppearanceToggle,
   showUpload,
   url,
 }: {
@@ -2056,7 +2003,7 @@ function DocxEditorContent({
   effectiveIsDark: boolean
   fileName?: string
   setIsDark: (checked: boolean) => void
-  shouldRenderNightMode: boolean
+  showAppearanceToggle: boolean
   showUpload: boolean
   url?: string
 }) {
@@ -2089,19 +2036,15 @@ function DocxEditorContent({
       (url ? formatDocumentName(fileName, url) : (fileName ?? "document.docx")),
     [fileName, uploadedDocxFile?.file.name, url]
   )
-  const [initialDocumentTheme] = React.useState<DocxDocumentTheme>(() =>
-    effectiveIsDark ? "dark" : "light"
-  )
   const editorOptions = React.useMemo(
     () => ({
       author,
-      initialDocumentTheme,
       initialFileName: displayFileName,
       // Suggesting shows the changes and comments it is about.
       initialShowComments: defaultMode === "suggesting",
       initialShowTrackedChanges: defaultMode === "suggesting",
     }),
-    [author, defaultMode, displayFileName, initialDocumentTheme]
+    [author, defaultMode, displayFileName]
   )
   const editor = useDocxEditor(editorOptions)
   const { layout: pageLayout } = useDocxPageLayout(editor)
@@ -2121,7 +2064,7 @@ function DocxEditorContent({
       ),
     [zoomScale]
   )
-  const { importDocxFile, setDocumentTheme, status } = editor
+  const { importDocxFile, status } = editor
   const [reportedPageCount, setReportedPageCount] = React.useState(0)
   const thumbnailEditor = React.useMemo<DocxEditorController>(
     () => ({
@@ -2240,10 +2183,6 @@ function DocxEditorContent({
   React.useEffect(() => {
     scrollViewportTo(0)
   }, [resolvedDefaultZoomScale, scrollViewportTo, url])
-
-  React.useEffect(() => {
-    setDocumentTheme(effectiveIsDark ? "dark" : "light")
-  }, [effectiveIsDark, setDocumentTheme])
 
   // Suggesting refuses edits it cannot track; the status says why, briefly.
   const [seenRefusalNonce, setSeenRefusalNonce] = React.useState(
@@ -2479,6 +2418,7 @@ function DocxEditorContent({
           controlsDisabled={controlsDisabled}
           editor={editor}
           fileName={displayFileName}
+          isDark={effectiveIsDark}
           mode={mode}
           onImageUploadClick={() => imageInputRef.current?.click()}
           onIsDarkChange={setIsDark}
@@ -2489,7 +2429,7 @@ function DocxEditorContent({
             showUpload ? () => fileInputRef.current?.click() : undefined
           }
           setZoomScale={setZoomScale}
-          showNightRenderToggle={shouldRenderNightMode}
+          showAppearanceToggle={showAppearanceToggle}
           zoomScale={zoomScale}
         />
       </div>
@@ -2642,13 +2582,7 @@ function DocxEditorContent({
             loadingState
           ) : (
             <div className="mx-auto flex min-h-full justify-center">
-              <div
-                className={cn(
-                  "origin-top",
-                  editor.documentTheme === "dark" && "docx-night-reader-shell"
-                )}
-                style={{ zoom: zoomScale / 100 }}
-              >
+              <div className="origin-top" style={{ zoom: zoomScale / 100 }}>
                 <DocxEditorViewer
                   editor={editor}
                   anchorIdPrefix={anchorIdPrefix}
@@ -2658,9 +2592,6 @@ function DocxEditorContent({
                   showComments={editor.showComments}
                   renderCommentCard={renderCommentCard}
                   loadingState={loadingState}
-                  pageBackgroundColor={
-                    editor.documentTheme === "dark" ? "#0a0a0a" : undefined
-                  }
                   pageGapBackgroundColor={viewerBackgroundColor}
                   pageVirtualization={pageVirtualization}
                   deferInitialPaginationPaint={false}

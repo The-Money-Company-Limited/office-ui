@@ -141,6 +141,7 @@ function App() {
           ) : artifact?.kind === "pptx" ? (
             <PptxViewer
               {...documentProps}
+              defaultThumbnailSidebarOpen
               scrollsWindow
               showUpload={false}
               slideIdPrefix=""

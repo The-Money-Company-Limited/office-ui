@@ -1074,12 +1074,16 @@ type WorkbookSheetTab = {
 type WorkbookSheetTabsInnerProps = {
   activeSheetIndex: number
   onActiveSheetIndexChange: (index: number) => void
+  onAddSheet?: () => void
   sheets: WorkbookSheetTab[]
 }
 
 export function WorkbookSheetTabs({
+  onAddSheet,
   workbookIdentity,
 }: {
+  /** Shows a + before the tabs, as Google Sheets does. */
+  onAddSheet?: () => void
   workbookIdentity: string
 }) {
   const { activeSheetIndex, setActiveSheetIndex, sheets } = useXlsxViewer()
@@ -1094,6 +1098,7 @@ export function WorkbookSheetTabs({
       key={workbookIdentity}
       activeSheetIndex={activeSheetIndex}
       onActiveSheetIndexChange={handleActiveSheetIndexChange}
+      onAddSheet={onAddSheet}
       sheets={sheets}
     />
   )
@@ -1102,6 +1107,7 @@ export function WorkbookSheetTabs({
 const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
   activeSheetIndex,
   onActiveSheetIndexChange,
+  onAddSheet,
   sheets,
 }: WorkbookSheetTabsInnerProps) {
   const [visiblePreviewIndex, setVisiblePreviewIndex] = React.useState<
@@ -1285,13 +1291,33 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
 
   return (
     <div
-      className="border-t bg-muted/40 px-3 py-2"
+      className="flex items-center gap-2 border-t bg-muted/40 px-3 py-2"
       onMouseLeave={handleContainerLeave}
     >
+      {onAddSheet ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Add sheet"
+          title="Add sheet"
+          className="shrink-0"
+          onClick={onAddSheet}
+        >
+          <IconPlaceholder
+            lucide="Plus"
+            tabler="IconPlus"
+            hugeicons="Add01Icon"
+            phosphor="PlusIcon"
+            remixicon="RiAddLine"
+            className="size-4"
+          />
+        </Button>
+      ) : null}
       <Tabs
         value={String(activeSheetIndex)}
         onValueChange={(value) => onActiveSheetIndexChange(Number(value))}
-        className="gap-0"
+        className="min-w-0 flex-1 gap-0"
       >
         <ScrollArea
           orientation="horizontal"
