@@ -109,6 +109,10 @@ describe("viewer dark editing colors", () => {
     expect(html).toContain("color:#9eb6e1");
   });
 
+  it("lightens black written as rgb()", () => {
+    expect(editableDarkHtml("rgb(0, 0, 0)")).toContain("color:#f2f2f2");
+  });
+
   it("keeps a run color that already reads on the dark page", () => {
     expect(editableDarkHtml("#ff0000")).toContain("color:#ff0000");
   });

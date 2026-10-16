@@ -64,7 +64,7 @@ import {
   planTableGridColumnDeletion,
   planTableGridColumnInsertion,
   rejectAllRevisions as rejectAllRevisionsInModel,
-  readParagraphMarkInsertion,
+  readParagraphMarkRevisions,
   rejectParagraphRevision,
   replyToComment as replyToCommentInModel,
   setCommentResolved as setCommentResolvedInModel,
@@ -4206,7 +4206,9 @@ export type DocxTrackedChangeKind =
   | "format-change"
   | "paragraph-format-change"
   /** A paragraph break inserted as a tracked change (Enter while suggesting). */
-  | "paragraph-insertion";
+  | "paragraph-insertion"
+  /** A paragraph break removed as a tracked change, joining the next paragraph. */
+  | "paragraph-deletion";
 
 export interface DocxTrackedChange {
   id: string;
@@ -19102,8 +19104,7 @@ function themedRunColor(
     return "#f3f4f6";
   }
   const normalized = color.trim().toLowerCase();
-  const rgb =
-    normalized === "black" ? [0, 0, 0] : parseHexRgb(normalized);
+  const rgb = normalized === "black" ? [0, 0, 0] : parseRgb(normalized);
   if (!rgb) {
     return color;
   }
@@ -19157,7 +19158,13 @@ function themedRunColor(
     .join("")}`;
 }
 
-function parseHexRgb(color: string): number[] | null {
+/** `#rgb`, `#rrggbb` (the `#` optional) or `rgb(r, g, b)` as 0–255 channels. */
+function parseRgb(color: string): number[] | null {
+  const channels = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/.exec(color);
+  if (channels) {
+    const values = channels.slice(1).map(Number);
+    return values.every((value) => value <= 255) ? values : null;
+  }
   const hex = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/.exec(color)?.[1];
   if (!hex) {
     return null;
@@ -19747,6 +19754,14 @@ function trackedChangeKindFromTagName(
     default:
       return undefined;
   }
+}
+
+/** A card's name for a change that is only whitespace, such as a deleted space. */
+function whitespaceChangeSnippet(value: string): string | undefined {
+  if (!value || /\S/.test(value)) {
+    return undefined;
+  }
+  return value.includes("\t") ? "Tab" : "Space";
 }
 
 function normalizeTrackedChangeSnippet(value?: string): string | undefined {
@@ -21031,12 +21046,14 @@ function resolveParagraphTrackedMarkup(
     const visibleChildCount =
       visibleTokens.filter((token) => token.text.length > 0 || token.isNote)
         .length + (hasImage ? 1 : 0);
-    const visibleText = normalizeTrackedChangeSnippet(
-      visibleTokens.map((token) => token.text).join("")
-    );
-    const deletedText = normalizeTrackedChangeSnippet(
-      deletedTokens.map((token) => token.text).join("")
-    );
+    const visibleRawText = visibleTokens.map((token) => token.text).join("");
+    const deletedRawText = deletedTokens.map((token) => token.text).join("");
+    const visibleText =
+      normalizeTrackedChangeSnippet(visibleRawText) ??
+      whitespaceChangeSnippet(visibleRawText);
+    const deletedText =
+      normalizeTrackedChangeSnippet(deletedRawText) ??
+      whitespaceChangeSnippet(deletedRawText);
 
     if (isDeletionLike) {
       const deletionSnippet = deletedText ?? (hasImage ? "[image]" : undefined);
@@ -21050,11 +21067,12 @@ function resolveParagraphTrackedMarkup(
         revisionDate,
         deletionSnippet
       );
-      if (deletedText) {
+      if (deletedRawText) {
         const segments =
           deletedSegmentsByVisibleChildIndex.get(visibleChildIndex) ?? [];
+        // The page shows the deleted text as it was, spaces included.
         segments.push({
-          text: deletedText,
+          text: deletedRawText,
           change,
           style: trackedRunStyle,
         });
@@ -21151,16 +21169,9 @@ function resolveParagraphTrackedMarkup(
     );
   });
 
-  const markInsertion = readParagraphMarkInsertion(sourceXml);
-  if (markInsertion) {
-    getOrCreateChange(
-      "paragraph-insertion",
-      markInsertion.id,
-      markInsertion.author,
-      markInsertion.date,
-      undefined
-    );
-  }
+  readParagraphMarkRevisions(sourceXml).forEach((mark) => {
+    getOrCreateChange(mark.kind, mark.id, mark.author, mark.date, undefined);
+  });
 
   const hasInlineChanges = inlineChangeByVisibleChildIndex.some(Boolean);
   const hasDeletedSegments = deletedSegmentsByVisibleChildIndex.size > 0;
@@ -27889,6 +27900,7 @@ function trackedChangeKindLabel(kind: DocxTrackedChangeKind): string {
     case "paragraph-format-change":
       return "Paragraph formatting";
     case "paragraph-insertion":
+    case "paragraph-deletion":
       return "Paragraph break";
     default:
       return kind;
@@ -30816,7 +30828,8 @@ export function useDocxEditor(
         change.location.kind !== "paragraph" ||
         (change.kind !== "insertion" &&
           change.kind !== "deletion" &&
-          change.kind !== "paragraph-insertion")
+          change.kind !== "paragraph-insertion" &&
+          change.kind !== "paragraph-deletion")
       ) {
         const failure = { ok: false, reason: "unsupported" } as const;
         setStatus(
@@ -31057,7 +31070,8 @@ export function useDocxEditor(
             change.location.kind === "paragraph" &&
             (change.kind === "insertion" ||
               change.kind === "deletion" ||
-              change.kind === "paragraph-insertion")
+              change.kind === "paragraph-insertion" ||
+              change.kind === "paragraph-deletion")
           ) {
             const target = {
               nodeIndex: change.location.nodeIndex,
@@ -32124,7 +32138,17 @@ export function useDocxEditor(
 
       applyModelChange(
         (current) => {
-          let next = cloneDocModel(current);
+          // Between body paragraphs only the two ends change, so only they are
+          // copied and every other node keeps its identity (suggesting
+          // compares nodes by identity).
+          let next =
+            normalizedRange.start.location.kind === "paragraph" &&
+            normalizedRange.end.location.kind === "paragraph"
+              ? copyModelForParagraphEdits(current, [
+                  normalizedRange.start.location,
+                  normalizedRange.end.location,
+                ])
+              : cloneDocModel(current);
           const clearNumberingIfParagraphEmpty = (
             location: ParagraphLocation
           ): void => {
@@ -66060,6 +66084,8 @@ export function DocxEditorViewer({
                         ? "Formatting"
                         : trackedChange.kind === "paragraph-insertion"
                         ? "New paragraph"
+                        : trackedChange.kind === "paragraph-deletion"
+                        ? "Joined with the next paragraph"
                         : "Change")
                     : comment?.text || "Comment";
                   const cardWidthPx = Math.max(
@@ -66181,7 +66207,8 @@ export function DocxEditorViewer({
                       trackedChange.location.kind === "paragraph" &&
                       (trackedChange.kind === "insertion" ||
                         trackedChange.kind === "deletion" ||
-                        trackedChange.kind === "paragraph-insertion") ? (
+                        trackedChange.kind === "paragraph-insertion" ||
+                        trackedChange.kind === "paragraph-deletion") ? (
                         <div
                           style={{
                             display: "flex",

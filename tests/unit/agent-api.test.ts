@@ -254,6 +254,24 @@ describe("agent document API", () => {
     expect(after.paragraphs()[1]!.text).toBe("Hello world, hello again");
   });
 
+  it("lists a break Word marked deleted and joins the paragraphs on accept", async () => {
+    const pkg = createMinimalDocxPackage(
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W_NS}"><w:body>` +
+        `<w:p><w:pPr><w:rPr><w:del w:id="9" w:author="Bob" w:date="${DATE}"/></w:rPr></w:pPr><w:r><w:t>One</w:t></w:r></w:p>` +
+        `<w:p><w:r><w:t xml:space="preserve"> two</w:t></w:r></w:p>` +
+        `</w:body></w:document>`
+    );
+    const doc = await openDocx(await packageToArrayBuffer(pkg));
+    expect(doc.revisions()).toEqual({
+      revisions: [
+        { id: "9", kind: "paragraph-deletion", author: "Bob", date: DATE, text: "", paragraphId: "p-n0" },
+      ],
+      unlisted: [],
+    });
+    doc.accept("9");
+    expect((await reopened(doc)).paragraphs().map((paragraph) => paragraph.text)).toEqual(["One two"]);
+  });
+
   it("reports revisions it cannot list instead of claiming none remain", async () => {
     const table =
       `<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc>` +

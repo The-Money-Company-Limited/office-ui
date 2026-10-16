@@ -14,6 +14,7 @@ import {
 } from "@extend-ai/react-docx-doc-model";
 import {
   acceptParagraphRevision,
+  joinParagraphsTracked,
   readParagraphAnnotations,
   rejectAllRevisions,
   rejectParagraphRevision,
@@ -306,6 +307,19 @@ describe("suggesting controller", () => {
     expect(editor.canUndo).toBe(false);
   });
 
+  it("lists a deleted space as a change the reviewer can see", async () => {
+    const model = await load(PLAIN);
+    const editor = runControllerSteps(model, [
+      (editor) => {
+        editor.registerSuggestingMode();
+        editor.commitParagraphText(0, "Helloworld");
+      },
+    ]);
+    expect(editor.trackedChanges.map(({ kind, text }) => [kind, text])).toEqual([
+      ["deletion", "Space"],
+    ]);
+  });
+
   it("keeps tracking while another suggesting viewer is still registered", async () => {
     const model = await load(PLAIN);
     const editor = runControllerSteps(model, [
@@ -429,6 +443,42 @@ describe("tracked paragraph breaks", () => {
     expect(ids[1]![0]).not.toBe("3");
   });
 
+  it("keeps a comment that starts at the cut on the text it covers", async () => {
+    const model = await load(
+      '<w:p><w:r><w:t xml:space="preserve">Hello </w:t></w:r><w:commentRangeStart w:id="4"/>' +
+        '<w:r><w:t>world</w:t></w:r><w:commentRangeEnd w:id="4"/></w:p>'
+    );
+    const next = (splitParagraphTracked(model, { nodeIndex: 0, offset: 6, ...AUTHOR }) as {
+      model: DocModel;
+    }).model;
+    expect(readParagraphAnnotations(next, 0).comments).toEqual([]);
+    expect(readParagraphAnnotations(next, 1).comments).toEqual([
+      { commentId: 4, startOffset: 0, endOffset: 5, text: "world" },
+    ]);
+  });
+
+  it("moves later sections by one node on a split and back on a join", async () => {
+    const model = await load(
+      `${TWO_PARAGRAPHS}<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>End of one</w:t></w:r></w:p>` +
+        "<w:p><w:r><w:t>Next section</w:t></w:r></w:p>"
+    );
+    const starts = (next: DocModel) =>
+      (next.metadata.sections ?? []).map((section) => section.startNodeIndex);
+    const before = starts(model);
+    expect(before.at(-1)).toBe(3);
+    const split = (splitParagraphTracked(model, { nodeIndex: 0, offset: 6, ...AUTHOR }) as {
+      model: DocModel;
+    }).model;
+    expect(starts(split).at(-1)).toBe(4);
+    expect(rejectAllRevisions(split).model.metadata.sections?.map((s) => s.startNodeIndex)).toEqual(
+      before
+    );
+    expect(joinParagraphsTracked(model, { nodeIndex: 2, ...AUTHOR })).toEqual({
+      ok: false,
+      reason: "unsupported",
+    });
+  });
+
   it("refuses a split that also changes text", async () => {
     const model = await load(PLAIN);
     const edited = splitByEditor(model, 6);
@@ -465,5 +515,107 @@ describe("suggesting controller paragraph breaks", () => {
       "world",
     ]);
     expect(editor.trackedChanges).toHaveLength(0);
+  });
+});
+
+describe("tracked paragraph joins", () => {
+  function joinedByEditor(model: DocModel): DocModel {
+    const first = model.nodes[0] as ParagraphNode;
+    return {
+      ...model,
+      nodes: [
+        {
+          ...first,
+          children: [{ type: "text", text: `${visible(model, 0)}${visible(model, 1)}` }],
+        },
+        ...model.nodes.slice(2),
+      ],
+    };
+  }
+
+  it("records Backspace at a paragraph start as a deleted paragraph mark", async () => {
+    const model = await load(TWO_PARAGRAPHS);
+    const tracked = trackModelTextEdits(model, joinedByEditor(model), AUTHOR);
+    expect(tracked.ok).toBe(true);
+    const next = (tracked as { model: DocModel }).model;
+    expect(next.nodes).toHaveLength(2);
+    expect(sourceXml(next, 0)).toMatch(
+      /<w:pPr><w:rPr><w:del w:id="\d+" w:author="Grace" w:date="2026-10-16T09:00:00Z"\/><\/w:rPr><\/w:pPr>/
+    );
+    expect(next.nodes[1]).toBe(model.nodes[1]);
+    const [revision] = readParagraphAnnotations(next, 0).revisions;
+    expect(revision).toMatchObject({ kind: "paragraph-deletion", author: "Grace" });
+
+    const target = { nodeIndex: 0, revisionId: revision!.id, kind: "paragraph-deletion" as const };
+    const accepted = (acceptParagraphRevision(next, target) as { model: DocModel }).model;
+    expect(accepted.nodes).toHaveLength(1);
+    expect(visible(accepted)).toBe("Hello worldSecond");
+    const rejected = (rejectParagraphRevision(next, target) as { model: DocModel }).model;
+    expect(rejected.nodes).toHaveLength(2);
+    expect(sourceXml(rejected, 0)).not.toContain("<w:del");
+  });
+
+  it("removes the author's own inserted break outright", async () => {
+    const model = await load(PLAIN);
+    const split = (splitParagraphTracked(model, { nodeIndex: 0, offset: 6, ...AUTHOR }) as {
+      model: DocModel;
+    }).model;
+    const joined = joinParagraphsTracked(split, { nodeIndex: 0, ...AUTHOR });
+    expect(joined.ok).toBe(true);
+    const next = (joined as { model: DocModel }).model;
+    expect(next.nodes).toHaveLength(1);
+    expect(visible(next)).toBe("Hello world");
+    expect(sourceXml(next)).not.toMatch(/<w:(?:ins|del)\b/);
+  });
+
+  it("marks another author's inserted break deleted after its insertion", async () => {
+    const model = await load(PLAIN);
+    const split = (splitParagraphTracked(model, {
+      nodeIndex: 0,
+      offset: 6,
+      author: "Bob",
+      date: DATE,
+    }) as { model: DocModel }).model;
+    const next = (joinParagraphsTracked(split, { nodeIndex: 0, ...AUTHOR }) as {
+      model: DocModel;
+    }).model;
+    expect(sourceXml(next, 0)).toMatch(/<w:rPr><w:ins [^>]*w:author="Bob"[^>]*\/><w:del [^>]*w:author="Grace"/);
+    expect(rejectAllRevisions(next).model.nodes).toHaveLength(1);
+  });
+
+  it("refuses joining a paragraph with a table", async () => {
+    const model = await load(
+      `${PLAIN}<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>`
+    );
+    expect(joinParagraphsTracked(model, { nodeIndex: 0, ...AUTHOR })).toEqual({
+      ok: false,
+      reason: "unsupported",
+    });
+  });
+});
+
+describe("suggesting controller paragraph joins", () => {
+  it("tracks Backspace across paragraphs and joins them on accept", async () => {
+    const model = await load(TWO_PARAGRAPHS);
+    const editor = runControllerSteps(model, [
+      (editor) => {
+        editor.registerSuggestingMode();
+        editor.deleteExpandedSelection({
+          start: { location: { kind: "paragraph", nodeIndex: 0 }, offset: 11 },
+          end: { location: { kind: "paragraph", nodeIndex: 1 }, offset: 0 },
+        });
+      },
+      (editor) => {
+        expect(editor.model.nodes).toHaveLength(2);
+        const change = editor.trackedChanges.find(
+          (candidate) => candidate.kind === "paragraph-deletion"
+        );
+        expect(change).toMatchObject({ author: "Grace", nodeIndex: 0 });
+        expect(editor.acceptRevision(change!.revisionId!)).toEqual({ ok: true });
+      },
+    ]);
+    expect(editor.suggestionRefusalNonce).toBe(0);
+    expect(editor.model.nodes).toHaveLength(1);
+    expect(visible(editor.model)).toBe("Hello worldSecond");
   });
 });

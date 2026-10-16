@@ -118,9 +118,9 @@ export interface DocComment {
 
 /**
  * Body revisions: those `revisions` can list, and the nodes holding revision
- * markup it cannot list (deleted paragraph marks, moves, revisions inside
- * tables, unreadable markup). Accepting or rejecting "all" leaves the
- * unlisted ones in place.
+ * markup it cannot list (moves, revisions inside tables, a break before a
+ * table, unreadable markup). Accepting or rejecting "all" leaves the unlisted
+ * ones in place.
  */
 export interface RevisionReport {
   revisions: DocRevision[];
@@ -138,8 +138,11 @@ export interface UnlistedRevisions {
 export interface DocRevision {
   /** OOXML `w:id`. */
   id: string;
-  /** `paragraph-insertion`: a suggested break ending this paragraph. */
-  kind: "insertion" | "deletion" | "paragraph-insertion";
+  /**
+   * `paragraph-insertion`: a suggested break ending this paragraph;
+   * `paragraph-deletion`: a suggestion to join it with the next one.
+   */
+  kind: "insertion" | "deletion" | "paragraph-insertion" | "paragraph-deletion";
   author?: string;
   date?: string;
   text: string;

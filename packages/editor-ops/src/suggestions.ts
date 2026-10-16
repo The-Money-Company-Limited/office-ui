@@ -1,6 +1,7 @@
 import type { DocModel, ParagraphNode } from "@extend-ai/react-docx-doc-model";
 
 import {
+  joinParagraphsTracked,
   replaceParagraphTextTracked,
   splitParagraphTracked,
   type AnnotationMutationResult,
@@ -11,8 +12,8 @@ import {
  * Suggesting mode: the editor computes every edit as a plain model change,
  * and this module turns it into Word tracked changes on the model the edit
  * started from. Edits that change the visible text of existing top-level
- * paragraphs, and Enter splitting one, can be expressed that way; anything
- * else (merging paragraphs, formatting, tables, headers) fails closed so an
+ * paragraphs, Enter splitting one, and Backspace joining two can be expressed
+ * that way; anything else (formatting, tables, headers) fails closed so an
  * untracked change never slips through. That includes an edit that changes
  * text and formatting together, such as a styled paste: the tracked text
  * would lose the formatting.
@@ -126,7 +127,9 @@ function sameFormatting(tracked: ParagraphNode, edited: ParagraphNode): boolean 
  * top-level paragraph whose visible text changed and whose formatting the
  * tracked replacement reproduces; each one becomes one tracked replacement.
  * One paragraph becoming two with the same text and formatting is a tracked
- * paragraph break. Fails with "unsupported" for any other change.
+ * paragraph break; two becoming one with their joined text is a tracked
+ * removal of the first one's break. Fails with "unsupported" for any other
+ * change.
  */
 export function trackModelTextEdits(
   before: DocModel,
@@ -147,6 +150,9 @@ export function trackModelTextEdits(
   }
   if (after.nodes.length === before.nodes.length + 1) {
     return trackParagraphSplit(before, after, authorship);
+  }
+  if (after.nodes.length === before.nodes.length - 1) {
+    return trackParagraphJoin(before, after, authorship);
   }
   if (before.nodes.length !== after.nodes.length) {
     return { ok: false, reason: "unsupported" };
@@ -241,4 +247,45 @@ function trackParagraphSplit(
   nodes[index] = { ...trackedFirst, blockId: first.blockId };
   nodes[index + 1] = { ...trackedSecond, blockId: second.blockId };
   return { ok: true, model: { ...tracked.model, nodes } };
+}
+
+/**
+ * Backspace at a paragraph's start: two top-level paragraphs became one with
+ * their joined text, and every other node was kept. The paragraphs stay apart
+ * in the tracked model until the removed break is accepted.
+ */
+function trackParagraphJoin(
+  before: DocModel,
+  after: DocModel,
+  authorship: RevisionAuthorship
+): AnnotationMutationResult {
+  let index = 0;
+  while (index < after.nodes.length && before.nodes[index] === after.nodes[index]) {
+    index += 1;
+  }
+  for (let rest = index + 1; rest < after.nodes.length; rest += 1) {
+    if (after.nodes[rest] !== before.nodes[rest + 1]) {
+      return { ok: false, reason: "unsupported" };
+    }
+  }
+  const first = before.nodes[index];
+  const second = before.nodes[index + 1];
+  const joined = after.nodes[index];
+  if (
+    first?.type !== "paragraph" ||
+    second?.type !== "paragraph" ||
+    joined?.type !== "paragraph"
+  ) {
+    return { ok: false, reason: "unsupported" };
+  }
+  const firstText = paragraphVisibleText(first);
+  const secondText = paragraphVisibleText(second);
+  if (
+    firstText === undefined ||
+    secondText === undefined ||
+    paragraphVisibleText(joined) !== firstText + secondText
+  ) {
+    return { ok: false, reason: "unsupported" };
+  }
+  return joinParagraphsTracked(before, { nodeIndex: index, ...authorship });
 }
