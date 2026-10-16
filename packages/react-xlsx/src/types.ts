@@ -968,6 +968,9 @@ export interface XlsxFileTooLargeRenderProps {
   maxFileSizeBytes: number;
 }
 
+/** What scrolls the grid: its own viewport element, or the browser window. */
+export type XlsxScrollTarget = "element" | "window";
+
 export interface XlsxScrollerRenderProps {
   /** Workbook grid content that should be rendered inside the scrollable viewport. */
   children: React.ReactNode;
@@ -1028,6 +1031,11 @@ export interface UseXlsxViewerControllerOptions {
    */
   readOnly?: boolean;
   /**
+   * Called with the active tab's name once a workbook loads and whenever the active tab changes, e.g. to mirror
+   * it into the URL. Pair with `setActiveSheetByName` to restore it.
+   */
+  onActiveSheetChange?: (name: string) => void;
+  /**
    * Automatically enables read-only mode for files larger than this byte threshold.
    * Set to `0` to disable the automatic switch.
    *
@@ -1069,6 +1077,8 @@ export interface XlsxViewerController {
   activeCellAddress: string | null;
   activeSheet: XlsxSheetData | null;
   activeSheetIndex: number;
+  /** Name of the active tab (worksheet or chartsheet), or `null` before a workbook loads. */
+  activeSheetName: string | null;
   activeTab: XlsxWorkbookTab | null;
   activeTabIndex: number;
   canDownload: boolean;
@@ -1209,6 +1219,11 @@ export interface XlsxViewerController {
   selectChartElement: (selection: XlsxChartElementSelection | null) => void;
   selectRange: (range: XlsxCellRange) => void;
   selection: XlsxCellRange | null;
+  /**
+   * Activates the tab with this name (exact match first, then case-insensitive). Returns `false` when no tab has
+   * that name, e.g. before the workbook has loaded.
+   */
+  setActiveSheetByName: (name: string) => boolean;
   setActiveSheetIndex: (index: number) => void;
   setActiveTabIndex: (index: number) => void;
   selectedChart: XlsxChart | null;
@@ -1685,6 +1700,22 @@ export interface XlsxViewerProps extends UseXlsxViewerControllerOptions {
    * ```
    */
   renderScroller?: (props: XlsxScrollerRenderProps) => React.ReactNode;
+  /**
+   * What scrolls the grid. `"element"` (the default) gives the grid its own `overflow: auto` viewport.
+   * `"window"` lets the grid grow to the sheet's full size so the page scrolls instead; headers, frozen
+   * panes, and the canvas layer stick to the browser viewport below `stickyTop`. In window mode the
+   * viewer must not sit inside an ancestor with `overflow: hidden | auto | scroll` or a fixed height.
+   *
+   * @default "element"
+   */
+  scrollTarget?: XlsxScrollTarget;
+  /**
+   * In window scroll mode, the height in pixels of an app toolbar fixed above the grid. Column headers
+   * and frozen rows stick below it. Ignored when `scrollTarget` is `"element"`.
+   *
+   * @default 0
+   */
+  stickyTop?: number;
   /**
    * Toggles the default rounded outer shell.
    *

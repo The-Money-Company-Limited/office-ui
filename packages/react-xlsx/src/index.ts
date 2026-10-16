@@ -36,6 +36,7 @@ export type {
   XlsxCellProtectionInput,
   XlsxCellRange,
   XlsxParsedRange,
+  XlsxScrollTarget,
   XlsxHighlightRangeOptions,
   XlsxRangeHighlight,
   XlsxCellStyleContext,

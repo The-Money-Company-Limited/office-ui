@@ -7,6 +7,7 @@ import {
 import { resolveBuiltinTableStyle } from "./builtin-table-styles";
 import { resolveCellTextClipOverscan } from "./cell-text-clip";
 import { growScrollDisplayLimit } from "./scroll-display-limit";
+import { createWindowScrollViewport, createWindowVirtualizerObservers, type ScrollViewport, type ScrollViewportRect } from "./scroll-viewport";
 import { expandHighlightedRange, getHighlightAxisExtent, getHighlightScrollOffset } from "./range-highlight";
 import { XLSX_MAX_COLUMNS, XLSX_MAX_ROWS } from "./range-reference";
 import { resolveWorkbookColor, resolveWorkbookFillStyle } from "./colors";
@@ -1043,7 +1044,7 @@ function normalizeWheelDelta(event: WheelEvent) {
   }
 }
 
-function resolveEventAnchor(clientX: number, clientY: number, rect: DOMRect): ZoomAnchor {
+function resolveEventAnchor(clientX: number, clientY: number, rect: ScrollViewportRect): ZoomAnchor {
   return {
     x: clampValue(clientX - rect.left, 0, rect.width),
     y: clampValue(clientY - rect.top, 0, rect.height)
@@ -7186,13 +7187,15 @@ function XlsxGrid({
   renderScroller,
   enableGestureZoom = true,
   experimentalCanvas = true,
+  scrollTarget = "element",
   selectionColor,
   selectionFillColor,
   selectionHeaderColor,
-  showImages = true
+  showImages = true,
+  stickyTop = 0
 }: Pick<
   XlsxViewerProps,
-  "allowResizeInReadOnly" | "emptyState" | "enableCanvasSelectionAnimation" | "enableGestureZoom" | "errorState" | "experimentalCanvas" | "fileTooLargeState" | "getCellStyle" | "highlightClassName" | "loadingComponent" | "loadingState" | "onFormControlAction" | "onFormControlChange" | "renderChartLoading" | "renderFormControl" | "renderImage" | "renderImageSelection" | "renderScroller" | "renderTableHeaderMenu" | "renderActiveCellOverlay" | "selectionColor" | "selectionFillColor" | "selectionHeaderColor" | "showImages"
+  "allowResizeInReadOnly" | "emptyState" | "enableCanvasSelectionAnimation" | "enableGestureZoom" | "errorState" | "experimentalCanvas" | "fileTooLargeState" | "getCellStyle" | "highlightClassName" | "loadingComponent" | "loadingState" | "onFormControlAction" | "onFormControlChange" | "renderChartLoading" | "renderFormControl" | "renderImage" | "renderImageSelection" | "renderScroller" | "renderTableHeaderMenu" | "renderActiveCellOverlay" | "scrollTarget" | "selectionColor" | "selectionFillColor" | "selectionHeaderColor" | "showImages" | "stickyTop"
 > & {
   controller: XlsxViewerController;
   palette: ViewerPalette;
@@ -7277,6 +7280,20 @@ function XlsxGrid({
   ), [formControls, getFormControlItems]);
   const canResizeHeaders = !readOnly || allowResizeInReadOnly;
   const scrollRef = React.useRef<HTMLDivElement>(null);
+  const keyboardInputRef = React.useRef<HTMLTextAreaElement>(null);
+  const isWindowScroll = scrollTarget === "window";
+  // Sticky layers stick to the scroll container's top edge; in window mode that edge sits below the host toolbar.
+  const stickyTopOffset = isWindowScroll ? stickyTop : 0;
+  const scrollTargetRef = React.useRef({ isWindowScroll, stickyTop: stickyTopOffset });
+  scrollTargetRef.current = { isWindowScroll, stickyTop: stickyTopOffset };
+  const getScrollViewport = React.useCallback((): ScrollViewport | null => {
+    const element = scrollRef.current;
+    if (!element) {
+      return null;
+    }
+    const target = scrollTargetRef.current;
+    return target.isWindowScroll ? createWindowScrollViewport(element, target.stickyTop) : element;
+  }, []);
   const scrolledHighlightRef = React.useRef<XlsxViewerController["highlightedRanges"][number] | null>(null);
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const tableRef = React.useRef<HTMLTableElement>(null);
@@ -7346,7 +7363,7 @@ function XlsxGrid({
   const pendingZoomAnchorRef = React.useRef<ZoomAnchor | null>(null);
   const liveZoomCommitTimerRef = React.useRef<number | null>(null);
   const pendingLiveZoomCommitRef = React.useRef<number | null>(null);
-  const gestureScrollerRectRef = React.useRef<DOMRect | null>(null);
+  const gestureScrollerRectRef = React.useRef<ScrollViewportRect | null>(null);
   const touchPinchStateRef = React.useRef<{ startDistance: number; startZoomScale: number } | null>(null);
   const safariPinchStartZoomRef = React.useRef<number | null>(null);
   const canvasTransformStyleCacheRef = React.useRef(new WeakMap<HTMLElement, {
@@ -7397,7 +7414,7 @@ function XlsxGrid({
   const selectionDragCleanupRef = React.useRef<(() => void) | null>(null);
   const pendingSelectionDragCleanupRef = React.useRef<(() => void) | null>(null);
   const fillDragCleanupRef = React.useRef<(() => void) | null>(null);
-  const cachedScrollerRectRef = React.useRef<DOMRect | null>(null);
+  const cachedScrollerRectRef = React.useRef<ScrollViewportRect | null>(null);
   const installImageInteractionListenersRef = React.useRef(installImageInteractionListeners);
   const installChartInteractionListenersRef = React.useRef(installChartInteractionListeners);
   const imageInteractionCleanupRef = React.useRef<(() => void) | null>(null);
@@ -7642,7 +7659,7 @@ function XlsxGrid({
       );
       return ((scrollOffset * liveZoomScale) - targetScrollOffset) / (1 - liveZoomScale);
     };
-    const scroller = scrollRef.current;
+    const scroller = getScrollViewport();
     const liveZoomAnchorX = resolveClampedLiveZoomAnchor(
       nextLiveViewport.left,
       nextLiveViewport.width,
@@ -7969,7 +7986,7 @@ function XlsxGrid({
       commitLiveGestureZoom();
     }, LIVE_ZOOM_COMMIT_IDLE_MS);
   }, [clearLiveZoomCommitTimer, commitLiveGestureZoom]);
-  const syncDrawingViewport = React.useCallback((scroller: HTMLDivElement | null, options?: { immediate?: boolean }) => {
+  const syncDrawingViewport = React.useCallback((scroller: ScrollViewport | null, options?: { immediate?: boolean }) => {
     if (!scroller) {
       return;
     }
@@ -8434,6 +8451,10 @@ function XlsxGrid({
   const shouldVirtualizeCols = visibleCols.length > 0 && frozenCols.length === 0;
   const shouldUseDomVirtualizer = !experimentalCanvas;
   const getScrollElement = React.useCallback(() => scrollRef.current, []);
+  const windowVirtualizerObservers = React.useMemo(
+    () => (isWindowScroll ? createWindowVirtualizerObservers(getScrollViewport) : {}),
+    [getScrollViewport, isWindowScroll]
+  );
   const estimateRowSize = React.useCallback(
     (index: number) => displayEffectiveRowHeights[index] ?? displayDefaultRowHeight,
     [displayDefaultRowHeight, displayEffectiveRowHeights]
@@ -8451,7 +8472,8 @@ function XlsxGrid({
     estimateSize: estimateRowSize,
     getScrollElement,
     getItemKey: getRowItemKey,
-    overscan: 10
+    overscan: 10,
+    ...windowVirtualizerObservers
   });
   const colVirtualizer = useVirtualizer({
     count: visibleCols.length,
@@ -8460,7 +8482,8 @@ function XlsxGrid({
     getScrollElement,
     getItemKey: getColItemKey,
     horizontal: true,
-    overscan: 6
+    overscan: 6,
+    ...windowVirtualizerObservers
   });
   const currentRowVirtualItems = shouldUseDomVirtualizer ? rowVirtualizer.getVirtualItems() : EMPTY_VIRTUAL_ITEMS;
   const currentColVirtualItems = shouldUseDomVirtualizer ? colVirtualizer.getVirtualItems() : EMPTY_VIRTUAL_ITEMS;
@@ -8752,7 +8775,7 @@ function XlsxGrid({
   }, [colPrefixSums, displayEffectiveColWidths, displayEffectiveRowHeights, rowPrefixSums, visibleCols, visibleRows]);
 
   React.useLayoutEffect(() => {
-    const scroller = scrollRef.current;
+    const scroller = getScrollViewport();
     const previousZoomFactor = previousZoomFactorRef.current;
     if (!scroller || previousZoomFactor === zoomFactor) {
       previousZoomFactorRef.current = zoomFactor;
@@ -8774,29 +8797,28 @@ function XlsxGrid({
       colVirtualizer.measure();
     }
     syncDrawingViewport(scroller, { immediate: true });
-  }, [shouldUseDomVirtualizer, syncDrawingViewport, zoomFactor]);
+  }, [getScrollViewport, shouldUseDomVirtualizer, syncDrawingViewport, zoomFactor]);
 
   React.useLayoutEffect(() => {
-    syncDrawingViewport(scrollRef.current, { immediate: true });
-  }, [activeSheet, activeTabIndex, displayColLimit, displayRowLimit, highlightedCellRanges, syncDrawingViewport, zoomFactor]);
+    syncDrawingViewport(getScrollViewport(), { immediate: true });
+  }, [activeSheet, activeTabIndex, displayColLimit, displayRowLimit, getScrollViewport, highlightedCellRanges, isWindowScroll, stickyTopOffset, syncDrawingViewport, zoomFactor]);
 
   React.useLayoutEffect(() => {
-    const scroller = scrollRef.current;
-    if (!scroller) {
+    const element = scrollRef.current;
+    if (!element) {
       return;
     }
-    syncDrawingViewport(scroller, { immediate: true });
+    const sync = () => syncDrawingViewport(getScrollViewport(), { immediate: true });
+    sync();
     if (typeof ResizeObserver === "undefined") {
       return;
     }
-    const observer = new ResizeObserver(() => {
-      syncDrawingViewport(scroller, { immediate: true });
-    });
-    observer.observe(scroller);
+    const observer = new ResizeObserver(sync);
+    observer.observe(element);
     return () => {
       observer.disconnect();
     };
-  }, [activeSheet, syncDrawingViewport]);
+  }, [activeSheet, getScrollViewport, syncDrawingViewport]);
 
   React.useEffect(() => {
     setDisplayRowLimit(
@@ -8882,19 +8904,20 @@ function XlsxGrid({
       ? sumPrefixRange(actualColPrefixSums, 0, initialUsedCol - 1)
       : 0;
 
+    const initialViewport = getScrollViewport();
     if (shouldUseDomVirtualizer && shouldVirtualizeRows) {
       rowVirtualizer.scrollToOffset(initialScrollTop);
-    } else if (scrollRef.current) {
-      scrollRef.current.scrollTop = initialScrollTop;
+    } else if (initialViewport) {
+      initialViewport.scrollTop = initialScrollTop;
     }
-    if (scrollRef.current) {
-      scrollRef.current.scrollLeft = initialScrollLeft;
+    if (initialViewport) {
+      initialViewport.scrollLeft = initialScrollLeft;
     }
     if (shouldUseDomVirtualizer && shouldVirtualizeCols && frozenCols.length === 0) {
       colVirtualizer.scrollToOffset(initialScrollLeft);
     }
-    if (scrollRef.current) {
-      syncDrawingViewport(scrollRef.current, { immediate: true });
+    if (initialViewport) {
+      syncDrawingViewport(initialViewport, { immediate: true });
     }
     initialScrollKeyRef.current = initialScrollKey;
   }, [
@@ -8908,6 +8931,7 @@ function XlsxGrid({
     colVirtualizer,
     displayFileName,
     frozenCols.length,
+    getScrollViewport,
     isWorkerBacked,
     shouldVirtualizeCols,
     shouldVirtualizeRows,
@@ -8952,8 +8976,7 @@ function XlsxGrid({
     visibleRows.length
   ]);
 
-  const handleScrollerScroll = React.useCallback((event: React.UIEvent<HTMLDivElement>) => {
-    const currentScroller = event.currentTarget;
+  const handleViewportScroll = React.useCallback((currentScroller: ScrollViewport) => {
     cachedScrollerRectRef.current = null;
     gestureScrollerRectRef.current = null;
     const paintedViewport = paintedDrawingViewportRef.current;
@@ -8979,6 +9002,28 @@ function XlsxGrid({
       );
     }
   }, [maxColDisplayLimit, maxRowDisplayLimit, readOnly, syncDrawingViewport]);
+  const handleScrollerScroll = React.useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    handleViewportScroll(event.currentTarget);
+  }, [handleViewportScroll]);
+
+  React.useEffect(() => {
+    if (!isWindowScroll) {
+      return;
+    }
+    const handleWindowScroll = () => {
+      const viewport = getScrollViewport();
+      if (viewport) {
+        handleViewportScroll(viewport);
+      }
+    };
+    window.addEventListener("scroll", handleWindowScroll, { passive: true });
+    window.addEventListener("resize", handleWindowScroll);
+    handleWindowScroll();
+    return () => {
+      window.removeEventListener("scroll", handleWindowScroll);
+      window.removeEventListener("resize", handleWindowScroll);
+    };
+  }, [getScrollViewport, handleViewportScroll, isWindowScroll]);
 
   React.useEffect(() => {
     const scroller = scrollRef.current;
@@ -8986,6 +9031,7 @@ function XlsxGrid({
       clearLiveGestureZoom();
       return;
     }
+    const readViewportRect = () => (getScrollViewport() ?? scroller).getBoundingClientRect();
 
     const handleWheel = (event: WheelEvent) => {
       if (!experimentalCanvas) {
@@ -9001,7 +9047,7 @@ function XlsxGrid({
       }
 
       event.preventDefault();
-      const scrollerRect = gestureScrollerRectRef.current ?? scroller.getBoundingClientRect();
+      const scrollerRect = gestureScrollerRectRef.current ?? readViewportRect();
       gestureScrollerRectRef.current = scrollerRect;
       const anchor = resolveEventAnchor(event.clientX, event.clientY, scrollerRect);
       updateLiveGestureZoomTarget(
@@ -9027,7 +9073,7 @@ function XlsxGrid({
       }
 
       event.preventDefault();
-      const scrollerRect = scroller.getBoundingClientRect();
+      const scrollerRect = readViewportRect();
       gestureScrollerRectRef.current = scrollerRect;
       const anchor = resolveEventAnchor(
         (firstTouch.clientX + secondTouch.clientX) / 2,
@@ -9064,7 +9110,7 @@ function XlsxGrid({
       }
 
       event.preventDefault();
-      const scrollerRect = gestureScrollerRectRef.current ?? scroller.getBoundingClientRect();
+      const scrollerRect = gestureScrollerRectRef.current ?? readViewportRect();
       gestureScrollerRectRef.current = scrollerRect;
       const anchor = resolveEventAnchor(
         (firstTouch.clientX + secondTouch.clientX) / 2,
@@ -9093,7 +9139,7 @@ function XlsxGrid({
     const handleGestureStart = (event: Event) => {
       const gestureEvent = event as WebKitGestureEvent;
       event.preventDefault();
-      const scrollerRect = scroller.getBoundingClientRect();
+      const scrollerRect = readViewportRect();
       gestureScrollerRectRef.current = scrollerRect;
       const anchor = resolveEventAnchor(
         gestureEvent.clientX,
@@ -9118,7 +9164,7 @@ function XlsxGrid({
       }
 
       event.preventDefault();
-      const scrollerRect = gestureScrollerRectRef.current ?? scroller.getBoundingClientRect();
+      const scrollerRect = gestureScrollerRectRef.current ?? readViewportRect();
       gestureScrollerRectRef.current = scrollerRect;
       const anchor = resolveEventAnchor(
         gestureEvent.clientX,
@@ -9167,6 +9213,7 @@ function XlsxGrid({
     commitLiveGestureZoom,
     enableGestureZoom,
     experimentalCanvas,
+    getScrollViewport,
     scheduleLiveGestureZoomCommit,
     updateLiveGestureZoomState,
     updateLiveGestureZoomTarget
@@ -9200,7 +9247,7 @@ function XlsxGrid({
 
   const resolvePointerCellFromGeometry = React.useCallback((clientX: number, clientY: number): XlsxCellAddress | null => {
     const wrapper = wrapperRef.current;
-    const scroller = scrollRef.current;
+    const scroller = getScrollViewport();
     const visibleRowsCurrent = visibleRowsRef.current;
     const visibleColsCurrent = visibleColsRef.current;
     const rowPrefixSumsCurrent = rowPrefixSumsRef.current;
@@ -9368,7 +9415,7 @@ function XlsxGrid({
     clientX: number,
     clientY: number
   ) => {
-    const scroller = scrollRef.current;
+    const scroller = getScrollViewport();
     const rowIndex = rowIndexByActual.get(cell.row);
     const colIndex = colIndexByActual.get(cell.col);
     if (!scroller || rowIndex === undefined || colIndex === undefined) {
@@ -9511,17 +9558,19 @@ function XlsxGrid({
     setInteractionMode("idle");
   }, [activeSheetIndex, clearGlobalCursor, revision]);
 
-  const focusGridElement = React.useCallback((element: HTMLDivElement, options?: FocusOptions) => {
-    if (document.activeElement !== element) {
-      element.focus(options ?? { preventScroll: true });
+  // Grid keyboard input arrives through a visually hidden textarea at the active cell, so the page sees a
+  // focused text field (host shortcuts stay quiet while the grid is typed into) and IME composes in place.
+  const focusGridElement = React.useCallback((options?: FocusOptions) => {
+    const input = keyboardInputRef.current;
+    if (input && document.activeElement !== input) {
+      input.focus(options ?? { preventScroll: true });
     }
   }, []);
 
   const focusGrid = React.useCallback((options?: FocusOptions) => {
-    const scroller = scrollRef.current;
-    if (scroller) {
+    if (keyboardInputRef.current) {
       gridKeyboardActiveRef.current = true;
-      focusGridElement(scroller, options);
+      focusGridElement(options);
     }
   }, [focusGridElement]);
 
@@ -9539,7 +9588,7 @@ function XlsxGrid({
       }
 
       gridKeyboardActiveRef.current = true;
-      focusGridElement(scroller);
+      focusGridElement();
     };
 
     const handleDocumentKeyDown = (event: KeyboardEvent) => {
@@ -10294,7 +10343,7 @@ function XlsxGrid({
   }, [activeSheet?.maxUsedCol, activeSheet?.maxUsedRow, highlightedCellRanges, activeSheetIndex, isWorkerBacked]);
 
   React.useEffect(() => {
-    const scroller = scrollRef.current;
+    const scroller = getScrollViewport();
     const target = rangeHighlightRects.find(({ highlight }) => highlight.autoScroll);
     if (!scroller || !target?.rect || scrolledHighlightRef.current === target.highlight || isLoading
       || scroller.clientWidth === 0 || scroller.clientHeight === 0
@@ -11160,7 +11209,7 @@ function XlsxGrid({
     type: "column" | "row",
     clientPosition: number
   ) => {
-    const scroller = scrollRef.current;
+    const scroller = getScrollViewport();
     const scrollerRect = scroller?.getBoundingClientRect();
     if (!scroller || !scrollerRect) {
       return null;
@@ -11350,7 +11399,7 @@ function XlsxGrid({
     }
 
     clearPendingSelectionDrag();
-    cachedScrollerRectRef.current = scrollRef.current?.getBoundingClientRect() ?? null;
+    cachedScrollerRectRef.current = getScrollViewport()?.getBoundingClientRect() ?? null;
     pendingState.didDrag = true;
     selectionDragRef.current = pendingState;
     selectionPreviewRangeRef.current = pendingState.previewRange;
@@ -11972,7 +12021,7 @@ function XlsxGrid({
       return null;
     }
 
-    const scrollerRect = scrollRef.current?.getBoundingClientRect();
+    const scrollerRect = getScrollViewport()?.getBoundingClientRect();
     if (!scrollerRect) {
       return null;
     }
@@ -11987,7 +12036,7 @@ function XlsxGrid({
     return null;
   }, [canResizeHeaders, canvasColumnHeaderCells]);
   const resolveCanvasColumnHeaderTarget = React.useCallback((clientX: number) => {
-    const scrollerRect = scrollRef.current?.getBoundingClientRect();
+    const scrollerRect = getScrollViewport()?.getBoundingClientRect();
     if (!scrollerRect) {
       return null;
     }
@@ -12007,7 +12056,7 @@ function XlsxGrid({
       return null;
     }
 
-    const scrollerRect = scrollRef.current?.getBoundingClientRect();
+    const scrollerRect = getScrollViewport()?.getBoundingClientRect();
     if (!scrollerRect) {
       return null;
     }
@@ -12022,7 +12071,7 @@ function XlsxGrid({
     return null;
   }, [canResizeHeaders, canvasRowHeaderCells]);
   const resolveCanvasRowHeaderTarget = React.useCallback((clientY: number) => {
-    const scrollerRect = scrollRef.current?.getBoundingClientRect();
+    const scrollerRect = getScrollViewport()?.getBoundingClientRect();
     if (!scrollerRect) {
       return null;
     }
@@ -14020,8 +14069,8 @@ function XlsxGrid({
   const liveZoomScale = isLiveZooming
     ? Math.max(0.1, liveGestureZoom.targetZoomScale / liveGestureZoom.baseZoomScale)
     : 1;
-  const liveZoomScrollLeft = scrollRef.current?.scrollLeft ?? drawingViewport.left;
-  const liveZoomScrollTop = scrollRef.current?.scrollTop ?? drawingViewport.top;
+  const liveZoomScrollLeft = getScrollViewport()?.scrollLeft ?? drawingViewport.left;
+  const liveZoomScrollTop = getScrollViewport()?.scrollTop ?? drawingViewport.top;
   const liveZoomTranslateX = isLiveZooming
     ? (liveZoomScrollLeft + liveGestureZoom.anchor.x) * (1 - liveZoomScale)
     : 0;
@@ -14049,7 +14098,8 @@ function XlsxGrid({
   const stickyHeaderOverlayZIndex = canvasHeaderOverlayZIndex + 1;
   const cornerHeaderOverlayZIndex = canvasHeaderOverlayZIndex + 2;
   const frozenRowHeaderOverlayZIndex = rowHeaderOverlayZIndex;
-  const headerCellStyle = scaleCssProperties({
+  const headerCellStyle: React.CSSProperties = {
+    ...scaleCssProperties({
     backgroundColor: palette.headerSurface,
     borderBottom: "none",
     borderRight: "none",
@@ -14063,11 +14113,12 @@ function XlsxGrid({
     padding: "2px 4px",
     position: "sticky",
     textAlign: "center",
-    top: 0,
     userSelect: "none",
     whiteSpace: "nowrap",
     zIndex: canvasHeaderOverlayZIndex
-  }, zoomFactor);
+  }, zoomFactor),
+    top: stickyTopOffset
+  };
   const columnResizeHandleStyle = scaleCssProperties({
     backgroundColor: "transparent",
     cursor: "col-resize",
@@ -14084,7 +14135,7 @@ function XlsxGrid({
     overflow: "visible",
     pointerEvents: "none",
     position: "sticky",
-    top: 0,
+    top: stickyTopOffset,
     width: 0
   };
   const canvasHeaderViewportLayerStyle: React.CSSProperties = {
@@ -14093,7 +14144,7 @@ function XlsxGrid({
     overflow: "visible",
     pointerEvents: "none",
     position: "sticky",
-    top: 0,
+    top: stickyTopOffset,
     width: 0,
     zIndex: canvasHeaderOverlayZIndex
   };
@@ -15017,7 +15068,7 @@ function XlsxGrid({
     overflow: "visible",
     pointerEvents: "none",
     position: "sticky",
-    top: 0,
+    top: stickyTopOffset,
     width: 0,
     zIndex: 25
   };
@@ -15036,7 +15087,7 @@ function XlsxGrid({
     overflow: "visible",
     pointerEvents: "none",
     position: "sticky",
-    top: 0,
+    top: stickyTopOffset,
     width: 0,
     zIndex: 26
   };
@@ -15304,7 +15355,7 @@ function XlsxGrid({
       return;
     }
 
-    cachedScrollerRectRef.current = scrollRef.current?.getBoundingClientRect() ?? null;
+    cachedScrollerRectRef.current = getScrollViewport()?.getBoundingClientRect() ?? null;
     const normalizedSource = normalizeRange(sourceRange);
     fillDragRef.current = {
       pointerId,
@@ -15534,7 +15585,7 @@ function XlsxGrid({
   }
 
   function ensureCellVisible(rowIndex: number, colIndex: number) {
-    const scroller = scrollRef.current;
+    const scroller = getScrollViewport();
     if (!scroller) {
       return;
     }
@@ -15597,7 +15648,7 @@ function XlsxGrid({
   }
 
   function resolvePageRowIndex(currentRowIndex: number, direction: 1 | -1) {
-    const scroller = scrollRef.current;
+    const scroller = getScrollViewport();
     const viewportHeight = Math.max(
       displayDefaultRowHeight,
       (scroller?.clientHeight ?? displayDefaultRowHeight * 20) - frozenPaneBottom
@@ -15610,7 +15661,7 @@ function XlsxGrid({
   }
 
   function resolvePageColIndex(currentColIndex: number, direction: 1 | -1) {
-    const scroller = scrollRef.current;
+    const scroller = getScrollViewport();
     const viewportWidth = Math.max(
       displayDefaultColWidth,
       (scroller?.clientWidth ?? displayDefaultColWidth * 8) - frozenPaneRight
@@ -15675,7 +15726,8 @@ function XlsxGrid({
   }
 
   function handleGridKeyDown(event: React.KeyboardEvent<HTMLDivElement> | KeyboardEvent) {
-    if (editingCell) {
+    const nativeEvent = "nativeEvent" in event ? event.nativeEvent : event;
+    if (editingCell || nativeEvent.isComposing || nativeEvent.keyCode === 229) {
       return;
     }
 
@@ -15875,7 +15927,7 @@ function XlsxGrid({
     "aria-readonly": readOnly,
     "aria-rowcount": Math.max(activeSheet?.rowCount ?? 0, displayRowLimit),
     role: "grid",
-    onScroll: handleScrollerScroll,
+    onScroll: isWindowScroll ? undefined : handleScrollerScroll,
     onCopy: (event) => {
       if (editingCell) {
         return;
@@ -15897,6 +15949,12 @@ function XlsxGrid({
 
       void copySelectionToClipboard();
     },
+    onMouseDown: (event) => {
+      // The grid element is not a focus target; keep the mouse from moving focus off the keyboard input.
+      if (event.button === 0 && !isInteractiveFocusTarget(event.target, event.currentTarget)) {
+        event.preventDefault();
+      }
+    },
     onPointerDownCapture: (event) => {
       if (event.button !== 0) {
         return;
@@ -15906,7 +15964,7 @@ function XlsxGrid({
       }
 
       gridKeyboardActiveRef.current = true;
-      focusGridElement(event.currentTarget);
+      focusGridElement();
     },
     onClickCapture: (event) => {
       if (isInteractiveFocusTarget(event.target, event.currentTarget)) {
@@ -15914,7 +15972,7 @@ function XlsxGrid({
       }
 
       gridKeyboardActiveRef.current = true;
-      focusGridElement(event.currentTarget);
+      focusGridElement();
     },
     onFocus: () => {
       gridKeyboardActiveRef.current = true;
@@ -15946,7 +16004,7 @@ function XlsxGrid({
 
       pasteText(textPayload);
     },
-    tabIndex: 0,
+    tabIndex: -1,
     style: {
       ["--xlsx-menu-active" as string]: selectionFill,
       ["--xlsx-menu-border" as string]: palette.strongBorder,
@@ -15956,14 +16014,100 @@ function XlsxGrid({
       color: palette.text,
       cursor: resizeGuide?.type === "column" ? "col-resize" : resizeGuide?.type === "row" ? "row-resize" : undefined,
       flex: 1,
-      height: "100%",
+      height: isWindowScroll ? "auto" : "100%",
       minHeight: 0,
       minWidth: 0,
       outline: "none",
-      overflow: "auto",
+      overflow: isWindowScroll ? "visible" : "auto",
       width: "100%"
     }
   };
+
+  const keyboardInputPosition = (() => {
+    const rowIndex = activeCell ? rowIndexByActual.get(activeCell.row) : undefined;
+    const colIndex = activeCell ? colIndexByActual.get(activeCell.col) : undefined;
+    if (rowIndex === undefined || colIndex === undefined) {
+      return { left: 0, top: 0 };
+    }
+    const cellTop = displayHeaderHeight + (rowPrefixSums[rowIndex] ?? 0);
+    const cellLeft = displayRowHeaderWidth + (colPrefixSums[colIndex] ?? 0);
+    // Viewport-relative and clamped inside it, so the browser never scrolls to reveal the caret.
+    return {
+      left: clampValue(cellLeft >= frozenPaneRight ? cellLeft - drawingViewport.left : cellLeft, 0, Math.max(0, drawingViewport.width - 2)),
+      top: clampValue(cellTop >= frozenPaneBottom ? cellTop - drawingViewport.top : cellTop, 0, Math.max(0, drawingViewport.height - 2))
+    };
+  })();
+  const commitKeyboardInputText = (input: HTMLTextAreaElement) => {
+    const text = input.value;
+    input.value = "";
+    const currentCell = resolveCurrentCell();
+    if (!text || readOnly || editingCell || !currentCell) {
+      return;
+    }
+    startEditing(currentCell, text);
+  };
+  const keyboardInputLayer = (
+    <div
+      style={{
+        height: 0,
+        left: 0,
+        overflow: "visible",
+        position: "sticky",
+        top: stickyTopOffset,
+        width: 0
+      }}
+    >
+      <textarea
+        ref={keyboardInputRef}
+        aria-label="Spreadsheet input"
+        autoCapitalize="off"
+        autoComplete="off"
+        autoCorrect="off"
+        data-xlsx-keyboard-input=""
+        onCompositionEnd={(event) => commitKeyboardInputText(event.currentTarget)}
+        onInput={(event) => {
+          if (!(event.nativeEvent as InputEvent).isComposing) {
+            commitKeyboardInputText(event.currentTarget);
+          }
+        }}
+        onKeyDown={(event) => {
+          // Give the native copy command a selection so browsers that skip empty-selection copies still fire `copy`.
+          if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "c") {
+            const input = event.currentTarget;
+            input.value = " ";
+            input.select();
+            window.setTimeout(() => {
+              if (input.value === " ") {
+                input.value = "";
+              }
+            });
+          }
+        }}
+        rows={1}
+        spellCheck={false}
+        style={{
+          background: "transparent",
+          border: 0,
+          caretColor: "transparent",
+          color: "transparent",
+          fontSize: 16,
+          height: 1,
+          left: keyboardInputPosition.left,
+          margin: 0,
+          opacity: 0,
+          outline: "none",
+          overflow: "hidden",
+          padding: 0,
+          pointerEvents: "none",
+          position: "absolute",
+          resize: "none",
+          top: keyboardInputPosition.top,
+          whiteSpace: "pre",
+          width: 1
+        }}
+      />
+    </div>
+  );
 
   const rangeHighlightNodes = rangeHighlightRects.flatMap(({ index, rect }) => rect ? [
     <div
@@ -16039,6 +16183,7 @@ function XlsxGrid({
               width: totalWidth
             }}
           >
+            {keyboardInputLayer}
             {showImages && !experimentalCanvas ? (
               <>
                 <div style={topOverlayStyle}>{paneDrawingNodes.top}</div>
@@ -16229,7 +16374,7 @@ function XlsxGrid({
                   ))}
                   {trailingColumnSpacerWidth > 0 ? <col style={{ width: trailingColumnSpacerWidth }} /> : null}
                 </colgroup>
-                <thead style={{ position: "sticky", top: 0, zIndex: canvasHeaderOverlayZIndex }}>
+                <thead style={{ position: "sticky", top: stickyTopOffset, zIndex: canvasHeaderOverlayZIndex }}>
                   <tr>
                     <th
                       style={{
@@ -16334,7 +16479,7 @@ function XlsxGrid({
                           rowHeaderZIndex={rowHeaderOverlayZIndex}
                           rowHeaderWidth={displayRowHeaderWidth}
                           stickyLeftByCol={stickyLeftByCol}
-                          stickyTop={stickyTopByRow.get(actualRow)}
+                          stickyTop={stickyTopByRow.has(actualRow) ? (stickyTopByRow.get(actualRow) ?? 0) + stickyTopOffset : undefined}
                           trailingSpacerWidth={trailingColumnSpacerWidth}
                           visibleCols={renderedCols}
                           zoomFactor={zoomFactor}
@@ -16557,11 +16702,13 @@ function XlsxViewerInner({
   renderTableHeaderMenu,
   renderActiveCellOverlay,
   rounded = true,
+  scrollTarget = "element",
   selectionColor,
   selectionFillColor,
   selectionHeaderColor,
   showImages = true,
   showDefaultToolbar = true,
+  stickyTop = 0,
   toolbar
 }: XlsxViewerProps & {
   controller: XlsxViewerController;
@@ -16626,11 +16773,12 @@ function XlsxViewerInner({
               flexDirection: "column",
               inlineSize: "100%",
               isolation: "isolate",
-              maxHeight: "100%",
+              maxHeight: scrollTarget === "window" ? undefined : "100%",
               maxWidth: "100%",
               minHeight: 0,
               minWidth: 0,
-              overflow: "hidden",
+              // Any clipping ancestor would become the sticky headers' scroll container in window mode.
+              overflow: scrollTarget === "window" ? "visible" : "hidden",
               position: "relative",
               width: "100%"
             }}
@@ -16661,10 +16809,12 @@ function XlsxViewerInner({
                 renderScroller={renderScroller}
                 renderTableHeaderMenu={renderTableHeaderMenu}
                 renderActiveCellOverlay={renderActiveCellOverlay}
+                scrollTarget={scrollTarget}
                 selectionColor={selectionColor}
                 selectionFillColor={selectionFillColor}
                 selectionHeaderColor={selectionHeaderColor}
                 showImages={showImages}
+                stickyTop={stickyTop}
               />
             </div>
           </div>
