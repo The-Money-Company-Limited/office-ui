@@ -72,6 +72,8 @@ export type {
   RevisionBatchResult,
   TrackedTextReplacementInput,
 } from "./annotations";
+export { textReplacementBetween, trackModelTextEdits } from "./suggestions";
+export type { TextReplacement } from "./suggestions";
 
 export interface InsertParagraphOptions {
   paragraphStyle?: ParagraphStyle;

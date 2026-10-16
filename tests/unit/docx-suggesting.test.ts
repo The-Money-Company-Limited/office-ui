@@ -1,0 +1,280 @@
+import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+
+import {
+  createMinimalDocxPackage,
+  packageToArrayBuffer,
+  parseDocx,
+} from "@extend-ai/react-docx-ooxml-core";
+import {
+  buildDocModel,
+  type DocModel,
+  type ParagraphNode,
+} from "@extend-ai/react-docx-doc-model";
+import {
+  textReplacementBetween,
+  trackModelTextEdits,
+  updateParagraphText,
+} from "@extend-ai/react-docx-editor-ops";
+import {
+  useDocxEditor,
+  type DocxEditorController,
+} from "../../packages/react-viewer/src/editor";
+
+const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const DATE = "2026-10-16T09:00:00Z";
+const AUTHOR = { author: "Grace", date: DATE };
+
+async function load(body: string): Promise<DocModel> {
+  const seed = createMinimalDocxPackage(
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W_NS}"><w:body>${body}</w:body></w:document>`
+  );
+  return buildDocModel(await parseDocx(await packageToArrayBuffer(seed)));
+}
+
+const PLAIN = '<w:p><w:r><w:t xml:space="preserve">Hello world</w:t></w:r></w:p>';
+const TWO_PARAGRAPHS = `${PLAIN}<w:p><w:r><w:t>Second</w:t></w:r></w:p>`;
+
+function sourceXml(model: DocModel, index = 0): string {
+  return (model.nodes[index] as ParagraphNode).sourceXml ?? "";
+}
+
+function visible(model: DocModel, index = 0): string {
+  return (model.nodes[index] as ParagraphNode).children
+    .map((child) => (child.type === "text" ? child.text : ""))
+    .join("");
+}
+
+describe("textReplacementBetween", () => {
+  it("finds the minimal replacement", () => {
+    expect(textReplacementBetween("Hello world", "Hello world")).toBeUndefined();
+    expect(textReplacementBetween("Hello world", "Hello brave world")).toEqual({
+      startOffset: 6,
+      endOffset: 6,
+      text: "brave ",
+    });
+    expect(textReplacementBetween("Hello world", "Hello")).toEqual({
+      startOffset: 5,
+      endOffset: 11,
+      text: "",
+    });
+    expect(textReplacementBetween("Hello world", "Help world")).toEqual({
+      startOffset: 3,
+      endOffset: 5,
+      text: "p",
+    });
+  });
+
+  it("never splits a surrogate pair", () => {
+    // U+1F600 and U+1F601 share their high surrogate.
+    const replacement = textReplacementBetween("a\u{1F600}b", "a\u{1F601}b");
+    expect(replacement).toEqual({ startOffset: 1, endOffset: 3, text: "\u{1F601}" });
+  });
+});
+
+describe("trackModelTextEdits", () => {
+  it("records typing as an insertion by the author", async () => {
+    const model = await load(PLAIN);
+    const result = trackModelTextEdits(
+      model,
+      updateParagraphText(model, 0, "Hello brave world"),
+      AUTHOR
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(visible(result.model)).toBe("Hello brave world");
+    expect(sourceXml(result.model)).toMatch(
+      /<w:ins w:id="\d+" w:author="Grace" w:date="2026-10-16T09:00:00Z"><w:r><w:t xml:space="preserve">brave <\/w:t><\/w:r><\/w:ins>/
+    );
+  });
+
+  it("records deleting as a deletion that stays in the source", async () => {
+    const model = await load(PLAIN);
+    const result = trackModelTextEdits(
+      model,
+      updateParagraphText(model, 0, "Hello"),
+      AUTHOR
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(visible(result.model)).toBe("Hello");
+    expect(sourceXml(result.model)).toMatch(
+      /<w:del w:id="\d+" w:author="Grace"[^>]*><w:r><w:delText xml:space="preserve"> world<\/w:delText><\/w:r><\/w:del>/
+    );
+  });
+
+  it("removes the author's own pending insertion outright on backspace", async () => {
+    const model = await load(PLAIN);
+    const typed = trackModelTextEdits(
+      model,
+      updateParagraphText(model, 0, "Hello world!"),
+      AUTHOR
+    );
+    expect(typed.ok).toBe(true);
+    if (!typed.ok) return;
+    const erased = trackModelTextEdits(
+      typed.model,
+      updateParagraphText(typed.model, 0, "Hello world"),
+      AUTHOR
+    );
+    expect(erased.ok).toBe(true);
+    if (!erased.ok) return;
+    expect(visible(erased.model)).toBe("Hello world");
+    expect(sourceXml(erased.model)).not.toMatch(/<w:(ins|del) /);
+  });
+
+  it("keeps an earlier deletion while typing after it", async () => {
+    const model = await load(PLAIN);
+    const deleted = trackModelTextEdits(
+      model,
+      updateParagraphText(model, 0, "Hello"),
+      AUTHOR
+    );
+    expect(deleted.ok).toBe(true);
+    if (!deleted.ok) return;
+    const typed = trackModelTextEdits(
+      deleted.model,
+      updateParagraphText(deleted.model, 0, "Hello there"),
+      AUTHOR
+    );
+    expect(typed.ok).toBe(true);
+    if (!typed.ok) return;
+    expect(visible(typed.model)).toBe("Hello there");
+    expect(sourceXml(typed.model)).toContain("<w:delText xml:space=\"preserve\"> world</w:delText>");
+    expect(sourceXml(typed.model)).toMatch(/<w:ins [^>]*><w:r><w:t xml:space="preserve"> there<\/w:t>/);
+  });
+
+  it("refuses structure, formatting and metadata changes", async () => {
+    const model = await load(TWO_PARAGRAPHS);
+    const merged: DocModel = { ...model, nodes: [model.nodes[0]!] };
+    expect(trackModelTextEdits(model, merged, AUTHOR)).toEqual({
+      ok: false,
+      reason: "unsupported",
+    });
+
+    const paragraph = model.nodes[0] as ParagraphNode;
+    const bolded: DocModel = {
+      ...model,
+      nodes: [
+        {
+          ...paragraph,
+          children: paragraph.children.map((child) =>
+            child.type === "text" ? { ...child, style: { bold: true } } : child
+          ),
+        },
+        model.nodes[1]!,
+      ],
+    };
+    expect(trackModelTextEdits(model, bolded, AUTHOR).ok).toBe(false);
+
+    const retitled: DocModel = { ...model, metadata: { ...model.metadata } };
+    expect(trackModelTextEdits(model, retitled, AUTHOR).ok).toBe(false);
+  });
+
+  it("passes an unchanged model through", async () => {
+    const model = await load(PLAIN);
+    expect(
+      trackModelTextEdits(model, { ...model, nodes: [...model.nodes] }, AUTHOR)
+    ).toEqual({ ok: true, model });
+  });
+});
+
+/**
+ * Drives the controller through server rendering: each step runs during a
+ * render and its state update re-renders the probe with the result.
+ */
+function runControllerSteps(
+  model: DocModel,
+  steps: Array<(editor: DocxEditorController) => void>
+): DocxEditorController {
+  let next = 0;
+  let last: DocxEditorController | undefined;
+  renderToStaticMarkup(
+    React.createElement(function Probe(): null {
+      const editor = useDocxEditor({ starterModel: model, author: "Grace" });
+      last = editor;
+      const step = steps[next];
+      if (step) {
+        next += 1;
+        step(editor);
+      }
+      return null;
+    })
+  );
+  expect(next).toBe(steps.length);
+  return last!;
+}
+
+describe("suggesting controller", () => {
+  it("tracks commits while suggesting and accepts the change by revision id", async () => {
+    const model = await load(PLAIN);
+    let revisionId: string | undefined;
+    const editor = runControllerSteps(model, [
+      (editor) => {
+        editor.registerSuggestingMode();
+        editor.commitParagraphText(0, "Hello brave world");
+      },
+      (editor) => {
+        const insertion = editor.trackedChanges.find(
+          (change) => change.kind === "insertion"
+        );
+        expect(insertion).toMatchObject({ author: "Grace" });
+        revisionId = insertion?.revisionId;
+        expect(editor.acceptRevision(revisionId!)).toEqual({ ok: true });
+      },
+    ]);
+    expect(revisionId).toBeDefined();
+    expect(visible(editor.model)).toBe("Hello brave world");
+    expect(editor.trackedChanges).toHaveLength(0);
+    expect(sourceXml(editor.model)).not.toContain("<w:ins ");
+  });
+
+  it("rejects all suggestions in one step", async () => {
+    const model = await load(PLAIN);
+    const editor = runControllerSteps(model, [
+      (editor) => {
+        editor.registerSuggestingMode();
+        editor.commitParagraphText(0, "Hello");
+      },
+      (editor) => {
+        expect(editor.trackedChanges.map((change) => change.kind)).toEqual([
+          "deletion",
+        ]);
+        expect(editor.rejectAllRevisions()).toEqual({
+          ok: true,
+          remainingNodeIndexes: [],
+        });
+      },
+    ]);
+    expect(visible(editor.model)).toBe("Hello world");
+    expect(editor.trackedChanges).toHaveLength(0);
+  });
+
+  it("refuses edits it cannot track and leaves the model unchanged", async () => {
+    const model = await load(TWO_PARAGRAPHS);
+    const editor = runControllerSteps(model, [
+      (editor) => {
+        editor.registerSuggestingMode();
+        editor.appendParagraph("Third");
+      },
+      (editor) => {
+        expect(editor.suggestionRefusalNonce).toBe(1);
+        editor.setAlignment("center");
+      },
+    ]);
+    expect(editor.suggestionRefusalNonce).toBe(2);
+    expect(editor.model.nodes).toHaveLength(2);
+    expect((editor.model.nodes[0] as ParagraphNode).style?.align).toBeUndefined();
+    expect(editor.canUndo).toBe(false);
+  });
+
+  it("leaves edit mode untracked", async () => {
+    const model = await load(PLAIN);
+    const editor = runControllerSteps(model, [
+      (editor) => editor.commitParagraphText(0, "Hello brave world"),
+    ]);
+    expect(visible(editor.model)).toBe("Hello brave world");
+    expect(sourceXml(editor.model)).not.toContain("<w:ins ");
+  });
+});
