@@ -7168,6 +7168,9 @@ function XlsxGrid({
   renderActiveCellOverlay,
   renderCommentIndicator,
   onCommentClick,
+  onCellContextMenu,
+  onFind,
+  scrollToCell,
   cellAnchorIdPrefix,
   renderScroller,
   enableGestureZoom = true,
@@ -7180,7 +7183,7 @@ function XlsxGrid({
   stickyTop = 0
 }: Pick<
   XlsxViewerProps,
-  "allowResizeInReadOnly" | "emptyState" | "enableCanvasSelectionAnimation" | "enableGestureZoom" | "errorState" | "experimentalCanvas" | "fileTooLargeState" | "getCellStyle" | "highlightClassName" | "loadingComponent" | "loadingState" | "onFormControlAction" | "onFormControlChange" | "renderChartLoading" | "renderFormControl" | "renderImage" | "renderImageSelection" | "renderScroller" | "renderTableHeaderMenu" | "renderActiveCellOverlay" | "renderCommentIndicator" | "onCommentClick" | "cellAnchorIdPrefix" | "scrollTarget" | "selectionColor" | "selectionFillColor" | "selectionHeaderColor" | "showImages" | "stickyTop"
+  "allowResizeInReadOnly" | "emptyState" | "enableCanvasSelectionAnimation" | "enableGestureZoom" | "errorState" | "experimentalCanvas" | "fileTooLargeState" | "getCellStyle" | "highlightClassName" | "loadingComponent" | "loadingState" | "onFormControlAction" | "onFormControlChange" | "renderChartLoading" | "renderFormControl" | "renderImage" | "renderImageSelection" | "renderScroller" | "renderTableHeaderMenu" | "renderActiveCellOverlay" | "renderCommentIndicator" | "onCommentClick" | "onCellContextMenu" | "onFind" | "scrollToCell" | "cellAnchorIdPrefix" | "scrollTarget" | "selectionColor" | "selectionFillColor" | "selectionHeaderColor" | "showImages" | "stickyTop"
 > & {
   controller: XlsxViewerController;
   palette: ViewerPalette;
@@ -7216,6 +7219,7 @@ function XlsxGrid({
     getFormControlItems,
     commentThreads,
     highlightedRanges,
+    cutRange,
     images,
     suggestions,
     shapes,
@@ -7226,6 +7230,9 @@ function XlsxGrid({
     maxZoomScale,
     minZoomScale,
     copySelectionToClipboard,
+    cutSelectionToClipboard,
+    cancelCut,
+    getCutClipboardData,
     pasteFromClipboard,
     pasteStructuredClipboardData,
     pasteText,
@@ -14004,6 +14011,24 @@ function XlsxGrid({
     resolveCellDisplayRect,
     revision
   ]);
+  const scrolledCellRef = React.useRef<XlsxCellAddress | null>(null);
+  React.useEffect(() => {
+    if (!scrollToCell) {
+      scrolledCellRef.current = null;
+      return;
+    }
+    if (isLoading || !activeSheet || scrolledCellRef.current === scrollToCell) {
+      return;
+    }
+    const rowIndex = rowIndexByActual.get(scrollToCell.row);
+    const colIndex = colIndexByActual.get(scrollToCell.col);
+    if (rowIndex === undefined || colIndex === undefined) {
+      return;
+    }
+    ensureCellVisible(rowIndex, colIndex);
+    scrolledCellRef.current = scrollToCell;
+  });
+
   if (isLoading) {
     return <>{renderLoading(loadingComponent, loadingState, palette)}</>;
   }
@@ -15977,26 +16002,25 @@ function XlsxGrid({
     "aria-rowcount": Math.max(activeSheet?.rowCount ?? 0, displayRowLimit),
     role: "grid",
     onScroll: isWindowScroll ? undefined : handleScrollerScroll,
-    onCopy: (event) => {
-      if (editingCell) {
+    onContextMenu: (event) => {
+      if (!onCellContextMenu || isInteractiveFocusTarget(event.target, event.currentTarget)) {
         return;
       }
-
-      const clipboard = event.clipboardData;
-      const clipboardData = getClipboardData();
-      if (!clipboardData) {
+      const rect = getScrollViewport()?.getBoundingClientRect();
+      if (!rect || event.clientX < rect.left + displayRowHeaderWidth || event.clientY < rect.top + displayHeaderHeight) {
         return;
       }
-
+      const hit = resolvePointerCellFromClient(event.clientX, event.clientY);
+      if (!hit) {
+        return;
+      }
+      const cell = resolveMergeAnchorCell(hit);
       event.preventDefault();
-      if (clipboard) {
-        clipboard.setData("text/plain", clipboardData.text);
-        clipboard.setData("text/html", clipboardData.html);
-        clipboard.setData(INTERNAL_CLIPBOARD_MIME, clipboardData.structured);
-        return;
+      commitEditingRef.current();
+      if (!isCellInRange(cell, selectionRef.current)) {
+        selectCell(cell);
       }
-
-      void copySelectionToClipboard();
+      onCellContextMenu(cell, event);
     },
     onMouseDown: (event) => {
       // The grid element is not a focus target; keep the mouse from moving focus off the keyboard input.
@@ -16027,32 +16051,6 @@ function XlsxGrid({
       gridKeyboardActiveRef.current = true;
     },
     onKeyDown: handleGridKeyDown,
-    onPaste: (event) => {
-      if (editingCell || readOnly) {
-        return;
-      }
-
-      const clipboard = event.clipboardData;
-      if (!clipboard) {
-        event.preventDefault();
-        void pasteFromClipboard();
-        return;
-      }
-
-      const structuredPayload = clipboard.getData(INTERNAL_CLIPBOARD_MIME);
-      const textPayload = clipboard.getData("text/plain");
-      if (!structuredPayload && !textPayload) {
-        return;
-      }
-
-      event.preventDefault();
-      if (structuredPayload) {
-        pasteStructuredClipboardData(structuredPayload);
-        return;
-      }
-
-      pasteText(textPayload);
-    },
     tabIndex: -1,
     style: {
       ["--xlsx-menu-active" as string]: selectionFill,
@@ -16095,6 +16093,53 @@ function XlsxGrid({
     }
     startEditing(currentCell, text);
   };
+  const handleClipboardCopy = (event: React.ClipboardEvent, cut: boolean) => {
+    if (editingCell || (cut && readOnly)) {
+      return;
+    }
+
+    const clipboard = event.clipboardData;
+    const clipboardData = cut ? getCutClipboardData() : getClipboardData();
+    if (!clipboardData) {
+      return;
+    }
+
+    event.preventDefault();
+    if (clipboard) {
+      clipboard.setData("text/plain", clipboardData.text);
+      clipboard.setData("text/html", clipboardData.html);
+      clipboard.setData(INTERNAL_CLIPBOARD_MIME, clipboardData.structured);
+      return;
+    }
+
+    void (cut ? cutSelectionToClipboard() : copySelectionToClipboard());
+  };
+  const handleClipboardPaste = (event: React.ClipboardEvent) => {
+    if (editingCell || readOnly) {
+      return;
+    }
+
+    const clipboard = event.clipboardData;
+    if (!clipboard) {
+      event.preventDefault();
+      void pasteFromClipboard();
+      return;
+    }
+
+    const structuredPayload = clipboard.getData(INTERNAL_CLIPBOARD_MIME);
+    const textPayload = clipboard.getData("text/plain");
+    if (!structuredPayload && !textPayload) {
+      return;
+    }
+
+    event.preventDefault();
+    if (structuredPayload) {
+      pasteStructuredClipboardData(structuredPayload);
+      return;
+    }
+
+    pasteText(textPayload);
+  };
   const keyboardInputLayer = (
     <div
       style={{
@@ -16116,6 +16161,9 @@ function XlsxGrid({
         // A tap only selects: no on-screen keyboard until editing starts, and none at all when read-only.
         inputMode={editingCell ? "text" : "none"}
         readOnly={readOnly}
+        onCopy={(event) => handleClipboardCopy(event, false)}
+        onCut={(event) => handleClipboardCopy(event, true)}
+        onPaste={handleClipboardPaste}
         onCompositionEnd={(event) => commitKeyboardInputText(event.currentTarget)}
         onInput={(event) => {
           if (!(event.nativeEvent as InputEvent).isComposing) {
@@ -16123,8 +16171,15 @@ function XlsxGrid({
           }
         }}
         onKeyDown={(event) => {
+          if (event.key === "Escape") cancelCut();
+          // The grid's keyboard surface: Cmd/Ctrl+F opens the host's find instead of the browser's.
+          if (onFind && (event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "f") {
+            event.preventDefault();
+            onFind();
+            return;
+          }
           // Give the native copy command a selection so browsers that skip empty-selection copies still fire `copy`.
-          if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "c") {
+          if ((event.metaKey || event.ctrlKey) && !event.altKey && ["c", "x"].includes(event.key.toLowerCase())) {
             const input = event.currentTarget;
             input.value = " ";
             input.select();
@@ -16161,6 +16216,7 @@ function XlsxGrid({
     </div>
   );
 
+  const cutRect = cutRange?.sheetName === activeSheet.name ? resolveOverlayRect(cutRange.range) : null;
   const rangeHighlightNodes = rangeHighlightRects.flatMap(({ index, rect }) => rect ? [
     <div
       key={index}
@@ -16178,6 +16234,14 @@ function XlsxGrid({
       }}
     />
   ] : []);
+  if (cutRect) rangeHighlightNodes.push(
+    <div
+      key="cut"
+      aria-hidden="true"
+      data-xlsx-cut-range=""
+      style={{ ...cutRect, border: `2px dashed ${selectionStroke}`, boxSizing: "border-box", pointerEvents: "none", position: "absolute", zIndex: maxDrawingOverlayZIndex + 1 }}
+    />
+  );
   const commentIndicatorNodes = activeSheet ? commentThreads.flatMap((thread) => {
     const position = thread.sheet === activeSheet.name ? parseCellRef(thread.ref) : null;
     const cell = position ? resolveMergeAnchorCell(position) : null;
@@ -16802,6 +16866,9 @@ function XlsxViewerInner({
   renderActiveCellOverlay,
   renderCommentIndicator,
   onCommentClick,
+  onCellContextMenu,
+  onFind,
+  scrollToCell,
   cellAnchorIdPrefix,
   rounded = true,
   scrollTarget = "element",
@@ -16913,6 +16980,9 @@ function XlsxViewerInner({
                 renderActiveCellOverlay={renderActiveCellOverlay}
                 renderCommentIndicator={renderCommentIndicator}
                 onCommentClick={onCommentClick}
+                onCellContextMenu={onCellContextMenu}
+                onFind={onFind}
+                scrollToCell={scrollToCell}
                 cellAnchorIdPrefix={cellAnchorIdPrefix}
                 scrollTarget={scrollTarget}
                 selectionColor={selectionColor}
@@ -17047,6 +17117,9 @@ export function useXlsxViewerEditing(): XlsxViewerEditing {
     canUndo,
     clearSelectedCells,
     copySelectionToClipboard,
+    cutSelectionToClipboard,
+    cancelCut,
+    getCutClipboardData,
     defineNamedRange,
     fillSelection,
     formControls,
@@ -17089,6 +17162,9 @@ export function useXlsxViewerEditing(): XlsxViewerEditing {
       canUndo,
       clearSelectedCells,
       copySelectionToClipboard,
+      cutSelectionToClipboard,
+      cancelCut,
+      getCutClipboardData,
       defineNamedRange,
       fillSelection,
       formControls,
@@ -17129,6 +17205,9 @@ export function useXlsxViewerEditing(): XlsxViewerEditing {
       canUndo,
       clearSelectedCells,
       copySelectionToClipboard,
+      cutSelectionToClipboard,
+      cancelCut,
+      getCutClipboardData,
       defineNamedRange,
       fillSelection,
       formControls,

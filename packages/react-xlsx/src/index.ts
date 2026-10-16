@@ -1,3 +1,4 @@
+export { findXlsxCells, getXlsxSelectionStatistics, resolveXlsxFindIndex } from "./selection-tools";
 export { useXlsxViewerController, XlsxFileSizeLimitExceededError } from "./controller";
 export { parseXlsxRange } from "./range-reference";
 export { SUGGESTION_MARKER, formatSuggestionText, parseSuggestionText } from "./comments";

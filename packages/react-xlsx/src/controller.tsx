@@ -59,6 +59,7 @@ import {
   setCommentThreadResolved,
   type XlsxCommentThread
 } from "./comments";
+import { applyXlsxCut, captureXlsxCut } from "./selection-tools";
 import { safeCalculate, tryRecalculate } from "./safe-calculate";
 import { parseXlsxRange } from "./range-reference";
 import { canUseConfiguredWasmSourceInWorker, getSheetsWasmModule } from "./wasm";
@@ -1888,6 +1889,20 @@ function downloadUrl(src: string, fileName: string) {
   anchor.remove();
 }
 
+async function writeClipboardData(clipboardData: XlsxClipboardData | null) {
+  if (!clipboardData || typeof navigator === "undefined" || !navigator.clipboard) return false;
+  if (typeof ClipboardItem === "function" && navigator.clipboard.write) {
+    await navigator.clipboard.write([new ClipboardItem({
+      [INTERNAL_CLIPBOARD_MIME]: new Blob([clipboardData.structured], { type: INTERNAL_CLIPBOARD_MIME }),
+      "text/html": new Blob([clipboardData.html], { type: "text/html" }),
+      "text/plain": new Blob([clipboardData.text], { type: "text/plain" })
+    })]);
+  } else {
+    await navigator.clipboard.writeText(clipboardData.text);
+  }
+  return true;
+}
+
 export function useXlsxViewerController(options: UseXlsxViewerControllerOptions): XlsxViewerController {
   const {
     allowResizeInReadOnly = false,
@@ -1925,6 +1940,18 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   const [selectedChartElement, setSelectedChartElement] = React.useState<XlsxChartElementSelection | null>(null);
   const [selectedImageId, setSelectedImageId] = React.useState<string | null>(null);
   const [revision, setRevision] = React.useState(0);
+  const pendingCutRef = React.useRef<{
+    workbook: Workbook;
+    sheetName: string;
+    clipboard: XlsxClipboardData;
+    snapshot: ReturnType<typeof captureXlsxCut>;
+  } | null>(null);
+  const [cutRange, setCutRange] = React.useState<{ sheetName: string; range: XlsxCellRange } | null>(null);
+  const cancelCut = React.useCallback(() => {
+    pendingCutRef.current = null;
+    setCutRange(null);
+  }, []);
+  React.useEffect(cancelCut, [cancelCut, workbook]);
   const selectionAnchorRef = React.useRef<XlsxCellAddress | null>(null);
   const undoStackRef = React.useRef<HistoryEntry[]>([]);
   // Last sheet name sent to onActiveSheetChange; cleared on every load so a new workbook always reports.
@@ -3184,6 +3211,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   }, [activeSheet, getActiveWorksheet]);
 
   const getClipboardData = React.useCallback((): XlsxClipboardData | null => {
+    cancelCut();
     const worksheet = getActiveWorksheet();
     const targetRange = selection ?? (activeCell ? { start: activeCell, end: activeCell } : null);
     if (!worksheet || !targetRange) {
@@ -3316,7 +3344,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       structured: JSON.stringify(payload),
       text: rows.join("\n")
     };
-  }, [activeCell, getActiveWorksheet, getCellDisplayValue, selection]);
+  }, [activeCell, cancelCut, getActiveWorksheet, getCellDisplayValue, selection]);
 
   React.useEffect(() => {
     if (!isWorkerBacked || !deferredMetadataSheet || !deferredMetadataCell) {
@@ -4795,6 +4823,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       return;
     }
 
+    cancelCut();
     recordHistoryBeforeMutation();
     workbook.removeSheet(activeSheet.workbookSheetIndex);
     sheetOriginsRef.current = sheetOriginsRef.current.filter((_, index) => index !== activeSheet.workbookSheetIndex);
@@ -4824,7 +4853,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     }
     setActiveSheetIndexState((current) => Math.max(0, Math.min(current, nextSheets.length - 1)));
     setRevision((current) => current + 1);
-  }, [activeSheet, readOnly, recordHistoryBeforeMutation, setChartAssets, workbook]);
+  }, [activeSheet, cancelCut, readOnly, recordHistoryBeforeMutation, setChartAssets, workbook]);
 
   const defineNamedRange = React.useCallback((name: string, range?: XlsxCellRange | null) => {
     if (readOnly || !workbook) {
@@ -4846,12 +4875,54 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     setRevision((current) => current + 1);
   }, [readOnly, recordHistoryBeforeMutation, selection, workbook]);
 
+  const getCutClipboardData = React.useCallback(() => {
+    if (readOnly || !workbook || !activeSheet) return null;
+    const clipboard = getClipboardData();
+    const worksheet = getActiveWorksheet();
+    const range = selection ?? (activeCell ? { start: activeCell, end: activeCell } : null);
+    if (!clipboard || !worksheet || !range) return null;
+    const snapshot = captureXlsxCut(worksheet, range);
+    pendingCutRef.current = { workbook, sheetName: activeSheet.name, clipboard, snapshot };
+    setCutRange({ sheetName: activeSheet.name, range: snapshot.range });
+    return clipboard;
+  }, [activeCell, activeSheet, getActiveWorksheet, getClipboardData, readOnly, selection, workbook]);
+
+  const pastePendingCut = React.useCallback((payload: string, format: "text" | "structured") => {
+    const cut = pendingCutRef.current;
+    const worksheet = getActiveWorksheet();
+    const targetCell = activeCell ?? selection?.start;
+    if (!cut || !worksheet || !workbook || !targetCell || readOnly) return undefined;
+    const sheetIndex = workbook.sheetIndex(cut.sheetName);
+    if (cut.workbook !== workbook || sheetIndex === undefined || cut.clipboard[format] !== payload) {
+      cancelCut();
+      return undefined;
+    }
+    const { range } = cut.snapshot;
+    if (targetCell.row + range.end.row - range.start.row >= 1_048_576 || targetCell.col + range.end.col - range.start.col >= 16_384) return false;
+    recordHistoryBeforeMutation();
+    applyXlsxCut(cut.snapshot, workbook.getSheet(sheetIndex), worksheet, targetCell);
+    cancelCut();
+    maybeRecalculateWorkbook(workbook);
+    refreshWorkbookState(workbook);
+    const nextRange = {
+      start: targetCell,
+      end: { row: targetCell.row + range.end.row - range.start.row, col: targetCell.col + range.end.col - range.start.col }
+    };
+    setActiveCell(targetCell);
+    setSelection(nextRange);
+    selectionAnchorRef.current = targetCell;
+    return true;
+  }, [activeCell, cancelCut, getActiveWorksheet, maybeRecalculateWorkbook, readOnly, recordHistoryBeforeMutation, refreshWorkbookState, selection, workbook]);
+
   const pasteText = React.useCallback((text: string) => {
     const worksheet = getActiveWorksheet();
     const targetCell = activeCell ?? selection?.start ?? null;
     if (readOnly || !worksheet || !workbook || !targetCell || !text) {
       return false;
     }
+
+    const cutResult = pastePendingCut(text, "text");
+    if (cutResult !== undefined) return cutResult;
 
     const grid = parseClipboardText(text);
     if (grid.length === 0 || grid.every((row) => row.length === 0)) {
@@ -4912,7 +4983,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     selectionAnchorRef.current = targetCell;
     recordRangeEditHistory(mutations, nextRange, targetCell);
     return true;
-  }, [activeCell, captureCellMutationState, getActiveWorksheet, maybeRecalculateWorkbook, readOnly, recordRangeEditHistory, refreshWorkbookState, selection, workbook]);
+  }, [activeCell, captureCellMutationState, getActiveWorksheet, maybeRecalculateWorkbook, pastePendingCut, readOnly, recordRangeEditHistory, refreshWorkbookState, selection, workbook]);
 
   const pasteStructuredClipboardData = React.useCallback((serializedPayload: string) => {
     const worksheet = getActiveWorksheet();
@@ -4920,6 +4991,9 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     if (readOnly || !worksheet || !workbook || !targetCell || !serializedPayload) {
       return false;
     }
+
+    const cutResult = pastePendingCut(serializedPayload, "structured");
+    if (cutResult !== undefined) return cutResult;
 
     let payload: ClipboardPayload;
     try {
@@ -5014,6 +5088,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     captureCellMutationState,
     getActiveWorksheet,
     maybeRecalculateWorkbook,
+    pastePendingCut,
     readOnly,
     recordHistoryBeforeMutation,
     recordRangeEditHistory,
@@ -5023,24 +5098,20 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   ]);
 
   const copySelectionToClipboard = React.useCallback(async () => {
-    const clipboardData = getClipboardData();
-    if (!clipboardData || typeof navigator === "undefined" || !navigator.clipboard) {
-      return false;
-    }
-
-    if (typeof ClipboardItem === "function" && navigator.clipboard.write) {
-      const item = new ClipboardItem({
-        [INTERNAL_CLIPBOARD_MIME]: new Blob([clipboardData.structured], { type: INTERNAL_CLIPBOARD_MIME }),
-        "text/html": new Blob([clipboardData.html], { type: "text/html" }),
-        "text/plain": new Blob([clipboardData.text], { type: "text/plain" })
-      });
-      await navigator.clipboard.write([item]);
-      return true;
-    }
-
-    await navigator.clipboard.writeText(clipboardData.text);
-    return true;
+    return writeClipboardData(getClipboardData());
   }, [getClipboardData]);
+
+  const cutSelectionToClipboard = React.useCallback(async () => {
+    const clipboard = getCutClipboardData();
+    try {
+      const succeeded = await writeClipboardData(clipboard);
+      if (!succeeded && pendingCutRef.current?.clipboard === clipboard) cancelCut();
+      return succeeded;
+    } catch (error) {
+      if (pendingCutRef.current?.clipboard === clipboard) cancelCut();
+      throw error;
+    }
+  }, [cancelCut, getCutClipboardData]);
 
   const pasteFromClipboard = React.useCallback(async () => {
     if (readOnly || typeof navigator === "undefined" || !navigator.clipboard) {
@@ -5068,6 +5139,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   }, [pasteStructuredClipboardData, pasteText, readOnly]);
 
   const undo = React.useCallback(() => {
+    cancelCut();
     if (readOnly || !workbook || undoStackRef.current.length === 0) {
       return;
     }
@@ -5097,9 +5169,10 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     }
     setHistoryRevision((current) => current + 1);
     void restoreHistoryEntry(entry);
-  }, [applyCellEditHistoryEntry, applyRangeEditHistoryEntry, createHistoryEntry, readOnly, restoreHistoryEntry, workbook]);
+  }, [cancelCut, applyCellEditHistoryEntry, applyRangeEditHistoryEntry, createHistoryEntry, readOnly, restoreHistoryEntry, workbook]);
 
   const redo = React.useCallback(() => {
+    cancelCut();
     if (readOnly || !workbook || redoStackRef.current.length === 0) {
       return;
     }
@@ -5129,7 +5202,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     }
     setHistoryRevision((current) => current + 1);
     void restoreHistoryEntry(entry);
-  }, [applyCellEditHistoryEntry, applyRangeEditHistoryEntry, createHistoryEntry, readOnly, restoreHistoryEntry, workbook]);
+  }, [cancelCut, applyCellEditHistoryEntry, applyRangeEditHistoryEntry, createHistoryEntry, readOnly, restoreHistoryEntry, workbook]);
 
   return React.useMemo(
     () => ({
@@ -5169,6 +5242,10 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       suggestions,
       continueDeferredLoad,
       copySelectionToClipboard,
+      cutSelectionToClipboard,
+      cancelCut,
+      cutRange,
+      getCutClipboardData,
       defaultZoomScale,
       deferredLoadFileSize,
       defineNamedRange,
@@ -5301,6 +5378,10 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       resolveComment,
       suggestions,
       copySelectionToClipboard,
+      cutSelectionToClipboard,
+      cancelCut,
+      cutRange,
+      getCutClipboardData,
       defaultZoomScale,
       deferredLoadFileSize,
       defineNamedRange,

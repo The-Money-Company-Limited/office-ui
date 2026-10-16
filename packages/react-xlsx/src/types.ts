@@ -1115,8 +1115,12 @@ export interface XlsxViewerController {
   /** Replaces the highlights with validated A1 ranges. Returns false without changing state if any reference cannot be resolved. */
   highlightRanges: (references: string | readonly string[], options?: XlsxHighlightRangeOptions) => boolean;
   highlightedRanges: XlsxRangeHighlight[];
+  cutRange: { sheetName: string; range: XlsxCellRange } | null;
   continueDeferredLoad: () => void;
   copySelectionToClipboard: () => Promise<boolean>;
+  cutSelectionToClipboard: () => Promise<boolean>;
+  cancelCut: () => void;
+  getCutClipboardData: () => XlsxClipboardData | null;
   defaultZoomScale: number;
   deferredLoadFileSize: number | null;
   defineNamedRange: (name: string, range?: XlsxCellRange | null) => void;
@@ -1319,6 +1323,9 @@ export interface XlsxViewerEditing {
   canUndo: boolean;
   clearSelectedCells: () => void;
   copySelectionToClipboard: () => Promise<boolean>;
+  cutSelectionToClipboard: () => Promise<boolean>;
+  cancelCut: () => void;
+  getCutClipboardData: () => XlsxClipboardData | null;
   defineNamedRange: (name: string, range?: XlsxCellRange | null) => void;
   fillSelection: (targetRange: XlsxCellRange) => void;
   formControls: XlsxFormControl[];
@@ -1586,6 +1593,12 @@ export interface XlsxCommentIndicatorRenderProps {
 }
 
 export interface XlsxViewerProps extends UseXlsxViewerControllerOptions {
+  /** Selects a right-clicked cell when outside the selection, then requests the host menu. */
+  onCellContextMenu?: (cell: XlsxCellAddress, event: React.MouseEvent<HTMLDivElement>) => void;
+  /** Handles Cmd/Ctrl+F while the grid has keyboard focus. */
+  onFind?: () => void;
+  /** Reveals a cell in either scroll mode. Pass a new object to repeat a request. */
+  scrollToCell?: XlsxCellAddress | null;
   /** Render-only A1 ranges to highlight. Null or an empty array clears them; undefined leaves controller state alone. */
   highlightedRanges?: string | readonly string[] | null;
   /** Reveals the first newly highlighted range, including switching worksheets. Defaults to true. */
