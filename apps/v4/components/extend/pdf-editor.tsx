@@ -18,6 +18,7 @@ import {
   type PdfEngine,
   type PdfLinkAnnoObject,
   type PdfPrintOptions,
+  type PdfTextRun,
 } from "@embedpdf/models"
 import {
   AnnotationLayer,
@@ -361,7 +362,11 @@ export type PDFEditorProps = {
    * pages track window scroll. Off by default.
    */
   scrollsWindow?: boolean
-  /** When set, each page element gets the id `${anchorIdPrefix}page-${n}`. */
+  /**
+   * When set, each page element gets the id `${anchorIdPrefix}page-${n}` and
+   * holds its text as invisible lines, so a page comment layer can name the
+   * words under a click or a mark.
+   */
   anchorIdPrefix?: string
   renderPageOverlay?: (props: PDFEditorPageOverlayProps) => React.ReactNode
   onDocumentLoadSuccess?: (info: {
@@ -2158,6 +2163,101 @@ const RIGHT_PANEL_TABS: Array<{
   },
 ]
 
+type PageTextLine = {
+  text: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+// Text runs on one line (their vertical centres within half a run's height)
+// join into a line, so a comment names the words a reader sees together.
+function linesOf(runs: PdfTextRun[]): PageTextLine[] {
+  const lines: PageTextLine[] = []
+  for (const run of runs) {
+    const text = run.text.replace(/\s+/g, " ")
+    if (!text.trim()) continue
+    const { origin, size } = run.rect
+    const last = lines.at(-1)
+    if (
+      last &&
+      Math.abs(last.y + last.height / 2 - (origin.y + size.height / 2)) <
+        Math.max(last.height, size.height) / 2 &&
+      origin.x >= last.x
+    ) {
+      const right = Math.max(last.x + last.width, origin.x + size.width)
+      const top = Math.min(last.y, origin.y)
+      const gap = origin.x - (last.x + last.width) > size.height / 4
+      last.text += gap && !last.text.endsWith(" ") ? ` ${text}` : text
+      last.height = Math.max(last.y + last.height, origin.y + size.height) - top
+      last.y = top
+      last.width = right - last.x
+    } else {
+      lines.push({ text, x: origin.x, y: origin.y, ...size })
+    }
+  }
+  return lines
+}
+
+/**
+ * A page's text as transparent lines over the rendered canvas. The lines take
+ * pointer hits (the page handles the events they bubble), so a page comment
+ * layer finds the words under a point; they never show or select.
+ */
+function PdfEditorPageText({
+  document: pdfDocument,
+  pageIndex,
+}: {
+  document: PdfDocumentObject
+  pageIndex: number
+}) {
+  const { registry } = useRegistry()
+  const [lines, setLines] = React.useState<PageTextLine[]>([])
+  const page = pdfDocument.pages[pageIndex]
+
+  React.useEffect(() => {
+    if (!registry || !page) return
+    let current = true
+    registry
+      .getEngine()
+      .getPageTextRuns(pdfDocument, page)
+      .toPromise()
+      .then(
+        ({ runs }) => current && setLines(linesOf(runs)),
+        (error) => console.error("Page text could not be read.", error)
+      )
+    return () => {
+      current = false
+    }
+  }, [registry, pdfDocument, page])
+
+  if (!page || lines.length === 0) return null
+  const { width, height } = page.size
+  return (
+    <div
+      data-pdf-editor-text=""
+      className="pointer-events-none absolute inset-0 overflow-hidden text-transparent select-none"
+    >
+      {lines.map((line, index) => (
+        <span
+          key={index}
+          className="pointer-events-auto absolute"
+          style={{
+            left: `${(line.x / width) * 100}%`,
+            top: `${(line.y / height) * 100}%`,
+            width: `${(line.width / width) * 100}%`,
+            height: `${(line.height / height) * 100}%`,
+            fontSize: 0,
+          }}
+        >
+          {line.text}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function PdfEditorInner({
   documentId,
   document: pdfDocument,
@@ -2965,6 +3065,12 @@ function PdfEditorInner({
             pageIndex={page.pageIndex}
             className="pointer-events-none opacity-100 transition-none [&_img]:opacity-100 [&_img]:transition-none"
           />
+          {anchorIdPrefix !== undefined && pdfDocument ? (
+            <PdfEditorPageText
+              document={pdfDocument}
+              pageIndex={page.pageIndex}
+            />
+          ) : null}
           <SearchLayer
             documentId={documentId}
             pageIndex={page.pageIndex}
@@ -3030,7 +3136,7 @@ function PdfEditorInner({
         </PagePointerProvider>
       </Rotate>
     ),
-    [anchorIdPrefix, currentZoom, documentId, renderPageOverlay]
+    [anchorIdPrefix, currentZoom, documentId, pdfDocument, renderPageOverlay]
   )
 
   /* ---- toolbar pieces --------------------------------------------------- */
