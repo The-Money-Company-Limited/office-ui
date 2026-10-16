@@ -22,7 +22,7 @@ against the published demos. Status: ✅ works, 🔧 fixed (commit), ❌ missing
 | Sum / Average / Count of the selection | 🔧 react-xlsx + office-ui |
 | Cmd+F find in the sheet | 🔧 react-xlsx + office-ui |
 | Name box shows the selection; typing a reference jumps there | 🔧 office-ui |
-| A sheet opens with A1 selected | ❌ (host-side attempt broke the first click; belongs in the grid) |
+| A sheet opens with its saved active cell (or A1) selected | 🔧 react-xlsx |
 | Rename, reorder sheets | ⛔ duke-sheets has no rename/move |
 | Insert / delete rows and columns | ⛔ duke-sheets has no insert/delete |
 
