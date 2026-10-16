@@ -4,6 +4,7 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { Popover, PopoverPopup, PopoverTrigger } from "@/components/ui/popover"
 import { Separator } from "@/components/ui/separator"
 import { IconPlaceholder } from "@/components/icon-placeholder"
 
@@ -28,7 +29,6 @@ export function ToolbarOverflow({
   const widthsRef = React.useRef<number[]>([])
   const [visibleCount, setVisibleCount] = React.useState(groups.length)
   const [menuOpen, setMenuOpen] = React.useState(false)
-  const menuRef = React.useRef<HTMLDivElement>(null)
 
   React.useLayoutEffect(() => {
     const row = rowRef.current
@@ -47,7 +47,9 @@ export function ToolbarOverflow({
       let used = 0
       let count = 0
       for (let index = 0; index < groups.length; index += 1) {
-        const width = (widthsRef.current[index] ?? 0) + (index > 0 ? gap : 0)
+        // Each separator occupies one pixel and has a gap on both sides.
+        const width =
+          (widthsRef.current[index] ?? 0) + (index > 0 ? 2 * gap + 1 : 0)
         const moreWidth =
           index < groups.length - 1 ? gap + MORE_BUTTON_WIDTH_PX : 0
         if (used + width + moreWidth > row.clientWidth) break
@@ -65,38 +67,9 @@ export function ToolbarOverflow({
 
   const hidden = groups.slice(visibleCount)
 
-  React.useEffect(() => {
-    if (!menuOpen) return
-    // The menu's own pickers open in portals, so only a press on the
-    // toolbar's page area outside the menu closes it.
-    const close = (event: PointerEvent) => {
-      const target = event.target as Element | null
-      if (menuRef.current?.contains(target)) return
-      if (
-        target?.closest(
-          "[data-slot$='-positioner'], [role='listbox'], [role='menu']"
-        )
-      )
-        return
-      setMenuOpen(false)
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false)
-    }
-    document.addEventListener("pointerdown", close)
-    document.addEventListener("keydown", closeOnEscape)
-    return () => {
-      document.removeEventListener("pointerdown", close)
-      document.removeEventListener("keydown", closeOnEscape)
-    }
-  }, [menuOpen])
-
   return (
     <div className={cn("relative flex items-center gap-2", className)}>
-      <div
-        ref={rowRef}
-        className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden"
-      >
+      <div ref={rowRef} className="flex min-w-0 flex-1 items-center gap-2">
         {groups.slice(0, visibleCount).map((group, index) => (
           <React.Fragment key={index}>
             {index > 0 ? (
@@ -114,34 +87,43 @@ export function ToolbarOverflow({
           </React.Fragment>
         ))}
         {hidden.length > 0 ? (
-          <div ref={menuRef} className="shrink-0">
-            <Button
-              type="button"
-              variant={menuOpen ? "secondary" : "ghost"}
-              size="icon-sm"
-              aria-label="More"
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((open) => !open)}
+          <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+            <PopoverTrigger
+              render={
+                <Button
+                  type="button"
+                  variant={menuOpen ? "secondary" : "ghost"}
+                  size="icon-sm"
+                  className="shrink-0"
+                  aria-label="More"
+                />
+              }
             >
               <IconPlaceholder
-                lucide="Ellipsis"
-                tabler="IconDots"
-                hugeicons="MoreHorizontalIcon"
-                phosphor="DotsThreeIcon"
-                remixicon="RiMoreLine"
+                lucide="EllipsisVertical"
+                tabler="IconDotsVertical"
+                hugeicons="MoreVerticalIcon"
+                phosphor="DotsThreeVerticalIcon"
+                remixicon="RiMore2Line"
                 className="size-4"
               />
-            </Button>
-            {menuOpen ? (
-              <div className="absolute top-full right-2 z-30 mt-1 flex max-w-[min(32rem,calc(100vw-1rem))] flex-wrap items-center gap-2 rounded-lg border bg-popover p-2 text-popover-foreground shadow-lg">
+            </PopoverTrigger>
+            <PopoverPopup
+              align="end"
+              aria-label="More tools"
+              className="[&>[data-slot=popover-viewport]]:p-2"
+            >
+              {/* The viewport wraps its children in its own element, so the
+                  row is a child of it rather than the viewport itself. */}
+              <div className="flex w-max max-w-[min(32rem,calc(100vw-2rem))] flex-wrap items-center gap-2">
                 {hidden.map((group, index) => (
                   <div key={index} className="flex items-center gap-1">
                     {group}
                   </div>
                 ))}
               </div>
-            ) : null}
-          </div>
+            </PopoverPopup>
+          </Popover>
         ) : null}
       </div>
       {end ? (

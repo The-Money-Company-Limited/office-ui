@@ -746,7 +746,7 @@ function PDFViewerPageNumberControl({
   )
 
   return (
-    <div className="flex items-center text-sm whitespace-nowrap text-primary">
+    <div className="flex items-center text-sm whitespace-nowrap text-muted-foreground">
       <span>Page</span>
       {isEditing ? (
         <Input

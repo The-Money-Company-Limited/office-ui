@@ -327,7 +327,7 @@ function PptxSlideNumberControl({
   )
 
   return (
-    <div className="flex items-center text-sm whitespace-nowrap text-primary">
+    <div className="flex items-center text-sm whitespace-nowrap text-muted-foreground">
       <span>Slide</span>
       {isEditing ? (
         <Input
@@ -419,7 +419,10 @@ function PptxToolbar({
     : [...ZOOM_OPTIONS, roundedZoom].sort((left, right) => left - right)
 
   return (
-    <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b bg-background px-3 py-2">
+    <div
+      data-slot="pptx-viewer-toolbar"
+      className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b bg-background px-3 py-2"
+    >
       <TooltipProvider>
         <div className="flex min-w-0 flex-wrap items-center gap-1">
           <ToolbarTooltip label="Toggle thumbnails">

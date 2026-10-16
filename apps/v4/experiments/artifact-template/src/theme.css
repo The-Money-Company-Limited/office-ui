@@ -1,6 +1,12 @@
-/* Appearance tokens from RuntimeVM frontend/src/index.css at cb59f25fa4a8. */
+/* Mirrors RuntimeVM frontend/src/{surfaces,index}.css at 62b674bb7. */
 :root {
-  --radius: 0.625rem;
+  --radius: var(--radius-control);
+  --radius-control: 8px;
+  --radius-card: 14px;
+  --radius-window: 18px;
+  --duration-quick: 150ms;
+  --duration-fast: 250ms;
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
   --font-ui:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
     Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", Arial, sans-serif;
@@ -20,7 +26,7 @@
   --accent-foreground: oklch(0.21 0.006 285.885);
   --destructive: oklch(0.637 0.237 25.331);
   --destructive-foreground: oklch(0.52 0.2 25.331);
-  --border: oklch(0.92 0.004 286.32);
+  --border: oklch(0 0 0 / 0.08);
   --input: oklch(0.871 0.006 286.286);
   --ring: oklch(0.67 0.19 263);
   --chart-1: oklch(0.8 0.15 260);
@@ -37,10 +43,9 @@
   --code: oklch(1 0 0);
   --code-foreground: var(--foreground);
   --code-highlight: oklch(0.96 0.003 264.5);
-  --brand: oklch(0.59 0.26 263);
+  --brand: oklch(0.54 0.25 263);
   --glass-fill: oklch(0.99 0.004 264 / 0.66);
   --glass-fill-clear: oklch(0.99 0.004 264 / 0.5);
-  --material-fill: oklch(0.975 0.004 264 / 0.9);
   --surface-rim: oklch(1 0 0 / 0.6);
   --surface-highlight: oklch(1 0 0 / 0.9);
   --surface-outline: oklch(0.25 0.02 264 / 0.12);
@@ -56,6 +61,7 @@
     0 1px 2px oklch(0.25 0.03 264 / 0.12),
     0 3px 8px -3px oklch(0.25 0.03 264 / 0.14);
   --raised-shadow-pressed: 0 0 0 0.5px oklch(0.25 0.02 264 / 0.22);
+  --well-fill: oklch(0.141 0.005 285.823 / 0.05);
 }
 
 .dark {
@@ -75,7 +81,7 @@
   --accent-foreground: oklch(0.965 0.006 285.885);
   --destructive: oklch(0.58 0.19 25.331);
   --destructive-foreground: oklch(0.704 0.191 22.216);
-  --border: oklch(0.32 0.006 286.32);
+  --border: oklch(1 0 0 / 0.12);
   --input: oklch(0.32 0.006 286.32);
   --ring: oklch(0.72 0.17 263);
   --chart-1: oklch(0.55 0.22 260);
@@ -95,20 +101,33 @@
   --code-highlight: oklch(0.24 0.006 262);
   --glass-fill: oklch(0.2 0.006 264 / 0.62);
   --glass-fill-clear: oklch(0.2 0.006 264 / 0.48);
-  --material-fill: oklch(0.17 0.005 264 / 0.86);
   --surface-rim: oklch(1 0 0 / 0.1);
   --surface-highlight: oklch(1 0 0 / 0.18);
   --surface-outline: oklch(0 0 0 / 0.5);
   --surface-shadow:
     0 16px 40px -12px oklch(0 0 0 / 0.6), 0 2px 8px -2px oklch(0 0 0 / 0.35);
   --surface-blur: blur(30px) saturate(1.6);
-  --raised-fill: oklch(1 0 0 / 0.1);
-  --raised-fill-hover: oklch(1 0 0 / 0.15);
-  --raised-fill-pressed: oklch(1 0 0 / 0.07);
+  --raised-fill: oklch(0.25 0.01 264 / 0.5);
+  --raised-fill-hover: oklch(0.29 0.01 264 / 0.56);
+  --raised-fill-pressed: oklch(0.22 0.01 264 / 0.5);
   --raised-shadow:
     inset 0 1px 0 oklch(1 0 0 / 0.12), 0 0 0 0.5px oklch(0 0 0 / 0.45),
     0 1px 2px oklch(0 0 0 / 0.3);
   --raised-shadow-pressed: 0 0 0 0.5px oklch(0 0 0 / 0.45);
+  --well-fill: oklch(0.965 0.005 285.823 / 0.06);
+}
+
+/* globals.css compiles the registry's radius scale separately from this theme. */
+.artifact-page :is(.rounded-sm, .rounded-md, .rounded-lg) {
+  border-radius: var(--radius-control);
+}
+
+.artifact-page .rounded-xl {
+  border-radius: var(--radius-card);
+}
+
+.artifact-page :is(.rounded-2xl, .rounded-3xl, .rounded-4xl) {
+  border-radius: var(--radius-window);
 }
 
 html,
@@ -160,7 +179,7 @@ html:has(.artifact-editor) {
 .artifact-state button {
   margin-top: 12px;
   padding: 7px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   color: var(--foreground);
   background: var(--raised-fill);
   box-shadow: var(--raised-shadow);
@@ -175,11 +194,17 @@ html:has(.artifact-editor) {
 .artifact-docx .docx-editor-toolbar {
   position: relative;
   z-index: 1;
-  background: var(--material-fill);
+  background: transparent;
+}
+
+.artifact-pdf fieldset:has(> [data-slot="pdf-editor-toolbar"]) {
+  background: transparent;
 }
 
 .artifact-xlsx .xlsx-editor-header,
 .artifact-xlsx .xlsx-editor-ribbon,
+.artifact-xlsx .xlsx-editor-formula,
+.artifact-pptx [data-slot="pptx-viewer-toolbar"],
 .artifact-docx .docx-editor-header,
 .artifact-docx .docx-editor-ribbon,
 .artifact-pdf [data-slot="pdf-editor-toolbar"],
@@ -203,6 +228,7 @@ html:has(.artifact-editor) {
 .artifact-xlsx .xlsx-editor-header [data-slot="button"],
 .artifact-xlsx .xlsx-editor-header .xlsx-editor-file-action,
 .artifact-docx .docx-editor-header [data-slot="button"],
+.artifact-pptx [data-slot="pptx-viewer-toolbar"] [data-slot="button"],
 .artifact-pdf [data-slot="pdf-editor-toolbar"] [data-slot="button"] {
   background: var(--raised-fill);
   box-shadow: var(--raised-shadow);
@@ -211,6 +237,7 @@ html:has(.artifact-editor) {
 .artifact-xlsx .xlsx-editor-header [data-slot="button"]:hover,
 .artifact-xlsx .xlsx-editor-header .xlsx-editor-file-action:hover,
 .artifact-docx .docx-editor-header [data-slot="button"]:hover,
+.artifact-pptx [data-slot="pptx-viewer-toolbar"] [data-slot="button"]:hover,
 .artifact-pdf [data-slot="pdf-editor-toolbar"] [data-slot="button"]:hover {
   background: var(--raised-fill-hover);
 }
@@ -218,6 +245,7 @@ html:has(.artifact-editor) {
 .artifact-xlsx .xlsx-editor-header [data-slot="button"]:active,
 .artifact-xlsx .xlsx-editor-header .xlsx-editor-file-action:active,
 .artifact-docx .docx-editor-header [data-slot="button"]:active,
+.artifact-pptx [data-slot="pptx-viewer-toolbar"] [data-slot="button"]:active,
 .artifact-pdf [data-slot="pdf-editor-toolbar"] [data-slot="button"]:active {
   background: var(--raised-fill-pressed);
   box-shadow: var(--raised-shadow-pressed);
@@ -226,14 +254,11 @@ html:has(.artifact-editor) {
 .artifact-xlsx .xlsx-editor-ribbon {
   flex-wrap: nowrap;
   min-height: 52px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: thin;
 }
 
 .artifact-xlsx .xlsx-editor-ribbon [data-slot="button"],
 .artifact-xlsx .xlsx-editor-ribbon [data-slot="toggle-group-item"] {
-  border-radius: 8px;
+  border-radius: var(--radius-control);
 }
 
 .artifact-xlsx .xlsx-editor-ribbon [data-slot="button"]:hover,
@@ -241,33 +266,81 @@ html:has(.artifact-editor) {
   background: var(--accent);
 }
 
-.artifact-xlsx .xlsx-editor-ribbon [data-slot="select-trigger"],
-.artifact-docx .docx-editor-ribbon [data-slot="select-trigger"] {
+.artifact-page [data-slot="select-trigger"] {
   border-color: var(--surface-rim);
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   background: var(--raised-fill);
   box-shadow: var(--raised-shadow);
 }
 
-.artifact-xlsx .xlsx-editor-ribbon [data-slot="select-trigger"]:hover,
-.artifact-docx .docx-editor-ribbon [data-slot="select-trigger"]:hover {
+.artifact-page [data-slot="select-trigger"]:hover {
   background: var(--raised-fill-hover);
 }
 
-.artifact-xlsx .xlsx-editor-formula {
+.artifact-xlsx .xlsx-editor-formula [data-slot="input-control"] {
   border-color: var(--surface-rim);
-  background: var(--material-fill);
-}
-
-.artifact-xlsx .xlsx-editor-formula [data-slot="group"] {
-  border-color: var(--surface-rim);
-  border-radius: 9px;
+  border-radius: var(--radius-control);
   background: var(--raised-fill);
   box-shadow: var(--raised-shadow);
+}
+
+.artifact-xlsx .xlsx-editor-formula [data-slot="group-text"] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.artifact-xlsx .xlsx-editor-formula [data-slot="group-text"]::before {
+  box-shadow: none;
 }
 
 .artifact-xlsx .xlsx-editor-canvas {
   background: var(--background);
+}
+
+/* Portals are children of the page, outside their editor's chrome. */
+.artifact-page
+  :is(
+    [data-slot="dropdown-menu-content"],
+    [data-slot="select-popup"],
+    [data-slot="popover-popup"]
+  ) {
+  border-radius: var(--radius-card);
+  border-color: var(--surface-rim);
+  background: var(--glass-fill-clear);
+  box-shadow:
+    inset 0 1px 0 var(--surface-highlight),
+    0 0 0 0.5px var(--surface-outline),
+    var(--surface-shadow);
+  backdrop-filter: var(--surface-blur);
+  -webkit-backdrop-filter: var(--surface-blur);
+}
+
+/* Select's inner frame must not cover the glass painted by its popup. */
+.artifact-page [data-slot="select-popup"] > div {
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  box-shadow: none;
+}
+
+.artifact-page
+  :is(
+    [data-slot="dropdown-menu-content"],
+    [data-slot="select-popup"] > div,
+    [data-slot="popover-popup"],
+    [data-slot="tooltip-popup"]
+  )::before {
+  box-shadow: none;
+}
+
+.artifact-page [data-slot="tooltip-popup"] {
+  border-color: oklch(1 0 0 / 0.1);
+  background: oklch(0.18 0 0);
+  color: oklch(0.93 0 0);
+  box-shadow:
+    0 16px 48px -12px rgb(0 0 0 / 0.5),
+    0 4px 14px -2px rgb(0 0 0 / 0.28);
 }
 
 .artifact-page
@@ -277,14 +350,67 @@ html:has(.artifact-editor) {
     [data-slot="popover-popup"],
     [data-slot="tooltip-popup"]
   ) {
-  border-color: var(--surface-rim);
-  background: var(--glass-fill);
-  box-shadow:
-    inset 0 1px 0 var(--surface-highlight),
-    0 0 0 0.5px var(--surface-outline),
-    var(--surface-shadow);
-  backdrop-filter: var(--surface-blur);
-  -webkit-backdrop-filter: var(--surface-blur);
+  transform-origin: var(--transform-origin);
+  transition-property: width, height, scale, opacity;
+  transition-duration: var(--duration-fast);
+  transition-timing-function: var(--ease-smooth-out);
+}
+
+.artifact-page
+  :is(
+    [data-slot="dropdown-menu-content"],
+    [data-slot="select-popup"],
+    [data-slot="popover-popup"],
+    [data-slot="tooltip-popup"]
+  ):is([data-starting-style], [data-ending-style]) {
+  scale: 0.98;
+  opacity: 0;
+}
+
+.artifact-page
+  :is(
+    [data-slot="dropdown-menu-content"],
+    [data-slot="select-popup"],
+    [data-slot="popover-popup"],
+    [data-slot="tooltip-popup"]
+  )[data-ending-style] {
+  transition-duration: var(--duration-quick);
+}
+
+.artifact-page [data-slot="tooltip-popup"],
+.artifact-page [data-slot="tooltip-popup"]:is([data-starting-style], [data-ending-style]) {
+  transition-duration: 100ms;
+  transition-timing-function: var(--default-transition-timing-function);
+}
+
+.artifact-page [data-slot="tooltip-popup"][data-instant] {
+  transition-duration: 0s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .artifact-page
+    :is(
+      [data-slot="dropdown-menu-content"],
+      [data-slot="select-popup"],
+      [data-slot="popover-popup"],
+      [data-slot="tooltip-popup"]
+    ) {
+    transition-property: opacity;
+  }
+
+  .artifact-page
+    :is(
+      [data-slot="dropdown-menu-content"],
+      [data-slot="select-popup"],
+      [data-slot="popover-popup"],
+      [data-slot="tooltip-popup"]
+    ):is([data-starting-style], [data-ending-style]) {
+    scale: 1;
+  }
+
+  .artifact-page [data-slot$="-positioner"] {
+    transition: none;
+  }
 }
 
 .artifact-page [data-slot="button"]:focus-visible,
