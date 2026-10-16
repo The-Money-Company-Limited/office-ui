@@ -173,7 +173,7 @@ async function createAdapter(
       if (mode === 'continuous') {
         const virtualization = typeof props.virtualization === 'object' ? props.virtualization : {};
         await normalized.renderList({
-          enabled: props.virtualization !== false,
+          enabled: props.virtualization !== false && virtualization.enabled !== false,
           initialSlides: virtualization.initialSlides ?? 3,
           overscanViewport: virtualization.overscanViewport ?? 1.5,
           batchSize: virtualization.batchSize ?? 3,
@@ -527,15 +527,14 @@ export const ReactPptxViewer = forwardRef<PptxViewerController, ReactPptxViewerP
       const isCurrent = () => !disposed && adapterGenerationRef.current === generation && !error;
       const adapterProps: ReactPptxViewerProps = {
         ...props,
-        virtualization: !virtualizationEnabled
-          ? false
-          : {
-              enabled: virtualizationEnabled,
-              initialSlides,
-              overscanViewport,
-              batchSize,
-              ...(scrollElement ? { scrollElement } : {}),
-            },
+        // Disabling windowing keeps the scroll element: it still owns scrolling and fit.
+        virtualization: {
+          enabled: virtualizationEnabled,
+          initialSlides,
+          overscanViewport,
+          batchSize,
+          ...(scrollElement ? { scrollElement } : {}),
+        },
       };
       setAdapterState(null);
       void (async () => {

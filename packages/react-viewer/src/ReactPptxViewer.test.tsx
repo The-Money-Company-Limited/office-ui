@@ -610,6 +610,33 @@ describe('ReactPptxViewer adapter lifecycle', () => {
     });
   });
 
+  it('keeps the window as the scroller when virtualization is disabled', async () => {
+    installObserverStub();
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    const onViewportReady = (viewport: HTMLDivElement) => {
+      Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 4_800 });
+    };
+
+    await act(async () => {
+      root.render(
+        <ReactPptxViewer
+          source={documentModel('window-unvirtualized', 3)}
+          mode="continuous"
+          defaultZoom="fit-page"
+          virtualization={{ enabled: false, scrollElement: window }}
+          onViewportReady={onViewportReady}
+        />,
+      );
+    });
+
+    // Every slide mounts, each fit to jsdom's 768px-tall window (960x720 natural).
+    await waitFor(() => {
+      const wrappers = host.querySelectorAll<HTMLElement>('[data-rpv-slide-wrapper]');
+      expect(wrappers).toHaveLength(3);
+      expect(wrappers[0]?.style.width).toBe('1024px');
+    });
+  });
+
   it('supports uncontrolled responsive zoom and exits the mode from consumer zoom controls', async () => {
     installObserverStub();
     let controller: PptxViewerController | undefined;

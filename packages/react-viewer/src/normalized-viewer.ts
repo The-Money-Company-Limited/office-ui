@@ -1595,7 +1595,12 @@ export class NormalizedPresentationViewer {
     };
   }
 
-  /** Stable 1-based element id of a main-view slide wrapper; thumbnails have none. */
+  /**
+   * Stable 1-based element id of a main-view slide: the slide wrapper in
+   * single-slide mode, the always-present list row in continuous mode (rows
+   * outlive their mounted content, so the id exists for every slide).
+   * Thumbnails have none.
+   */
   private slideElementId(index: number): string {
     return `${this.options.slideIdPrefix ?? ''}slide-${index + 1}`;
   }
@@ -1752,13 +1757,14 @@ export class NormalizedPresentationViewer {
     let handle: DisposableHandle | undefined;
     let mountPromise: Promise<void> | undefined;
     let effectiveScale = scale;
+    item.id = this.slideElementId(index);
     const isActive = () =>
       this.isRenderActive(generation) && this.listState?.generation === generation;
     const mount = (): Promise<void> => {
       if (!isActive()) return Promise.resolve();
       if (handle) return handle.ready;
       if (mountPromise) return mountPromise;
-      const nextHandle = this.mount(index, item, effectiveScale, this.slideElementId(index));
+      const nextHandle = this.mount(index, item, effectiveScale);
       handle = nextHandle;
       const pending = nextHandle.ready
         .then(() => {
@@ -1969,7 +1975,11 @@ export class NormalizedPresentationViewer {
       // PowerPoint's own thumbnail rail tracks the reading position.
       const offset = (instance.scrollOffset ?? 0) - scrollMargin;
       const viewportHeight = instance.scrollRect?.height ?? initialRect.height;
-      const firstCandidate = Math.max(0, Math.floor(offset / itemStride));
+      // A page can continue below the deck, so the offset may pass the last slide.
+      const firstCandidate = Math.min(
+        this.slideCount - 1,
+        Math.max(0, Math.floor(offset / itemStride)),
+      );
       const lastCandidate = Math.min(
         this.slideCount - 1,
         Math.max(firstCandidate, Math.floor((offset + viewportHeight) / itemStride)),

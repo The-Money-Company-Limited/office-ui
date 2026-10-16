@@ -329,10 +329,13 @@ export interface ReactPptxViewerProps extends Omit<
   showSlideLabels?: boolean;
   virtualization?: boolean | VirtualizationOptions;
   /**
-   * Prefix for the stable id of each main-view slide wrapper,
+   * Prefix for the stable id of each main-view slide,
    * `${slideIdPrefix}slide-${n}` with `n` 1-based (default `''`, giving
-   * `slide-1`). Give each viewer on one page its own prefix. Use only
-   * `[A-Za-z0-9_-]`. Thumbnails carry no id.
+   * `slide-1`). In continuous mode the id sits on the slide's list row
+   * (`[data-rpv-list-item]`), which exists even while virtualization has
+   * unmounted the slide; in single-slide mode it sits on the slide wrapper.
+   * Give each viewer on one page its own prefix. Use only `[A-Za-z0-9_-]`.
+   * Thumbnails carry no id.
    */
   slideIdPrefix?: string;
   /** Font loading, substitution, and missing-font diagnostics. */

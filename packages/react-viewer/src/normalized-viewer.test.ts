@@ -126,7 +126,64 @@ describe('normalized viewer scrolling', () => {
     }
   });
 
-  it('gives main-view slide wrappers stable prefixed ids and thumbnails none', async () => {
+  it('reports the last slide when the page scrolls past the end of the deck', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    Object.defineProperty(container, 'clientWidth', { configurable: true, value: 480 });
+    vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockReturnValue(100_000);
+    let scrollY = 0;
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => scrollY);
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    const onSlideChange = vi.fn();
+    const viewer = new NormalizedPresentationViewer(container, presentationWithSlides(6), {
+      onSlideChange,
+    });
+
+    await viewer.setZoom('fit-width');
+    await viewer.renderList({ enabled: true, scrollElement: window });
+    // Six 384px strides end near 2300px; the page goes on far below.
+    scrollY = 50_000;
+    window.dispatchEvent(new Event('scroll'));
+    await Promise.resolve();
+
+    expect(viewer.currentSlideIndex).toBe(5);
+    expect(onSlideChange.mock.calls.every(([index]) => index >= 0 && index <= 5)).toBe(true);
+    viewer.destroy();
+  });
+
+  it('fits a page to the window height minus the viewer padding', async () => {
+    const container = document.createElement('div');
+    container.style.padding = '20px';
+    document.body.append(container);
+    Object.defineProperty(container, 'clientWidth', { configurable: true, value: 4_800 });
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    const viewer = new NormalizedPresentationViewer(container, presentationWithSlides(2));
+
+    await viewer.setZoom('fit-page');
+    await viewer.renderList({ enabled: true, scrollElement: window });
+
+    // jsdom's window is 768px tall; 40px of padding leaves 728px for a 720px slide.
+    expect(viewer.resolvedZoomPercent).toBeCloseTo((728 / 720) * 100);
+    viewer.destroy();
+  });
+
+  it('keeps every continuous slide id in the document while virtualization unmounts slides', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const viewer = new NormalizedPresentationViewer(container, presentationWithSlides(12));
+
+    await viewer.renderList({ enabled: true, overscanViewport: 0 });
+
+    const mounted = container.querySelectorAll('[data-rpv-slide-wrapper]').length;
+    expect(mounted).toBeGreaterThan(0);
+    expect(mounted).toBeLessThan(12);
+    for (let n = 1; n <= 12; n += 1) {
+      expect(document.getElementById(`slide-${n}`)?.dataset.rpvListItem).toBe(String(n - 1));
+    }
+    viewer.destroy();
+  });
+
+  it('gives main-view slides stable prefixed ids and thumbnails none', async () => {
     const container = document.createElement('div');
     document.body.append(container);
     const viewer = new NormalizedPresentationViewer(
@@ -137,9 +194,11 @@ describe('normalized viewer scrolling', () => {
     );
 
     await viewer.renderList({ enabled: false });
-    expect(
-      [...container.querySelectorAll('[data-rpv-slide-wrapper]')].map((wrapper) => wrapper.id),
-    ).toEqual(['deck-slide-1', 'deck-slide-2']);
+    expect([...container.querySelectorAll('[data-rpv-list-item]')].map((row) => row.id)).toEqual([
+      'deck-slide-1',
+      'deck-slide-2',
+    ]);
+    expect(container.querySelector('[data-rpv-slide-wrapper][id]')).toBe(null);
 
     const thumbnail = document.createElement('div');
     viewer.renderThumbnailToContainer(1, thumbnail);

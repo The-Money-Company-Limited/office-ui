@@ -185,9 +185,12 @@ the page never scrolls the slides.
 <ReactPptxViewer source={file} virtualization={{ scrollElement: window }} />
 ```
 
-Each main-view slide wrapper (`[data-rpv-slide-wrapper]`) has the stable id
-`${slideIdPrefix}slide-${n}`, with `n` counted from 1 (`slide-1`, `slide-2`, …). Give each viewer
-on one page its own `slideIdPrefix` (characters `[A-Za-z0-9_-]`). Thumbnails carry no id.
+Each main-view slide has the stable id `${slideIdPrefix}slide-${n}`, with `n` counted from 1
+(`slide-1`, `slide-2`, …). In continuous mode it sits on the slide's list row
+(`[data-rpv-list-item]`), which exists for every slide even while virtualization has unmounted
+its content (the rendered slide is the row's `[data-rpv-slide-wrapper]` child when mounted); in
+single-slide mode it sits on the slide wrapper. Give each viewer on one page its own
+`slideIdPrefix` (characters `[A-Za-z0-9_-]`). Thumbnails carry no id.
 
 `usePptxPresentation` (`usePptxModel` alias) separates parsing from rendering, while
 `usePptxViewer` exposes the reactive navigation/search/zoom controller. `onViewportReady`
