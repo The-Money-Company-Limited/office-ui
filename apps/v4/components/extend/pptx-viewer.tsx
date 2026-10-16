@@ -1443,6 +1443,7 @@ export function PptxViewerPreview({
       showToolbar={false}
       showThumbnails={false}
       virtualization={virtualization}
+      slideIdPrefix={slideIdPrefix}
       className="min-h-full !border-0 !bg-background [&_.rpv-stage]:min-h-full [&_.rpv-stage]:!bg-background [&_.rpv-status]:!bg-background [&_.rpv-workspace]:min-h-full [&_[data-rpv-list-item]]:[contain:layout_paint_style]"
       viewportClassName="!min-h-full !px-4 !py-6"
       renderLoading={() => (

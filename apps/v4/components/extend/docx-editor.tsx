@@ -15,8 +15,11 @@ import {
   useDocxViewerThumbnails,
   type DocxBorderContext,
   type DocxBorderPreset,
+  type DocxCommentCardRenderProps,
   type DocxDocumentTheme,
   type DocxEditorController,
+  type DocxEditorViewerMode,
+  type DocxTrackedChangeCardRenderProps,
   type ParagraphStyleDefinition,
 } from "@extend-ai/react-docx"
 
@@ -28,6 +31,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
@@ -706,6 +710,205 @@ function EditorLoadingSurface({
   )
 }
 
+export type DocxEditorMode = "viewing" | "suggesting" | "editing"
+
+// The Google Docs mode menu: what each mode is called, its icon, and the
+// viewer mode that runs it.
+const DOCX_EDITOR_MODES = [
+  {
+    value: "editing",
+    label: "Editing",
+    viewerMode: "edit",
+    icon: (
+      <IconPlaceholder
+        lucide="Pencil"
+        tabler="IconPencil"
+        hugeicons="PencilEdit01Icon"
+        phosphor="PencilSimpleIcon"
+        remixicon="RiPencilLine"
+        className="size-4"
+      />
+    ),
+  },
+  {
+    value: "suggesting",
+    label: "Suggesting",
+    viewerMode: "suggest",
+    icon: (
+      <IconPlaceholder
+        lucide="FilePen"
+        tabler="IconFilePencil"
+        hugeicons="FilePenIcon"
+        phosphor="NotePencilIcon"
+        remixicon="RiFileEditLine"
+        className="size-4"
+      />
+    ),
+  },
+  {
+    value: "viewing",
+    label: "Viewing",
+    viewerMode: "read-only",
+    icon: (
+      <IconPlaceholder
+        lucide="Eye"
+        tabler="IconEye"
+        hugeicons="ViewIcon"
+        phosphor="EyeIcon"
+        remixicon="RiEyeLine"
+        className="size-4"
+      />
+    ),
+  },
+] as const satisfies readonly {
+  value: DocxEditorMode
+  label: string
+  viewerMode: DocxEditorViewerMode
+  icon: React.ReactNode
+}[]
+
+function docxEditorModeOption(mode: DocxEditorMode) {
+  return (
+    DOCX_EDITOR_MODES.find((option) => option.value === mode) ??
+    DOCX_EDITOR_MODES[0]
+  )
+}
+
+function DocxModeMenu({
+  disabled,
+  mode,
+  onModeChange,
+}: {
+  disabled: boolean
+  mode: DocxEditorMode
+  onModeChange: (mode: DocxEditorMode) => void
+}) {
+  const current = docxEditorModeOption(mode)
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={disabled}
+          aria-label={`Mode: ${current.label}`}
+        >
+          {current.icon}
+          <span className="hidden sm:inline">{current.label}</span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="z-40 w-40">
+        {DOCX_EDITOR_MODES.map((option) => (
+          <DropdownMenuItem
+            key={option.value}
+            onClick={() => onModeChange(option.value)}
+          >
+            {option.icon}
+            {option.label}
+            {option.value === mode ? (
+              <IconPlaceholder
+                lucide="Check"
+                tabler="IconCheck"
+                hugeicons="Tick02Icon"
+                phosphor="CheckIcon"
+                remixicon="RiCheckLine"
+                className="ms-auto size-4"
+              />
+            ) : null}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+// Card actions sit under the card the viewer draws, inside the box the
+// viewer positions, so the card itself keeps its look.
+function TrackedChangeCardActions({
+  accept,
+  reject,
+}: Pick<DocxTrackedChangeCardRenderProps, "accept" | "reject">) {
+  return (
+    <div className="flex justify-end gap-0.5">
+      <ToolbarIconButton label="Accept" size="icon-xs" onClick={accept}>
+        <IconPlaceholder
+          lucide="Check"
+          tabler="IconCheck"
+          hugeicons="Tick02Icon"
+          phosphor="CheckIcon"
+          remixicon="RiCheckLine"
+          className="size-4"
+        />
+      </ToolbarIconButton>
+      <ToolbarIconButton label="Reject" size="icon-xs" onClick={reject}>
+        <IconPlaceholder
+          lucide="X"
+          tabler="IconX"
+          hugeicons="Cancel01Icon"
+          phosphor="XIcon"
+          remixicon="RiCloseLine"
+          className="size-4"
+        />
+      </ToolbarIconButton>
+    </div>
+  )
+}
+
+function CommentCardActions({
+  comment,
+  reply,
+  setResolved,
+}: Pick<DocxCommentCardRenderProps, "comment" | "reply" | "setResolved">) {
+  const [draft, setDraft] = React.useState("")
+
+  if (comment.resolved) {
+    return (
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          onClick={() => setResolved(false)}
+        >
+          Reopen
+        </Button>
+      </div>
+    )
+  }
+  // Replies belong to the thread: only its root takes a reply or a resolve.
+  if (comment.parentId !== undefined) return null
+
+  return (
+    <div className="flex items-center gap-1">
+      <Input
+        size="sm"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          // Keys typed here belong to the reply, not the document.
+          event.stopPropagation()
+          if (event.key !== "Enter" || !draft.trim()) return
+          event.preventDefault()
+          if (reply(draft.trim()).ok) setDraft("")
+        }}
+        placeholder="Reply"
+        aria-label="Reply"
+        className="text-xs"
+      />
+      <Button
+        type="button"
+        variant="ghost"
+        size="xs"
+        onClick={() => setResolved(true)}
+      >
+        Resolve
+      </Button>
+    </div>
+  )
+}
+
 function ToolbarIconButton({
   active,
   children,
@@ -830,10 +1033,10 @@ function DocxEditorToolbar({
   activePage,
   controlsDisabled,
   editor,
-  isReadOnly,
+  mode,
   onImageUploadClick,
   onIsDarkChange,
-  onIsReadOnlyChange,
+  onModeChange,
   onOpenLinkEditor,
   onToggleSidebar,
   onUploadClick,
@@ -845,10 +1048,10 @@ function DocxEditorToolbar({
   activePage: number
   controlsDisabled: boolean
   editor: DocxEditorController
-  isReadOnly: boolean
+  mode: DocxEditorMode
   onImageUploadClick: () => void
   onIsDarkChange: (checked: boolean) => void
-  onIsReadOnlyChange: (checked: boolean) => void
+  onModeChange: (mode: DocxEditorMode) => void
   onOpenLinkEditor: () => void
   onToggleSidebar: () => void
   onUploadClick: () => void
@@ -933,7 +1136,8 @@ function DocxEditorToolbar({
     ),
     { className: "size-4" }
   )
-  const canEdit = !controlsDisabled && !isReadOnly
+  const canEdit = !controlsDisabled && mode === "editing"
+  const canReview = !controlsDisabled && mode !== "viewing"
   const canZoomIn = zoomScale < ZOOM_OPTIONS[ZOOM_OPTIONS.length - 1]
   const canZoomOut = zoomScale > ZOOM_OPTIONS[0]
   const fontToggleValues = React.useMemo<DocxFontToggleValue[]>(() => {
@@ -1030,21 +1234,61 @@ function DocxEditorToolbar({
               />
             </>
           ) : null}
-          <ToolbarIconButton
-            label="Show tracked changes"
-            active={showTrackedChanges}
-            disabled={controlsDisabled}
-            onClick={() => setShowTrackedChanges(!showTrackedChanges)}
-          >
-            <IconPlaceholder
-              lucide="FileDiff"
-              tabler="IconFileDiff"
-              hugeicons="FileDiffIcon"
-              phosphor="GitDiffIcon"
-              remixicon="RiFileHistoryLine"
-              className="size-4"
-            />
-          </ToolbarIconButton>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant={showTrackedChanges ? "secondary" : "ghost"}
+                size="icon-sm"
+                disabled={controlsDisabled}
+                aria-label="Tracked changes"
+              >
+                <IconPlaceholder
+                  lucide="FileDiff"
+                  tabler="IconFileDiff"
+                  hugeicons="FileDiffIcon"
+                  phosphor="GitDiffIcon"
+                  remixicon="RiFileHistoryLine"
+                  className="size-4"
+                />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="z-40 w-48">
+              <DropdownMenuCheckboxItem
+                checked={showTrackedChanges}
+                onCheckedChange={setShowTrackedChanges}
+              >
+                Show tracked changes
+              </DropdownMenuCheckboxItem>
+              {canReview && editor.trackedChanges.length > 0 ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={editor.acceptAllRevisions}>
+                    <IconPlaceholder
+                      lucide="Check"
+                      tabler="IconCheck"
+                      hugeicons="Tick02Icon"
+                      phosphor="CheckIcon"
+                      remixicon="RiCheckLine"
+                      className="size-4"
+                    />
+                    Accept all
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={editor.rejectAllRevisions}>
+                    <IconPlaceholder
+                      lucide="X"
+                      tabler="IconX"
+                      hugeicons="Cancel01Icon"
+                      phosphor="XIcon"
+                      remixicon="RiCloseLine"
+                      className="size-4"
+                    />
+                    Reject all
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <ToolbarIconButton
             label="Show comments"
             active={showComments}
@@ -1060,21 +1304,11 @@ function DocxEditorToolbar({
               className="size-4"
             />
           </ToolbarIconButton>
-          <ToolbarIconButton
-            label={isReadOnly ? "Switch to edit mode" : "Switch to read-only"}
-            active={isReadOnly}
+          <DocxModeMenu
             disabled={controlsDisabled}
-            onClick={() => onIsReadOnlyChange(!isReadOnly)}
-          >
-            <IconPlaceholder
-              lucide="PencilOff"
-              tabler="IconPencilOff"
-              hugeicons="EditOffIcon"
-              phosphor="PencilSlashIcon"
-              remixicon="RiLockLine"
-              className="size-4"
-            />
-          </ToolbarIconButton>
+            mode={mode}
+            onModeChange={onModeChange}
+          />
           <Separator orientation="vertical" className="mx-1 h-4 self-center" />
           <ToolbarIconButton
             label="Import DOCX"
@@ -1114,7 +1348,7 @@ function DocxEditorToolbar({
           <div className="flex shrink-0 items-center gap-1">
             <ToolbarIconButton
               label="Undo"
-              disabled={!editor.canUndo || isReadOnly}
+              disabled={!editor.canUndo || mode === "viewing"}
               onClick={editor.undo}
             >
               <IconPlaceholder
@@ -1128,7 +1362,7 @@ function DocxEditorToolbar({
             </ToolbarIconButton>
             <ToolbarIconButton
               label="Redo"
-              disabled={!editor.canRedo || isReadOnly}
+              disabled={!editor.canRedo || mode === "viewing"}
               onClick={editor.redo}
             >
               <IconPlaceholder
@@ -1761,8 +1995,9 @@ function DocxEditorToolbar({
 
 export function DocxEditorPreview({
   anchorIdPrefix,
+  author,
   className,
-  defaultReadOnly = false,
+  defaultMode = "editing",
   defaultZoomScale = DOCX_EDITOR_DEFAULT_ZOOM_SCALE,
   fileName,
   isDark,
@@ -1772,9 +2007,11 @@ export function DocxEditorPreview({
 }: {
   /** Gives pages and paragraphs stable DOM ids under this prefix. */
   anchorIdPrefix?: string
+  /** Who suggestions and comment replies are by; the engine's default otherwise. */
+  author?: string
   className?: string
-  /** Opens the document read-only (Viewing) instead of editable. */
-  defaultReadOnly?: boolean
+  /** The mode the document opens in: Viewing, Suggesting or Editing. */
+  defaultMode?: DocxEditorMode
   defaultZoomScale?: number
   fileName?: string
   isDark: boolean
@@ -1790,8 +2027,9 @@ export function DocxEditorPreview({
     <DocxEditorContent
       key={src}
       anchorIdPrefix={anchorIdPrefix}
+      author={author}
       className={className}
-      defaultReadOnly={defaultReadOnly}
+      defaultMode={defaultMode}
       defaultZoomScale={defaultZoomScale}
       scrollsWindow={scrollsWindow}
       effectiveIsDark={isDark}
@@ -1805,8 +2043,9 @@ export function DocxEditorPreview({
 
 function DocxEditorContent({
   anchorIdPrefix,
+  author,
   className,
-  defaultReadOnly = false,
+  defaultMode,
   defaultZoomScale,
   effectiveIsDark,
   fileName,
@@ -1816,8 +2055,9 @@ function DocxEditorContent({
   url,
 }: {
   anchorIdPrefix?: string
+  author?: string
   className?: string
-  defaultReadOnly?: boolean
+  defaultMode: DocxEditorMode
   defaultZoomScale?: number
   scrollsWindow?: boolean
   effectiveIsDark: boolean
@@ -1842,7 +2082,7 @@ function DocxEditorContent({
   )
   const [loadError, setLoadError] = React.useState<string>()
   const [isLoadingDocument, setIsLoadingDocument] = React.useState(Boolean(url))
-  const [isReadOnly, setIsReadOnly] = React.useState(defaultReadOnly)
+  const [mode, setMode] = React.useState(defaultMode)
   const [linkEditorOpen, setLinkEditorOpen] = React.useState(false)
   const [linkDraft, setLinkDraft] = React.useState("")
   const viewerBackgroundColor =
@@ -1858,10 +2098,14 @@ function DocxEditorContent({
   )
   const editorOptions = React.useMemo(
     () => ({
+      author,
       initialDocumentTheme,
       initialFileName: displayFileName,
+      // Suggesting shows the changes and comments it is about.
+      initialShowComments: defaultMode === "suggesting",
+      initialShowTrackedChanges: defaultMode === "suggesting",
     }),
-    [displayFileName, initialDocumentTheme]
+    [author, defaultMode, displayFileName, initialDocumentTheme]
   )
   const editor = useDocxEditor(editorOptions)
   const { layout: pageLayout } = useDocxPageLayout(editor)
@@ -1895,14 +2139,48 @@ function DocxEditorContent({
   const loadingState = (
     <EditorLoadingSurface showSpinner={shouldShowDocumentSpinner} />
   )
-  const renderTrackedChangeCard = React.useMemo(
-    () => createDocxTrackedChangeCardRenderer(editor.documentTheme),
-    [editor.documentTheme]
-  )
-  const renderCommentCard = React.useMemo(
-    () => createDocxCommentCardRenderer(editor.documentTheme),
-    [editor.documentTheme]
-  )
+  const canReview = mode !== "viewing"
+  const renderTrackedChangeCard = React.useMemo(() => {
+    const renderCard = createDocxTrackedChangeCardRenderer(editor.documentTheme)
+    if (!canReview) return renderCard
+    return function renderReviewableTrackedChangeCard(
+      props: DocxTrackedChangeCardRenderProps
+    ) {
+      return (
+        <div
+          style={props.style}
+          className="pointer-events-auto flex flex-col gap-1"
+        >
+          {renderCard({ ...props, style: {} })}
+          <TrackedChangeCardActions
+            accept={props.accept}
+            reject={props.reject}
+          />
+        </div>
+      )
+    }
+  }, [canReview, editor.documentTheme])
+  const renderCommentCard = React.useMemo(() => {
+    const renderCard = createDocxCommentCardRenderer(editor.documentTheme)
+    if (!canReview) return renderCard
+    return function renderReviewableCommentCard(
+      props: DocxCommentCardRenderProps
+    ) {
+      return (
+        <div
+          style={props.style}
+          className="pointer-events-auto flex flex-col gap-1"
+        >
+          {renderCard({ ...props, style: {} })}
+          <CommentCardActions
+            comment={props.comment}
+            reply={props.reply}
+            setResolved={props.setResolved}
+          />
+        </div>
+      )
+    }
+  }, [canReview, editor.documentTheme])
   const hasDocument = Boolean(url || uploadedDocxFile)
   const sidebarInline = useInlineThumbnailSidebar(viewerShellWidth)
   const pageCount =
@@ -1921,16 +2199,23 @@ function DocxEditorContent({
     viewportRef.current = element
     setViewportElement(element)
   }, [])
+  // The page's scroller exists only in the browser: it is read after mount,
+  // so rendering on the server never touches document.
+  const [pageScrollElement, setPageScrollElement] =
+    React.useState<HTMLElement | null>(null)
+  React.useEffect(() => {
+    setPageScrollElement(
+      scrollsWindow ? (document.scrollingElement as HTMLElement | null) : null
+    )
+  }, [scrollsWindow])
   const pageVirtualization = React.useMemo(
     () => ({
       enabled: true,
       overscan: 1,
-      scrollElement: scrollsWindow
-        ? (document.scrollingElement as HTMLElement | null)
-        : viewportElement,
+      scrollElement: scrollsWindow ? pageScrollElement : viewportElement,
       zoomScale: zoomScale / 100,
     }),
-    [scrollsWindow, viewportElement, zoomScale]
+    [pageScrollElement, scrollsWindow, viewportElement, zoomScale]
   )
   // scrollViewportTo scrolls whatever holds the document: the page, or the
   // viewer's own box.
@@ -1960,6 +2245,29 @@ function DocxEditorContent({
   React.useEffect(() => {
     setDocumentTheme(effectiveIsDark ? "dark" : "light")
   }, [effectiveIsDark, setDocumentTheme])
+
+  // Suggesting refuses edits it cannot track; the status says why, briefly.
+  const [seenRefusalNonce, setSeenRefusalNonce] = React.useState(
+    editor.suggestionRefusalNonce
+  )
+  const [refusalMessage, setRefusalMessage] = React.useState<string>()
+  if (seenRefusalNonce !== editor.suggestionRefusalNonce) {
+    setSeenRefusalNonce(editor.suggestionRefusalNonce)
+    setRefusalMessage(status)
+  }
+  React.useEffect(() => {
+    if (!refusalMessage) return
+    const timeout = window.setTimeout(() => setRefusalMessage(undefined), 4000)
+    return () => window.clearTimeout(timeout)
+  }, [refusalMessage, seenRefusalNonce])
+
+  function changeMode(nextMode: DocxEditorMode) {
+    setMode(nextMode)
+    if (nextMode === "suggesting") {
+      editor.setShowTrackedChanges(true)
+      editor.setShowComments(true)
+    }
+  }
 
   const [previousStatus, setPreviousStatus] = React.useState(status)
   if (previousStatus !== status) {
@@ -2172,10 +2480,10 @@ function DocxEditorContent({
           activePage={activePage}
           controlsDisabled={controlsDisabled}
           editor={editor}
-          isReadOnly={isReadOnly}
+          mode={mode}
           onImageUploadClick={() => imageInputRef.current?.click()}
           onIsDarkChange={setIsDark}
-          onIsReadOnlyChange={setIsReadOnly}
+          onModeChange={changeMode}
           onOpenLinkEditor={openLinkEditor}
           onToggleSidebar={() => setSidebarOpen((open) => !open)}
           onUploadClick={() => fileInputRef.current?.click()}
@@ -2223,6 +2531,14 @@ function DocxEditorContent({
             >
               Clear
             </Button>
+          </div>
+        ) : null}
+        {refusalMessage ? (
+          <div
+            role="status"
+            className="fixed bottom-4 left-1/2 z-50 w-max max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-lg border bg-background px-3 py-2 text-xs text-muted-foreground shadow-lg"
+          >
+            {refusalMessage}
           </div>
         ) : null}
         <DocumentViewerThumbnailSidebar
@@ -2336,7 +2652,7 @@ function DocxEditorContent({
                 <DocxEditorViewer
                   editor={editor}
                   anchorIdPrefix={anchorIdPrefix}
-                  mode={isReadOnly ? "read-only" : "edit"}
+                  mode={docxEditorModeOption(mode).viewerMode}
                   showTrackedChanges={editor.showTrackedChanges}
                   renderTrackedChangeCard={renderTrackedChangeCard}
                   showComments={editor.showComments}

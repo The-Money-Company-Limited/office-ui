@@ -123,7 +123,7 @@ function App() {
             <DocxEditor
               {...documentProps}
               anchorIdPrefix=""
-              defaultReadOnly
+              defaultMode="viewing"
               scrollsWindow
               isDark={isDark}
               onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
