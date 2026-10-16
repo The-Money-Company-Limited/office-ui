@@ -49879,7 +49879,7 @@ export function DocxEditorViewer({
     };
   }, [editor, editor.pendingRunStyle]);
 
-  const handleEditorHistoryShortcut = React.useCallback(
+  const handleEditorKeyboardShortcut = React.useCallback(
     (
       event: React.KeyboardEvent<HTMLElement>,
       commitDraft: () => void
@@ -49895,7 +49895,17 @@ export function DocxEditorViewer({
       const key = event.key.toLowerCase();
       const isUndo = key === "z" && !event.shiftKey;
       const isRedo = key === "y" || (key === "z" && event.shiftKey);
-      if (!isUndo && !isRedo) {
+      // Cmd/Ctrl+B, I and U format the selection, as in Docs and Word.
+      const toggleFormat = event.shiftKey
+        ? undefined
+        : key === "b"
+        ? editor.toggleBold
+        : key === "i"
+        ? editor.toggleItalic
+        : key === "u"
+        ? editor.toggleUnderline
+        : undefined;
+      if (!isUndo && !isRedo && !toggleFormat) {
         return false;
       }
 
@@ -49906,7 +49916,9 @@ export function DocxEditorViewer({
         commitDraft();
       });
 
-      if (isRedo) {
+      if (toggleFormat) {
+        toggleFormat();
+      } else if (isRedo) {
         editor.redo();
       } else {
         editor.undo();
@@ -53739,7 +53751,7 @@ export function DocxEditorViewer({
                   editor.beginSelectionSession("composition");
                   return;
                 }
-                if (handleEditorHistoryShortcut(event, () => {})) {
+                if (handleEditorKeyboardShortcut(event, () => {})) {
                   return;
                 }
                 if (
@@ -59121,11 +59133,11 @@ export function DocxEditorViewer({
               return;
             }
 
-            const handledHistoryShortcut = handleEditorHistoryShortcut(
+            const handledKeyboardShortcut = handleEditorKeyboardShortcut(
               event,
               () => {}
             );
-            if (handledHistoryShortcut) {
+            if (handledKeyboardShortcut) {
               return;
             }
 
@@ -61645,8 +61657,8 @@ export function DocxEditorViewer({
                                       return;
                                     }
 
-                                    const handledHistoryShortcut =
-                                      handleEditorHistoryShortcut(event, () => {
+                                    const handledKeyboardShortcut =
+                                      handleEditorKeyboardShortcut(event, () => {
                                         if (!cellUsesLegacyDraftEditing) {
                                           return;
                                         }
@@ -61659,7 +61671,7 @@ export function DocxEditorViewer({
                                           event.currentTarget
                                         );
                                       });
-                                    if (handledHistoryShortcut) {
+                                    if (handledKeyboardShortcut) {
                                       return;
                                     }
 
