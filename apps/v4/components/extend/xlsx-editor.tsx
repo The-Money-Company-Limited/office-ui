@@ -2434,6 +2434,7 @@ export function XlsxEditorSurface({
   onIsDarkChange,
   onUploadClick,
   renderTableHeaderMenu,
+  scrollsWindow = false,
   showNightRenderToggle,
   workbookIdentity,
 }: {
@@ -2445,32 +2446,55 @@ export function XlsxEditorSurface({
   renderTableHeaderMenu: (
     props: XlsxTableHeaderMenuRenderProps
   ) => React.ReactNode
+  /** The page scrolls the sheet; toolbar and sheet tabs stick to the viewport. */
+  scrollsWindow?: boolean
   showNightRenderToggle: boolean
   workbookIdentity: string
 }) {
   const { error } = useXlsxViewer()
+  const toolbarRef = React.useRef<HTMLDivElement>(null)
+  const toolbarHeight = useElementHeight(toolbarRef)
+
+  const toolbar = (
+    <EditorToolbar
+      fileName={fileName}
+      isDark={isDark}
+      onIsDarkChange={onIsDarkChange}
+      onUploadClick={onUploadClick}
+      showNightRenderToggle={showNightRenderToggle}
+      workbookIdentity={workbookIdentity}
+    />
+  )
+  const sheetTabs = <WorkbookSheetTabs workbookIdentity={workbookIdentity} />
 
   return (
     <div
       className={cn(
-        "xlsx-editor-surface flex h-[640px] min-h-0 flex-col overflow-hidden bg-background",
+        scrollsWindow
+          ? "xlsx-editor-surface flex min-h-dvh flex-col bg-background"
+          : "xlsx-editor-surface flex h-[640px] min-h-0 flex-col overflow-hidden bg-background",
         className
       )}
     >
-      <EditorToolbar
-        fileName={fileName}
-        isDark={isDark}
-        onIsDarkChange={onIsDarkChange}
-        onUploadClick={onUploadClick}
-        showNightRenderToggle={showNightRenderToggle}
-        workbookIdentity={workbookIdentity}
-      />
+      {scrollsWindow ? (
+        <div ref={toolbarRef} className="sticky top-0 z-30">
+          {toolbar}
+        </div>
+      ) : (
+        toolbar
+      )}
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="xlsx-editor-canvas min-h-0 flex-1 bg-muted/20">
+        <div
+          className={
+            scrollsWindow
+              ? "xlsx-editor-canvas flex flex-1 flex-col bg-muted/20"
+              : "xlsx-editor-canvas min-h-0 flex-1 bg-muted/20"
+          }
+        >
           <XlsxViewer
             allowResizeInReadOnly
-            className="h-full min-h-0 min-w-0"
-            height="100%"
+            className={scrollsWindow ? "min-w-0" : "h-full min-h-0 min-w-0"}
+            height={scrollsWindow ? undefined : "100%"}
             isDark={isDark}
             readOnly={false}
             rounded={false}
@@ -2488,7 +2512,9 @@ export function XlsxEditorSurface({
               </div>
             }
             loadingState={<EditorLoadingSurface />}
-            renderScroller={renderXlsxScroller}
+            renderScroller={scrollsWindow ? undefined : renderXlsxScroller}
+            scrollTarget={scrollsWindow ? "window" : "element"}
+            stickyTop={scrollsWindow ? toolbarHeight : undefined}
             errorState={
               <div className="grid h-full w-full min-w-full place-items-center p-6 text-sm text-destructive">
                 {error?.message ?? "Unable to edit workbook."}
@@ -2497,33 +2523,67 @@ export function XlsxEditorSurface({
             renderTableHeaderMenu={renderTableHeaderMenu}
           />
         </div>
-        <WorkbookSheetTabs workbookIdentity={workbookIdentity} />
+        {scrollsWindow ? (
+          <div className="sticky bottom-0 z-30 bg-background">{sheetTabs}</div>
+        ) : (
+          sheetTabs
+        )}
       </div>
     </div>
   )
 }
 
+/** Tracks an element's border-box height; 0 while nothing is attached to `ref`. */
+function useElementHeight(ref: React.RefObject<HTMLElement | null>) {
+  const [height, setHeight] = React.useState(0)
+
+  React.useLayoutEffect(() => {
+    const element = ref.current
+    if (!element) return
+
+    const measure = () => setHeight(element.getBoundingClientRect().height)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [ref])
+
+  return height
+}
+
 export function XlsxEditorPreview({
   className,
+  defaultReadOnly = false,
   fileName,
   isDark,
   onIsDarkChange,
+  scrollsWindow = false,
   src,
+  syncSheetToUrl = false,
 }: {
   className?: string
+  /** Opens the workbook read-only. */
+  defaultReadOnly?: boolean
   fileName?: string
   isDark: boolean
   onIsDarkChange: (isDark: boolean) => void
+  /** The page scrolls the sheet instead of a fixed-height frame. */
+  scrollsWindow?: boolean
   src?: string
+  /** Restores the sheet from `?sheet=<name>` and keeps that parameter current. */
+  syncSheetToUrl?: boolean
 }) {
   return (
     <XlsxEditorContent
       key={src}
       className={className}
+      defaultReadOnly={defaultReadOnly}
       effectiveIsDark={isDark}
       fileName={fileName}
+      scrollsWindow={scrollsWindow}
       setNightRenderEnabled={onIsDarkChange}
       shouldRenderNightMode
+      syncSheetToUrl={syncSheetToUrl}
       url={src}
     />
   )
@@ -2531,19 +2591,28 @@ export function XlsxEditorPreview({
 
 function XlsxEditorContent({
   className,
+  defaultReadOnly,
   effectiveIsDark,
   fileName,
+  scrollsWindow,
   setNightRenderEnabled,
   shouldRenderNightMode,
+  syncSheetToUrl,
   url,
 }: {
   className?: string
+  defaultReadOnly: boolean
   effectiveIsDark: boolean
   fileName?: string
+  scrollsWindow: boolean
   setNightRenderEnabled: (checked: boolean) => void
   shouldRenderNightMode: boolean
+  syncSheetToUrl: boolean
   url?: string
 }) {
+  const frameClassName = scrollsWindow
+    ? "flex min-h-dvh flex-col bg-background"
+    : "flex h-[640px] min-h-0 flex-col overflow-hidden bg-background"
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const [uploadedWorkbook, setUploadedWorkbook] =
     React.useState<UploadedWorkbook | null>(null)
@@ -2615,12 +2684,7 @@ function XlsxEditorContent({
 
   if (!url && !uploadedWorkbook) {
     return (
-      <div
-        className={cn(
-          "flex h-[640px] min-h-0 flex-col overflow-hidden bg-background",
-          className
-        )}
-      >
+      <div className={cn(frameClassName, className)}>
         <input
           ref={fileInputRef}
           type="file"
@@ -2660,12 +2724,7 @@ function XlsxEditorContent({
 
   if (loadError && !activeBuffer) {
     return (
-      <div
-        className={cn(
-          "flex h-[640px] min-h-0 flex-col overflow-hidden bg-background",
-          className
-        )}
-      >
+      <div className={cn(frameClassName, className)}>
         <input
           ref={fileInputRef}
           type="file"
@@ -2702,12 +2761,7 @@ function XlsxEditorContent({
 
   if (!activeBuffer) {
     return (
-      <div
-        className={cn(
-          "flex h-[640px] min-h-0 flex-col overflow-hidden bg-background",
-          className
-        )}
-      >
+      <div className={cn(frameClassName, className)}>
         <input
           ref={fileInputRef}
           type="file"
@@ -2721,7 +2775,7 @@ function XlsxEditorContent({
   }
 
   return (
-    <div className={cn("overflow-hidden", className)}>
+    <div className={cn(!scrollsWindow && "overflow-hidden", className)}>
       <input
         ref={fileInputRef}
         type="file"
@@ -2730,6 +2784,7 @@ function XlsxEditorContent({
         onChange={handleUpload}
       />
       <XlsxWorkbookLoadedEditor
+        defaultReadOnly={defaultReadOnly}
         fileName={displayFileName}
         isDark={effectiveIsDark}
         onIsDarkChange={setNightRenderEnabled}
@@ -2737,7 +2792,9 @@ function XlsxEditorContent({
         renderTableHeaderMenu={(props) => (
           <WorkbookTableHeaderMenu {...props} />
         )}
+        scrollsWindow={scrollsWindow}
         showNightRenderToggle={shouldRenderNightMode}
+        syncSheetToUrl={syncSheetToUrl}
         workbookBuffer={activeBuffer}
         workbookIdentity={workbookIdentity}
       />
@@ -2746,15 +2803,19 @@ function XlsxEditorContent({
 }
 
 function XlsxWorkbookLoadedEditor({
+  defaultReadOnly,
   fileName,
   isDark,
   onIsDarkChange,
   onUploadClick,
   renderTableHeaderMenu,
+  scrollsWindow,
   showNightRenderToggle,
+  syncSheetToUrl,
   workbookBuffer,
   workbookIdentity,
 }: {
+  defaultReadOnly: boolean
   fileName: string
   isDark: boolean
   onIsDarkChange: (checked: boolean) => void
@@ -2762,7 +2823,9 @@ function XlsxWorkbookLoadedEditor({
   renderTableHeaderMenu: (
     props: XlsxTableHeaderMenuRenderProps
   ) => React.ReactNode
+  scrollsWindow: boolean
   showNightRenderToggle: boolean
+  syncSheetToUrl: boolean
   workbookBuffer: ArrayBuffer
   workbookIdentity: string
 }) {
@@ -2772,13 +2835,39 @@ function XlsxWorkbookLoadedEditor({
         allowResizeInReadOnly: true,
         file: workbookBuffer,
         fileName,
-        readOnly: false,
+        readOnly: defaultReadOnly,
         readOnlyAboveBytes: XLSX_EDITOR_READ_ONLY_THRESHOLD_BYTES,
         useWorker: true,
       }),
-      [fileName, workbookBuffer]
+      [defaultReadOnly, fileName, workbookBuffer]
     )
   )
+  const { activeSheetName, setActiveSheetByName } = controller
+  const hasRestoredSheetRef = React.useRef(false)
+
+  React.useEffect(() => {
+    if (!syncSheetToUrl || activeSheetName === null) return
+
+    // The first loaded sheet yields to `?sheet=` once; after that the URL follows the tabs.
+    if (!hasRestoredSheetRef.current) {
+      hasRestoredSheetRef.current = true
+      const requestedSheet = new URLSearchParams(window.location.search).get(
+        "sheet"
+      )
+      if (
+        requestedSheet &&
+        requestedSheet !== activeSheetName &&
+        setActiveSheetByName(requestedSheet)
+      ) {
+        return
+      }
+    }
+
+    const url = new URL(window.location.href)
+    if (url.searchParams.get("sheet") === activeSheetName) return
+    url.searchParams.set("sheet", activeSheetName)
+    window.history.replaceState(window.history.state, "", url)
+  }, [activeSheetName, setActiveSheetByName, syncSheetToUrl])
 
   return (
     <XlsxViewerProvider controller={controller} isDark={isDark}>
@@ -2788,6 +2877,7 @@ function XlsxWorkbookLoadedEditor({
         onIsDarkChange={onIsDarkChange}
         onUploadClick={onUploadClick}
         renderTableHeaderMenu={renderTableHeaderMenu}
+        scrollsWindow={scrollsWindow}
         showNightRenderToggle={showNightRenderToggle}
         workbookIdentity={workbookIdentity}
       />

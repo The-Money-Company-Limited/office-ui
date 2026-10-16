@@ -116,6 +116,7 @@ import {
   useIsViewportGated,
   useViewportCapability,
   useViewportElement,
+  useViewportPlugin,
   useViewportRef,
   ViewportElementContext,
   ViewportPluginPackage,
@@ -354,6 +355,14 @@ export type PDFEditorProps = {
   /** Stylesheet used for the typed-signature fonts. Pass `null` to skip loading web fonts. */
   signatureFontsStylesheetUrl?: string | null
   resolveScrollAreaViewport?: PdfEditorScrollAreaViewportResolver
+  /**
+   * Let the page scroll the document instead of an inner scroller: the editor
+   * grows to its content, the toolbar sticks to the top of the window, and
+   * pages track window scroll. Off by default.
+   */
+  scrollsWindow?: boolean
+  /** When set, each page element gets the id `${anchorIdPrefix}page-${n}`. */
+  anchorIdPrefix?: string
   renderPageOverlay?: (props: PDFEditorPageOverlayProps) => React.ReactNode
   onDocumentLoadSuccess?: (info: {
     numPages: number
@@ -647,6 +656,24 @@ export function deserializeAnnotationItems(
 /* -------------------------------------------------------------------------- */
 
 function PdfEditorViewport({
+  scrollsWindow,
+  toolbarRef,
+  ...props
+}: {
+  children: React.ReactNode
+  className?: string
+  documentId: string
+  scrollsWindow: boolean
+  toolbarRef: React.RefObject<HTMLElement | null>
+}) {
+  return scrollsWindow ? (
+    <PdfEditorWindowViewport {...props} toolbarRef={toolbarRef} />
+  ) : (
+    <PdfEditorScrollViewport {...props} />
+  )
+}
+
+function PdfEditorScrollViewport({
   children,
   className,
   documentId,
@@ -672,6 +699,143 @@ function PdfEditorViewport({
       >
         {isGated ? null : children}
       </PdfEditorScrollArea>
+    </ViewportElementContext.Provider>
+  )
+}
+
+/**
+ * The window-backed counterpart of EmbedPDF's useViewportRef: the window is
+ * the scroller, so the plugin's metrics are the container's position under
+ * the sticky toolbar, and its scroll requests move the window.
+ */
+function useWindowViewportRef(
+  documentId: string,
+  toolbarRef: React.RefObject<HTMLElement | null>
+) {
+  const { plugin: viewportPlugin } = useViewportPlugin()
+  const containerRef = React.useRef<HTMLDivElement | null>(null)
+
+  React.useLayoutEffect(() => {
+    if (!viewportPlugin) return
+    const container = containerRef.current
+    if (!container) return
+
+    try {
+      viewportPlugin.registerViewport(documentId)
+    } catch (error) {
+      console.error(
+        `Failed to register viewport for document ${documentId}:`,
+        error
+      )
+      return
+    }
+
+    const measure = () => {
+      const rect = container.getBoundingClientRect()
+      const toolbarHeight = toolbarRef.current?.offsetHeight ?? 0
+      return {
+        toolbarHeight,
+        documentTop: rect.top + window.scrollY,
+        documentLeft: rect.left + window.scrollX,
+        scrollTop: Math.max(0, toolbarHeight - rect.top),
+        scrollLeft: Math.max(0, -rect.left),
+      }
+    }
+
+    const onScroll = () => {
+      const { scrollTop, scrollLeft } = measure()
+      viewportPlugin.setViewportScrollMetrics(documentId, {
+        scrollTop,
+        scrollLeft,
+      })
+    }
+
+    const onResize = () => {
+      const { toolbarHeight, scrollTop, scrollLeft } = measure()
+      const clientHeight = Math.max(0, window.innerHeight - toolbarHeight)
+      viewportPlugin.setViewportResizeMetrics(documentId, {
+        width: container.offsetWidth,
+        height: clientHeight,
+        clientWidth: container.clientWidth,
+        clientHeight,
+        scrollTop,
+        scrollLeft,
+        scrollWidth: container.scrollWidth,
+        scrollHeight: container.scrollHeight,
+        clientLeft: container.clientLeft,
+        clientTop: container.clientTop,
+      })
+    }
+
+    window.addEventListener("scroll", onScroll, { passive: true })
+    window.addEventListener("resize", onResize)
+    const resizeObserver = new ResizeObserver(onResize)
+    resizeObserver.observe(container)
+    if (toolbarRef.current) resizeObserver.observe(toolbarRef.current)
+
+    const unsubscribeScrollRequest = viewportPlugin.onScrollRequest(
+      documentId,
+      ({ x, y, behavior = "auto" }) => {
+        requestAnimationFrame(() => {
+          const { toolbarHeight, documentTop, documentLeft } = measure()
+          // An element clamps scrollTo to its own scroll range; the window's
+          // range is larger, so clamp to the container's like useViewportRef.
+          const clientHeight = Math.max(0, window.innerHeight - toolbarHeight)
+          const maxTop = container.scrollHeight - clientHeight
+          const maxLeft = container.scrollWidth - container.clientWidth
+          const top = Math.max(0, Math.min(y, maxTop))
+          const left = Math.max(0, Math.min(x, maxLeft))
+          window.scrollTo({
+            left: left + documentLeft,
+            top: top + documentTop - toolbarHeight,
+            behavior,
+          })
+        })
+      }
+    )
+
+    return () => {
+      viewportPlugin.unregisterViewport(documentId)
+      resizeObserver.disconnect()
+      window.removeEventListener("scroll", onScroll)
+      window.removeEventListener("resize", onResize)
+      unsubscribeScrollRequest()
+    }
+  }, [viewportPlugin, documentId, toolbarRef])
+
+  // ViewportElementContext is typed with EmbedPDF's non-null ref.
+  return containerRef as React.RefObject<HTMLDivElement>
+}
+
+function PdfEditorWindowViewport({
+  children,
+  className,
+  documentId,
+  toolbarRef,
+}: {
+  children: React.ReactNode
+  className?: string
+  documentId: string
+  toolbarRef: React.RefObject<HTMLElement | null>
+}) {
+  const viewportRef = useWindowViewportRef(documentId, toolbarRef)
+  const { provides: viewport } = useViewportCapability()
+  const isGated = useIsViewportGated(documentId)
+  const viewportGap = viewport?.getViewportGap() ?? 0
+
+  return (
+    <ViewportElementContext.Provider value={viewportRef}>
+      <div
+        ref={viewportRef}
+        data-slot="pdf-editor-window-viewport"
+        className={cn(
+          "relative select-none selection:bg-transparent selection:text-inherit",
+          className
+        )}
+        style={{ padding: viewportGap }}
+      >
+        {isGated ? null : children}
+      </div>
     </ViewportElementContext.Provider>
   )
 }
@@ -1917,6 +2081,8 @@ type PdfEditorInnerProps = {
   toolbarActions?: React.ReactNode
   selectionActions: PdfEditorSelectionAction[]
   signatureFontsStylesheetUrl: string | null
+  scrollsWindow: boolean
+  anchorIdPrefix?: string
   renderPageOverlay?: (props: PDFEditorPageOverlayProps) => React.ReactNode
   handleRef: React.MutableRefObject<EditorHandleImpl | null>
   onReplaceDocument: (buffer: ArrayBuffer, fileName: string) => void
@@ -2013,6 +2179,8 @@ function PdfEditorInner({
   toolbarActions,
   selectionActions,
   signatureFontsStylesheetUrl,
+  scrollsWindow,
+  anchorIdPrefix,
   renderPageOverlay,
   handleRef,
   onReplaceDocument,
@@ -2070,6 +2238,7 @@ function PdfEditorInner({
     ToastPrimitive.createToastManager()
   )
   const viewportElementRef = React.useRef<HTMLDivElement | null>(null)
+  const toolbarRef = React.useRef<HTMLFieldSetElement | null>(null)
   const uploadInputRef = React.useRef<HTMLInputElement>(null)
   const annotationImportInputRef = React.useRef<HTMLInputElement>(null)
   const [shellRef, shellWidth] = useElementWidth<HTMLDivElement>()
@@ -2772,6 +2941,11 @@ function PdfEditorInner({
           documentId={documentId}
           pageIndex={page.pageIndex}
           data-pdf-editor-page={page.pageNumber}
+          id={
+            anchorIdPrefix !== undefined
+              ? `${anchorIdPrefix}page-${page.pageNumber}`
+              : undefined
+          }
           className="relative border border-transparent bg-transparent shadow-xs select-none selection:bg-transparent selection:text-inherit"
           style={{ backgroundColor: "transparent" }}
         >
@@ -2856,7 +3030,7 @@ function PdfEditorInner({
         </PagePointerProvider>
       </Rotate>
     ),
-    [currentZoom, documentId, renderPageOverlay]
+    [anchorIdPrefix, currentZoom, documentId, renderPageOverlay]
   )
 
   /* ---- toolbar pieces --------------------------------------------------- */
@@ -3335,6 +3509,24 @@ function PdfEditorInner({
       leftPanelContent = null
   }
 
+  const [toolbarHeight, setToolbarHeight] = React.useState(0)
+  React.useLayoutEffect(() => {
+    const toolbar = toolbarRef.current
+    if (!scrollsWindow || !toolbar) return
+    const resizeObserver = new ResizeObserver(() =>
+      setToolbarHeight(toolbar.offsetHeight)
+    )
+    resizeObserver.observe(toolbar)
+    setToolbarHeight(toolbar.offsetHeight)
+    return () => resizeObserver.disconnect()
+  }, [scrollsWindow, showToolbar])
+
+  // With the window as scroller the side panels span the whole document, so
+  // their content sticks under the toolbar and keeps its own scroller.
+  const sidePanelClassName = scrollsWindow
+    ? "sticky top-(--pdf-editor-toolbar-height) h-[calc(100dvh-var(--pdf-editor-toolbar-height))] max-h-full"
+    : "h-full"
+
   return (
     <PdfEditorContextProvider value={contextValue}>
       <ToastProvider
@@ -3350,8 +3542,17 @@ function PdfEditorInner({
           data-state={documentState}
           aria-busy={documentState === "loading"}
           data-fullscreen={fullscreenState.isFullscreen ? "" : undefined}
+          style={
+            scrollsWindow
+              ? ({
+                  "--pdf-editor-toolbar-height": `${toolbarHeight}px`,
+                } as React.CSSProperties)
+              : undefined
+          }
           className={cn(
-            "flex h-full max-h-full min-h-0 w-full flex-col overflow-hidden bg-background",
+            scrollsWindow
+              ? "flex min-h-dvh w-full flex-col bg-background"
+              : "flex h-full max-h-full min-h-0 w-full flex-col overflow-hidden bg-background",
             className,
             // The fullscreen plugin auto-mounts a wrapper around the EmbedPDF
             // tree; when that wrapper is fullscreen, fill it instead of the
@@ -3393,7 +3594,15 @@ function PdfEditorInner({
 
             {showToolbar ? (
               <TooltipProvider delay={TOOLTIP_DELAY_MS}>
-                <fieldset disabled={controlsDisabled} className="contents">
+                <fieldset
+                  ref={toolbarRef}
+                  disabled={controlsDisabled}
+                  className={
+                    scrollsWindow
+                      ? "sticky top-0 z-40 m-0 min-w-0 border-0 bg-background p-0"
+                      : "contents"
+                  }
+                >
                   <div
                     data-slot="pdf-editor-toolbar"
                     className={cn(
@@ -3709,14 +3918,21 @@ function PdfEditorInner({
 
             <div
               ref={shellRef}
-              className="relative flex min-h-0 flex-1 overflow-hidden bg-muted/30"
+              className={cn(
+                "relative flex min-h-0 flex-1 bg-muted/30",
+                scrollsWindow
+                  ? // The window scrolls, so nothing between it and the pages or
+                    // the sticky sidebars may become a scroll container.
+                    "[&_*:has(aside,[data-slot=pdf-editor-window-viewport])]:overflow-visible!"
+                  : "overflow-hidden"
+              )}
             >
               <PdfEditorWorkspace
                 leftInline={leftInline}
                 rightInline={rightInline}
                 left={
                   leftPanel !== null ? (
-                    <div className="flex h-full flex-col">
+                    <div className={cn("flex flex-col", sidePanelClassName)}>
                       <PanelTabStrip
                         tabs={visibleLeftTabs}
                         value={leftPanel}
@@ -3733,7 +3949,7 @@ function PdfEditorInner({
                 }
                 right={
                   rightPanel !== null ? (
-                    <div className="flex h-full flex-col">
+                    <div className={cn("flex flex-col", sidePanelClassName)}>
                       <PanelTabStrip
                         tabs={visibleRightTabs}
                         value={rightPanel}
@@ -3764,7 +3980,13 @@ function PdfEditorInner({
                 ) : (
                   <PdfEditorViewport
                     documentId={documentId}
-                    className="relative h-full max-h-full min-h-0 min-w-0 flex-1"
+                    scrollsWindow={scrollsWindow}
+                    toolbarRef={toolbarRef}
+                    className={
+                      scrollsWindow
+                        ? "min-w-0 flex-1"
+                        : "relative h-full max-h-full min-h-0 min-w-0 flex-1"
+                    }
                   >
                     <PdfEditorViewportBridge
                       viewportElementRef={viewportElementRef}
@@ -4081,6 +4303,8 @@ export const PDFEditor = React.forwardRef<PDFEditorHandle, PDFEditorProps>(
       stampManifests,
       signatureFontsStylesheetUrl = PDF_EDITOR_DEFAULT_SIGNATURE_FONTS_URL,
       resolveScrollAreaViewport,
+      scrollsWindow = false,
+      anchorIdPrefix,
       renderPageOverlay,
       onDocumentLoadSuccess,
       onDocumentLoadError,
@@ -4272,6 +4496,8 @@ export const PDFEditor = React.forwardRef<PDFEditorHandle, PDFEditorProps>(
         toolbarActions={toolbarActions}
         selectionActions={resolvedSelectionActions}
         signatureFontsStylesheetUrl={signatureFontsStylesheetUrl}
+        scrollsWindow={scrollsWindow}
+        anchorIdPrefix={anchorIdPrefix}
         renderPageOverlay={renderPageOverlay}
         handleRef={handleRef}
         onReplaceDocument={replace}

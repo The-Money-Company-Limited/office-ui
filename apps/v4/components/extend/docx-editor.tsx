@@ -1760,25 +1760,40 @@ function DocxEditorToolbar({
 }
 
 export function DocxEditorPreview({
+  anchorIdPrefix,
   className,
+  defaultReadOnly = false,
   defaultZoomScale = DOCX_EDITOR_DEFAULT_ZOOM_SCALE,
   fileName,
   isDark,
   onIsDarkChange,
+  scrollsWindow = false,
   src,
 }: {
+  /** Gives pages and paragraphs stable DOM ids under this prefix. */
+  anchorIdPrefix?: string
   className?: string
+  /** Opens the document read-only (Viewing) instead of editable. */
+  defaultReadOnly?: boolean
   defaultZoomScale?: number
   fileName?: string
   isDark: boolean
   onIsDarkChange: (isDark: boolean) => void
+  /**
+   * The document scrolls the page instead of a box of its own, and the
+   * toolbar sticks to the top: the editor fills the page.
+   */
+  scrollsWindow?: boolean
   src?: string
 }) {
   return (
     <DocxEditorContent
       key={src}
+      anchorIdPrefix={anchorIdPrefix}
       className={className}
+      defaultReadOnly={defaultReadOnly}
       defaultZoomScale={defaultZoomScale}
+      scrollsWindow={scrollsWindow}
       effectiveIsDark={isDark}
       fileName={fileName}
       setIsDark={onIsDarkChange}
@@ -1789,16 +1804,22 @@ export function DocxEditorPreview({
 }
 
 function DocxEditorContent({
+  anchorIdPrefix,
   className,
+  defaultReadOnly = false,
   defaultZoomScale,
   effectiveIsDark,
   fileName,
+  scrollsWindow = false,
   setIsDark,
   shouldRenderNightMode,
   url,
 }: {
+  anchorIdPrefix?: string
   className?: string
+  defaultReadOnly?: boolean
   defaultZoomScale?: number
+  scrollsWindow?: boolean
   effectiveIsDark: boolean
   fileName?: string
   setIsDark: (checked: boolean) => void
@@ -1821,7 +1842,7 @@ function DocxEditorContent({
   )
   const [loadError, setLoadError] = React.useState<string>()
   const [isLoadingDocument, setIsLoadingDocument] = React.useState(Boolean(url))
-  const [isReadOnly, setIsReadOnly] = React.useState(false)
+  const [isReadOnly, setIsReadOnly] = React.useState(defaultReadOnly)
   const [linkEditorOpen, setLinkEditorOpen] = React.useState(false)
   const [linkDraft, setLinkDraft] = React.useState("")
   const viewerBackgroundColor =
@@ -1904,10 +1925,21 @@ function DocxEditorContent({
     () => ({
       enabled: true,
       overscan: 1,
-      scrollElement: viewportElement,
+      scrollElement: scrollsWindow
+        ? (document.scrollingElement as HTMLElement | null)
+        : viewportElement,
       zoomScale: zoomScale / 100,
     }),
-    [viewportElement, zoomScale]
+    [scrollsWindow, viewportElement, zoomScale]
+  )
+  // scrollViewportTo scrolls whatever holds the document: the page, or the
+  // viewer's own box.
+  const scrollViewportTo = React.useCallback(
+    (top: number) => {
+      if (scrollsWindow) window.scrollTo({ top, left: 0, behavior: "auto" })
+      else viewportRef.current?.scrollTo({ top, left: 0, behavior: "auto" })
+    },
+    [scrollsWindow]
   )
 
   useSuppressDocxPaddingWarning(!isLoadingDocument && !loadError)
@@ -1922,8 +1954,8 @@ function DocxEditorContent({
   }
 
   React.useEffect(() => {
-    viewportRef.current?.scrollTo({ top: 0, left: 0 })
-  }, [resolvedDefaultZoomScale, url])
+    scrollViewportTo(0)
+  }, [resolvedDefaultZoomScale, scrollViewportTo, url])
 
   React.useEffect(() => {
     setDocumentTheme(effectiveIsDark ? "dark" : "light")
@@ -1957,7 +1989,7 @@ function DocxEditorContent({
         if (isCurrent) {
           setIsLoadingDocument(false)
           setActivePage(1)
-          viewportRef.current?.scrollTo({ top: 0, left: 0 })
+          scrollViewportTo(0)
         }
       } catch (error) {
         if (isCurrent) {
@@ -1974,13 +2006,15 @@ function DocxEditorContent({
     return () => {
       isCurrent = false
     }
-  }, [displayFileName, importDocxFile, uploadedDocxFile, url])
+  }, [displayFileName, importDocxFile, scrollViewportTo, uploadedDocxFile, url])
 
   const updateActivePageFromViewport = React.useCallback(() => {
     const viewport = viewportRef.current
     if (!viewport || !pageCount) return
 
-    const viewportRect = viewport.getBoundingClientRect()
+    const viewportRect = scrollsWindow
+      ? { top: 0, height: window.innerHeight }
+      : viewport.getBoundingClientRect()
     const viewportCenter = viewportRect.top + viewportRect.height / 2
     let closestPage = 1
     let closestDistance = Number.POSITIVE_INFINITY
@@ -2006,11 +2040,12 @@ function DocxEditorContent({
     setActivePage((currentPage) =>
       currentPage === closestPage ? currentPage : closestPage
     )
-  }, [pageCount])
+  }, [pageCount, scrollsWindow])
 
   React.useEffect(() => {
     const viewport = viewportRef.current
     if (!viewport || !pageCount) return
+    const scroller = scrollsWindow ? window : viewport
 
     let frameId = 0
     const handleScroll = () => {
@@ -2019,13 +2054,13 @@ function DocxEditorContent({
     }
 
     frameId = window.requestAnimationFrame(updateActivePageFromViewport)
-    viewport.addEventListener("scroll", handleScroll, { passive: true })
+    scroller.addEventListener("scroll", handleScroll, { passive: true })
 
     return () => {
       window.cancelAnimationFrame(frameId)
-      viewport.removeEventListener("scroll", handleScroll)
+      scroller.removeEventListener("scroll", handleScroll)
     }
-  }, [pageCount, updateActivePageFromViewport])
+  }, [pageCount, scrollsWindow, updateActivePageFromViewport])
 
   const scrollToPage = React.useCallback(
     (pageNumber: number) => {
@@ -2039,28 +2074,38 @@ function DocxEditorContent({
 
       if (!viewport) return
 
+      // The document's top, in the scroller's coordinates; on the page the
+      // sticky toolbar covers its top, which scroll-padding-top accounts for.
+      const scrollerTop = scrollsWindow
+        ? -window.scrollY +
+          (parseFloat(
+            getComputedStyle(document.documentElement).scrollPaddingTop
+          ) || 0)
+        : viewport.getBoundingClientRect().top - viewport.scrollTop
+
       if (!page) {
         const pageStridePx =
           (pageLayout.pageHeightPx + pageLayout.viewportDefaults.pageGapPx) *
           (zoomScale / 100)
+        const documentTop = scrollsWindow
+          ? viewport.getBoundingClientRect().top - scrollerTop
+          : 0
 
-        viewport.scrollTo({
-          top: Math.max(0, targetPageIndex * pageStridePx - 24),
-          behavior: "auto",
-        })
+        scrollViewportTo(
+          Math.max(0, documentTop + targetPageIndex * pageStridePx - 24)
+        )
         return
       }
 
-      viewport.scrollTo({
-        top:
-          page.getBoundingClientRect().top -
-          viewport.getBoundingClientRect().top +
-          viewport.scrollTop -
-          24,
-        behavior: "auto",
-      })
+      scrollViewportTo(page.getBoundingClientRect().top - scrollerTop - 24)
     },
-    [pageLayout.pageHeightPx, pageLayout.viewportDefaults.pageGapPx, zoomScale]
+    [
+      pageLayout.pageHeightPx,
+      pageLayout.viewportDefaults.pageGapPx,
+      scrollViewportTo,
+      scrollsWindow,
+      zoomScale,
+    ]
   )
 
   async function handleUpload(event: React.ChangeEvent<HTMLInputElement>) {
@@ -2102,7 +2147,9 @@ function DocxEditorContent({
   return (
     <div
       className={cn(
-        "flex h-[720px] min-h-0 flex-col overflow-hidden bg-background",
+        scrollsWindow
+          ? "flex min-h-dvh flex-col bg-background"
+          : "flex h-[720px] min-h-0 flex-col overflow-hidden bg-background",
         className
       )}
     >
@@ -2120,25 +2167,30 @@ function DocxEditorContent({
         className="hidden"
         onChange={handleImageUpload}
       />
-      <DocxEditorToolbar
-        activePage={activePage}
-        controlsDisabled={controlsDisabled}
-        editor={editor}
-        isReadOnly={isReadOnly}
-        onImageUploadClick={() => imageInputRef.current?.click()}
-        onIsDarkChange={setIsDark}
-        onIsReadOnlyChange={setIsReadOnly}
-        onOpenLinkEditor={openLinkEditor}
-        onToggleSidebar={() => setSidebarOpen((open) => !open)}
-        onUploadClick={() => fileInputRef.current?.click()}
-        pageCount={pageCount}
-        setZoomScale={setZoomScale}
-        showNightRenderToggle={shouldRenderNightMode}
-        zoomScale={zoomScale}
-      />
+      <div className={scrollsWindow ? "sticky top-0 z-30" : undefined}>
+        <DocxEditorToolbar
+          activePage={activePage}
+          controlsDisabled={controlsDisabled}
+          editor={editor}
+          isReadOnly={isReadOnly}
+          onImageUploadClick={() => imageInputRef.current?.click()}
+          onIsDarkChange={setIsDark}
+          onIsReadOnlyChange={setIsReadOnly}
+          onOpenLinkEditor={openLinkEditor}
+          onToggleSidebar={() => setSidebarOpen((open) => !open)}
+          onUploadClick={() => fileInputRef.current?.click()}
+          pageCount={pageCount}
+          setZoomScale={setZoomScale}
+          showNightRenderToggle={shouldRenderNightMode}
+          zoomScale={zoomScale}
+        />
+      </div>
       <div
         ref={viewerShellRef}
-        className="relative flex min-h-0 flex-1 overflow-hidden bg-muted/30"
+        className={cn(
+          "relative flex bg-muted/30",
+          scrollsWindow ? "flex-1" : "min-h-0 flex-1 overflow-hidden"
+        )}
       >
         {linkEditorOpen ? (
           <div className="absolute top-3 left-1/2 z-50 flex w-[min(420px,calc(100%-2rem))] -translate-x-1/2 items-center gap-2 rounded-lg border bg-background p-2 shadow-lg">
@@ -2231,10 +2283,9 @@ function DocxEditorContent({
             </div>
           </ScrollArea>
         </DocumentViewerThumbnailSidebar>
-        <ScrollArea
-          className="min-h-0 flex-1"
+        <DocumentScroller
+          scrollsWindow={scrollsWindow}
           style={{ backgroundColor: viewerBackgroundColor }}
-          viewportClassName="overscroll-contain p-4"
           viewportRef={setViewportRef}
         >
           {!url && !uploadedDocxFile ? (
@@ -2284,6 +2335,7 @@ function DocxEditorContent({
               >
                 <DocxEditorViewer
                   editor={editor}
+                  anchorIdPrefix={anchorIdPrefix}
                   mode={isReadOnly ? "read-only" : "edit"}
                   showTrackedChanges={editor.showTrackedChanges}
                   renderTrackedChangeCard={renderTrackedChangeCard}
@@ -2301,8 +2353,40 @@ function DocxEditorContent({
               </div>
             </div>
           )}
-        </ScrollArea>
+        </DocumentScroller>
       </div>
     </div>
+  )
+}
+
+// DocumentScroller holds the pages: a scroll box of its own, or, when the
+// document scrolls the page, a plain block that grows with it.
+function DocumentScroller({
+  children,
+  scrollsWindow,
+  style,
+  viewportRef,
+}: {
+  children: React.ReactNode
+  scrollsWindow: boolean
+  style: React.CSSProperties
+  viewportRef: (element: HTMLDivElement | null) => void
+}) {
+  if (scrollsWindow) {
+    return (
+      <div ref={viewportRef} className="min-w-0 flex-1 p-4" style={style}>
+        {children}
+      </div>
+    )
+  }
+  return (
+    <ScrollArea
+      className="min-h-0 flex-1"
+      style={style}
+      viewportClassName="overscroll-contain p-4"
+      viewportRef={viewportRef}
+    >
+      {children}
+    </ScrollArea>
   )
 }

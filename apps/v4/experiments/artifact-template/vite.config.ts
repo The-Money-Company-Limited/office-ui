@@ -30,6 +30,8 @@ export default defineConfig({
     },
   ],
   resolve: {
+    // The engine forks are linked from sibling checkouts; one React for all.
+    dedupe: ["react", "react-dom"],
     alias: [
       {
         find: "@/lib/pdf-thumbnail-utils",

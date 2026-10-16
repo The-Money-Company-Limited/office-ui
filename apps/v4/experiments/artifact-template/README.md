@@ -31,6 +31,14 @@ Casual Slides is the selected candidate for a future editable PPTX experiment;
 its integration is deferred while the ready DOCX, XLSX, and PDF editors are
 prioritized.
 
+## Engines
+
+The DOCX, XLSX, and PPTX engines are our forks, linked from sibling
+checkouts by `pnpm.overrides` in the root `package.json`:
+`../react-docx/packages/react-viewer`, `../react-xlsx/packages/react-xlsx`,
+and `../react-pptx/packages/react-viewer`. Build a fork before building this
+template; its `dist` is what Vite bundles.
+
 ## Build and stage
 
 From the repository root:
@@ -64,6 +72,20 @@ cool publish /absolute/path/to/new-release-directory --name example
 
 The corresponding ZIP may also be uploaded through the Cool Computers publish
 UI.
+
+## Check Comments and Ink locally
+
+[`dev/comments-harness.mjs`](./dev/comments-harness.mjs) serves staged
+releases with RuntimeVM's real comment script injected, as the gateway does,
+and a stand-in comment layer that saves every pick at once:
+
+```sh
+node dev/comments-harness.mjs /path/to/runtimevm /path/to/releases 4310
+```
+
+Open `http://127.0.0.1:4310/<release>/`, press **Comment**, then click or draw.
+`http://127.0.0.1:4311/notes?agent` lists each saved anchor as the owner's
+agent reads it.
 
 ## RuntimeVM fit
 

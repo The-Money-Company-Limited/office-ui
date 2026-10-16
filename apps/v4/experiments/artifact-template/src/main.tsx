@@ -122,19 +122,34 @@ function App() {
           {artifact?.kind === "docx" ? (
             <DocxEditor
               {...documentProps}
+              anchorIdPrefix=""
+              defaultReadOnly
+              scrollsWindow
               isDark={isDark}
               onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
             />
           ) : artifact?.kind === "xlsx" ? (
             <XlsxEditor
               {...documentProps}
+              scrollsWindow
+              syncSheetToUrl
               isDark={isDark}
               onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
             />
           ) : artifact?.kind === "pptx" ? (
-            <PptxViewer {...documentProps} showUpload={false} />
+            <PptxViewer
+              {...documentProps}
+              scrollsWindow
+              showUpload={false}
+              slideIdPrefix=""
+            />
           ) : (
-            <PdfEditor {...documentProps} showUpload={false} />
+            <PdfEditor
+              {...documentProps}
+              anchorIdPrefix=""
+              scrollsWindow
+              showUpload={false}
+            />
           )}
         </React.Suspense>
       ) : (

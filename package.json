@@ -32,7 +32,10 @@
   "pnpm": {
     "overrides": {
       "@types/react": "19.2.2",
-      "@types/react-dom": "19.2.2"
+      "@types/react-dom": "19.2.2",
+      "@extend-ai/react-docx": "link:../react-docx/packages/react-viewer",
+      "@extend-ai/react-xlsx": "link:../react-xlsx/packages/react-xlsx",
+      "@extend-ai/react-pptx": "link:../react-pptx/packages/react-viewer"
     }
   }
 }

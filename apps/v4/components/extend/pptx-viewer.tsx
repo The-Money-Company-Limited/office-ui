@@ -924,6 +924,32 @@ function PptxThumbnailSidebarContent({
   )
 }
 
+function isViewerScrollKey(key: string) {
+  return (
+    key === "ArrowDown" ||
+    key === "ArrowUp" ||
+    key === "End" ||
+    key === "Home" ||
+    key === "PageDown" ||
+    key === "PageUp" ||
+    key === " " ||
+    key === "Spacebar"
+  )
+}
+
+function isTextEntryElement(element: Element | null) {
+  if (!(element instanceof HTMLElement)) return false
+  return (
+    element.isContentEditable ||
+    element instanceof HTMLTextAreaElement ||
+    element instanceof HTMLSelectElement ||
+    (element instanceof HTMLInputElement &&
+      !["button", "checkbox", "radio", "range", "reset", "submit"].includes(
+        element.type
+      ))
+  )
+}
+
 export type PptxViewerPreviewProps = {
   className?: string
   defaultThumbnailSidebarOpen?: boolean
@@ -933,6 +959,13 @@ export type PptxViewerPreviewProps = {
   showDownload?: boolean
   showToolbar?: boolean
   showUpload?: boolean
+  /**
+   * Let the page scroll the slides: no fixed height, a sticky toolbar, and
+   * the window as the scroll container. Use it when the viewer is the page.
+   */
+  scrollsWindow?: boolean
+  /** Prefix for the slide wrapper ids (`${slideIdPrefix}slide-${n}`). */
+  slideIdPrefix?: string
   src?: string
   toolbarActions?: React.ReactNode
 }
@@ -946,10 +979,14 @@ export function PptxViewerPreview({
   showDownload = true,
   showToolbar = true,
   showUpload = true,
+  scrollsWindow = false,
+  slideIdPrefix,
   src,
   toolbarActions,
 }: PptxViewerPreviewProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null)
+  const rootRef = React.useRef<HTMLDivElement>(null)
+  const toolbarRef = React.useRef<HTMLDivElement>(null)
   const [viewerShellRef, viewerShellWidth] = useElementWidth<HTMLDivElement>()
   const requestedInitialSlideIndex = Math.max(0, Math.round(initialSlide) - 1)
   const [viewportElement, setViewportElement] =
@@ -1004,9 +1041,20 @@ export function PptxViewerPreview({
     () => ({
       enabled: true,
       overscanViewport: 0.75,
-      scrollElement: viewportElement,
+      scrollElement:
+        scrollsWindow && viewportElement ? window : viewportElement,
     }),
-    [viewportElement]
+    [scrollsWindow, viewportElement]
+  )
+  // How far the slide list has scrolled past the top of its visible area. In
+  // window mode that area starts below the sticky toolbar.
+  const getViewportScrollTop = React.useCallback(
+    (viewport: HTMLDivElement) =>
+      scrollsWindow
+        ? (toolbarRef.current?.offsetHeight ?? 0) -
+          viewport.getBoundingClientRect().top
+        : viewport.scrollTop,
+    [scrollsWindow]
   )
   const pendingSlideNavigationRef = React.useRef<{
     hasObservedIntermediateSlide: boolean
@@ -1046,13 +1094,38 @@ export function PptxViewerPreview({
 
   React.useEffect(() => {
     cancelPendingSlideNavigation()
-    viewportElement?.scrollTo({ top: 0, left: 0 })
+    if (!viewportElement) return
+    if (!scrollsWindow) {
+      viewportElement.scrollTo({ top: 0, left: 0 })
+      return
+    }
+    const scrollTop = getViewportScrollTop(viewportElement)
+    if (scrollTop > 0) {
+      window.scrollTo({ top: window.scrollY - scrollTop, left: 0 })
+    }
   }, [
     cancelPendingSlideNavigation,
     defaultZoom,
+    getViewportScrollTop,
+    scrollsWindow,
     sourceIdentity,
     viewportElement,
   ])
+
+  React.useEffect(() => {
+    const root = rootRef.current
+    const toolbarElement = toolbarRef.current
+    if (!scrollsWindow || !root || !toolbarElement) return
+
+    const observer = new ResizeObserver(() => {
+      root.style.setProperty(
+        "--pptx-toolbar-height",
+        `${toolbarElement.offsetHeight}px`
+      )
+    })
+    observer.observe(toolbarElement)
+    return () => observer.disconnect()
+  }, [scrollsWindow, showToolbar])
 
   React.useEffect(
     () => cancelPendingSlideNavigation,
@@ -1159,7 +1232,7 @@ export function PptxViewerPreview({
   )
   const syncFirstSlideAtViewportTop = React.useCallback(
     (viewport: HTMLDivElement) => {
-      if (viewport.scrollTop > PPTX_SCROLL_TOP_EPSILON_PX) return
+      if (getViewportScrollTop(viewport) > PPTX_SCROLL_TOP_EPSILON_PX) return
 
       setActiveSlideIndex((currentSlideIndex) =>
         currentSlideIndex === 0 ? currentSlideIndex : 0
@@ -1172,23 +1245,28 @@ export function PptxViewerPreview({
         })
       }
     },
-    [isLoading, controller]
+    [getViewportScrollTop, isLoading, controller]
   )
-  const handleViewerUserScrollIntent = React.useCallback(
-    (event: React.SyntheticEvent<HTMLDivElement>) => {
-      const viewport = event.currentTarget
+  const interruptViewerScroll = React.useCallback(
+    (viewport: HTMLDivElement) => {
+      const scroller = scrollsWindow ? window : viewport
 
       // Stop an in-flight native smooth scroll before manual wheel, touch,
       // pointer, or keyboard input takes ownership of the viewport.
-      viewport.scrollTo({
+      scroller.scrollTo({
         behavior: "instant",
-        left: viewport.scrollLeft,
-        top: viewport.scrollTop,
+        left: scrollsWindow ? window.scrollX : viewport.scrollLeft,
+        top: scrollsWindow ? window.scrollY : viewport.scrollTop,
       })
       cancelPendingSlideNavigation()
       syncFirstSlideAtViewportTop(viewport)
     },
-    [cancelPendingSlideNavigation, syncFirstSlideAtViewportTop]
+    [cancelPendingSlideNavigation, scrollsWindow, syncFirstSlideAtViewportTop]
+  )
+  const handleViewerUserScrollIntent = React.useCallback(
+    (event: React.SyntheticEvent<HTMLDivElement>) =>
+      interruptViewerScroll(event.currentTarget),
+    [interruptViewerScroll]
   )
   const handleViewerScroll = React.useCallback(
     (event: React.UIEvent<HTMLDivElement>) => {
@@ -1199,21 +1277,51 @@ export function PptxViewerPreview({
   )
   const handleViewerKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (
-        event.key === "ArrowDown" ||
-        event.key === "ArrowUp" ||
-        event.key === "End" ||
-        event.key === "Home" ||
-        event.key === "PageDown" ||
-        event.key === "PageUp" ||
-        event.key === " " ||
-        event.key === "Spacebar"
-      ) {
-        handleViewerUserScrollIntent(event)
-      }
+      if (isViewerScrollKey(event.key)) handleViewerUserScrollIntent(event)
     },
     [handleViewerUserScrollIntent]
   )
+
+  // In window mode the page scrolls the slides, so scroll input and the
+  // scroll keys are observed on the window instead of a scroll container.
+  React.useEffect(() => {
+    if (!scrollsWindow || !viewportElement) return
+
+    const handleIntent = () => interruptViewerScroll(viewportElement)
+    const handleScroll = () => {
+      if (pendingSlideNavigationRef.current) return
+      syncFirstSlideAtViewportTop(viewportElement)
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        !isViewerScrollKey(event.key) ||
+        isTextEntryElement(document.activeElement)
+      ) {
+        return
+      }
+      handleIntent()
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    window.addEventListener("scroll", handleScroll, { passive: true })
+    window.addEventListener("touchstart", handleIntent, { passive: true })
+    window.addEventListener("wheel", handleIntent, { passive: true })
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown)
+      window.removeEventListener("scroll", handleScroll)
+      window.removeEventListener("touchstart", handleIntent)
+      window.removeEventListener("wheel", handleIntent)
+    }
+  }, [
+    interruptViewerScroll,
+    scrollsWindow,
+    syncFirstSlideAtViewportTop,
+    viewportElement,
+  ])
 
   const handleLoad = React.useCallback((presentation: ParsedPresentation) => {
     const nextSlideCount = presentation.document.slides.length
@@ -1276,10 +1384,98 @@ export function PptxViewerPreview({
     })
   }
 
+  const toolbar = showToolbar ? (
+    <PptxToolbar
+      activeSlideIndex={activeSlideIndex}
+      controlsDisabled={controlsDisabled}
+      isPreparingDownload={isPreparingDownload}
+      onDownload={handleDownload}
+      onSlideChange={handleSlideChange}
+      onToggleSidebar={() => setSidebarOpen((open) => !open)}
+      onUploadClick={() => fileInputRef.current?.click()}
+      onZoomChange={setZoomLevel}
+      resolvedZoom={resolvedZoom}
+      showDownloadButton={showDownload}
+      showUploadButton={showUpload}
+      slideCount={slideCount}
+      toolbarActions={toolbarActions}
+      zoomLevel={zoomLevel}
+    />
+  ) : null
+  const slides = !source ? (
+    <div className="grid h-full min-h-96 place-items-center p-6 text-center">
+      <div className="max-w-md rounded-lg border bg-background p-4 text-sm shadow-xs">
+        <div className="font-medium">
+          Upload a PowerPoint presentation to preview
+        </div>
+        <div className="mt-1 text-muted-foreground">
+          Pass a PPTX URL with the <code>src</code> prop or upload a PPTX or
+          legacy PPT file.
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mt-4"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <IconPlaceholder
+            lucide="Upload"
+            tabler="IconUpload"
+            hugeicons="Upload01Icon"
+            phosphor="UploadSimpleIcon"
+            remixicon="RiUpload2Line"
+            className="size-4"
+          />
+          Upload PowerPoint
+        </Button>
+      </div>
+    </div>
+  ) : (
+    <ReactPptxViewer
+      key={sourceIdentity}
+      ref={setController}
+      source={source}
+      mode="continuous"
+      initialSlide={requestedInitialSlideIndex}
+      zoom={zoomLevel}
+      height="100%"
+      showToolbar={false}
+      showThumbnails={false}
+      virtualization={virtualization}
+      className="min-h-full !border-0 !bg-background [&_.rpv-stage]:min-h-full [&_.rpv-stage]:!bg-background [&_.rpv-status]:!bg-background [&_.rpv-workspace]:min-h-full [&_[data-rpv-list-item]]:[contain:layout_paint_style]"
+      viewportClassName="!min-h-full !px-4 !py-6"
+      renderLoading={() => (
+        <ViewerLoadingSurface showSpinner={shouldShowLoadingSpinner} />
+      )}
+      renderError={(error) => (
+        <div className="grid h-full min-h-96 place-items-center p-6 text-center">
+          <div className="max-w-md rounded-lg border bg-background p-4 text-sm text-destructive shadow-xs">
+            <div className="font-medium">Unable to display PowerPoint</div>
+            <div className="mt-1 text-muted-foreground">{error.message}</div>
+          </div>
+        </div>
+      )}
+      emptyState={
+        <div className="text-sm text-muted-foreground">
+          This presentation has no slides.
+        </div>
+      }
+      onLoad={handleLoad}
+      onReady={handleReady}
+      onError={handleError}
+      onSlideChange={handleViewerSlideChange}
+      onZoomChange={handleZoomChange}
+    />
+  )
+
   return (
     <div
+      ref={rootRef}
       className={cn(
-        "flex h-[640px] min-h-0 flex-col overflow-hidden bg-background",
+        scrollsWindow
+          ? "flex min-h-dvh flex-col bg-background [--pptx-toolbar-height:0px]"
+          : "flex h-[640px] min-h-0 flex-col overflow-hidden bg-background",
         className
       )}
     >
@@ -1290,29 +1486,29 @@ export function PptxViewerPreview({
         className="hidden"
         onChange={handleUpload}
       />
-      {showToolbar ? (
-        <PptxToolbar
-          activeSlideIndex={activeSlideIndex}
-          controlsDisabled={controlsDisabled}
-          isPreparingDownload={isPreparingDownload}
-          onDownload={handleDownload}
-          onSlideChange={handleSlideChange}
-          onToggleSidebar={() => setSidebarOpen((open) => !open)}
-          onUploadClick={() => fileInputRef.current?.click()}
-          onZoomChange={setZoomLevel}
-          resolvedZoom={resolvedZoom}
-          showDownloadButton={showDownload}
-          showUploadButton={showUpload}
-          slideCount={slideCount}
-          toolbarActions={toolbarActions}
-          zoomLevel={zoomLevel}
-        />
-      ) : null}
+      {scrollsWindow && toolbar ? (
+        <div ref={toolbarRef} className="sticky top-0 z-40">
+          {toolbar}
+        </div>
+      ) : (
+        toolbar
+      )}
       <div
         ref={viewerShellRef}
-        className="relative flex min-h-0 flex-1 overflow-hidden bg-background"
+        className={
+          scrollsWindow
+            ? "relative flex flex-1 bg-background"
+            : "relative flex min-h-0 flex-1 overflow-hidden bg-background"
+        }
       >
         <DocumentViewerThumbnailSidebar
+          className={
+            scrollsWindow
+              ? sidebarInline
+                ? "sticky top-(--pptx-toolbar-height)! bottom-auto! h-[calc(100dvh-var(--pptx-toolbar-height))] self-start"
+                : "fixed top-(--pptx-toolbar-height)!"
+              : undefined
+          }
           inline={sidebarInline}
           open={thumbnailSidebarVisible}
         >
@@ -1328,91 +1524,33 @@ export function PptxViewerPreview({
             />
           ) : null}
         </DocumentViewerThumbnailSidebar>
-        <ScrollArea
-          className="min-h-0 flex-1 bg-background"
-          viewportClassName="p-0"
-          viewportProps={{
-            "aria-label": "PowerPoint presentation",
-            onKeyDown: handleViewerKeyDown,
-            onPointerDown: handleViewerUserScrollIntent,
-            onScroll: handleViewerScroll,
-            onTouchStart: handleViewerUserScrollIntent,
-            onWheel: handleViewerUserScrollIntent,
-            tabIndex: 0,
-          }}
-          viewportRef={setViewportElement}
-        >
-          {!source ? (
-            <div className="grid h-full min-h-96 place-items-center p-6 text-center">
-              <div className="max-w-md rounded-lg border bg-background p-4 text-sm shadow-xs">
-                <div className="font-medium">
-                  Upload a PowerPoint presentation to preview
-                </div>
-                <div className="mt-1 text-muted-foreground">
-                  Pass a PPTX URL with the <code>src</code> prop or upload a
-                  PPTX or legacy PPT file.
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="mt-4"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <IconPlaceholder
-                    lucide="Upload"
-                    tabler="IconUpload"
-                    hugeicons="Upload01Icon"
-                    phosphor="UploadSimpleIcon"
-                    remixicon="RiUpload2Line"
-                    className="size-4"
-                  />
-                  Upload PowerPoint
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <ReactPptxViewer
-              key={sourceIdentity}
-              ref={setController}
-              source={source}
-              mode="continuous"
-              initialSlide={requestedInitialSlideIndex}
-              zoom={zoomLevel}
-              height="100%"
-              showToolbar={false}
-              showThumbnails={false}
-              virtualization={virtualization}
-              className="min-h-full !border-0 !bg-background [&_.rpv-stage]:min-h-full [&_.rpv-stage]:!bg-background [&_.rpv-status]:!bg-background [&_.rpv-workspace]:min-h-full [&_[data-rpv-list-item]]:[contain:layout_paint_style]"
-              viewportClassName="!min-h-full !px-4 !py-6"
-              renderLoading={() => (
-                <ViewerLoadingSurface showSpinner={shouldShowLoadingSpinner} />
-              )}
-              renderError={(error) => (
-                <div className="grid h-full min-h-96 place-items-center p-6 text-center">
-                  <div className="max-w-md rounded-lg border bg-background p-4 text-sm text-destructive shadow-xs">
-                    <div className="font-medium">
-                      Unable to display PowerPoint
-                    </div>
-                    <div className="mt-1 text-muted-foreground">
-                      {error.message}
-                    </div>
-                  </div>
-                </div>
-              )}
-              emptyState={
-                <div className="text-sm text-muted-foreground">
-                  This presentation has no slides.
-                </div>
-              }
-              onLoad={handleLoad}
-              onReady={handleReady}
-              onError={handleError}
-              onSlideChange={handleViewerSlideChange}
-              onZoomChange={handleZoomChange}
-            />
-          )}
-        </ScrollArea>
+        {scrollsWindow ? (
+          <div
+            ref={setViewportElement}
+            aria-label="PowerPoint presentation"
+            className="min-w-0 flex-1 bg-background"
+            onPointerDown={handleViewerUserScrollIntent}
+          >
+            {slides}
+          </div>
+        ) : (
+          <ScrollArea
+            className="min-h-0 flex-1 bg-background"
+            viewportClassName="p-0"
+            viewportProps={{
+              "aria-label": "PowerPoint presentation",
+              onKeyDown: handleViewerKeyDown,
+              onPointerDown: handleViewerUserScrollIntent,
+              onScroll: handleViewerScroll,
+              onTouchStart: handleViewerUserScrollIntent,
+              onWheel: handleViewerUserScrollIntent,
+              tabIndex: 0,
+            }}
+            viewportRef={setViewportElement}
+          >
+            {slides}
+          </ScrollArea>
+        )}
       </div>
     </div>
   )
