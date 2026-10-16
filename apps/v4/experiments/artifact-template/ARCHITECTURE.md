@@ -150,15 +150,122 @@ visitors; use the computer's private access setting when the document should
 be restricted. `artifact.json` is fetched by every visitor, so it holds no
 secrets.
 
+## Review loop: Comments, Ink, and suggestions
+
+The document is the truth; the page only shows it. Two review systems each do
+one job, and together they make one loop:
+
+```text
+person on the published page --Comments / Ink (RuntimeVM layer)--> owner's agent
+owner's agent --tracked changes + Office comments in the file--> new release
+person in the editor --accept / reject / reply--> exported or saved file
+```
+
+- **Comments and Ink are RuntimeVM's**, injected by the gateway into the
+  page. They are how people point at the document and talk to the agent. The
+  template never ships a comment layer of its own, never copies the injected
+  `<script src="/__cool/comments.js">` into its files, and runs as a top-level
+  tab, never in an iframe (RuntimeVM COD-1403, COD-1415).
+- **Suggestions are the file's.** The agent answers by changing the document:
+  DOCX tracked changes (`w:ins`/`w:del`) and comments (`comments.xml`), XLSX
+  threaded comments. They round-trip through Word and Excel, and the editor
+  shows them for accept, reject, and reply.
+
+### Page rules that keep Comments and Ink anchored
+
+RuntimeVM's layer stores a click comment as a CSS selector, the element's
+text, and a box in percent of the page; Ink stores page-pixel paths, the
+elements under them, and the author's screen size
+([contract](https://github.com/The-Money-Company-Limited/runtimevm/blob/ff898d124b08dcfb47a0ca06ddebc63fe1ee5d8b/backend/comments/contract.json)). It re-finds elements by
+selector, follows window scroll for Ink, and has no API for a page to report
+its own anchor. So the template makes the page itself anchorable:
+
+1. **The document scrolls the window.** Toolbars are `position: sticky`; no
+   inner `overflow: auto` frame scrolls the document. Ink and area pins follow
+   only window scroll, so in an inner scroller they would drift off the
+   content they were drawn on. For the XLSX canvas the grid's scroll offset is
+   the window's scroll offset (a spacer sized to the sheet, the canvas sticky),
+   so a page pixel plus `scroll_y` always names one cell.
+2. **Every semantic unit has a stable, unique `id`.** A unique `id` ends the
+   layer's selector walk, so the anchor survives reflow and editing:
+   DOCX paragraphs `p-<w14:paraId>` (the model must keep `paraId`; it does not
+   yet), pages `page-<n>`; PDF pages `pdf-page-<n>`; PPTX slides `slide-<n>`.
+   IDs use `[A-Za-z0-9_-]`, at most 60 characters, the layer's safe-id rule.
+3. **Viewing is the default mode.** The layer records no text for an element
+   that is or contains `contenteditable`, so comments made while editing anchor
+   by `id` and box alone. Like Google Docs, a document opens in Viewing, and
+   Suggesting and Editing are explicit modes.
+4. **Typing goes through a focused text field.** The layer takes a plain `C`
+   for comment mode unless the focus is an `input`, `textarea`, `select`, or
+   `contenteditable`. Editors must not read keys on a focused `div` or canvas
+   (the XLSX grid does today, `tabIndex={0}`).
+5. **The page's identity is its path plus query.** A sheet is `?sheet=<name>`,
+   so each sheet has its own comments; scroll position and selection live in
+   a plain `#` hash, which the layer ignores.
+6. **Pages keep a fixed width.** Ink is shown only to viewers whose window is
+   within 15% of the author's width; documents render at fixed page widths
+   and center, so the same pixel names the same place.
+
+### Agent tools run without a browser or a VM
+
+The owner's agent works on a site with file tools and no VM (RuntimeVM
+COD-1423, COD-1428); a shell command would give the site a VM for good. So
+document operations are a DOM-free JavaScript and WASM library that the
+RuntimeVM operator (Node) can load as tools later, not a CLI for a VM:
+
+- `locate(document, anchor)`: a Comments or Ink anchor (`selector`, `rect`,
+  `scroll_y`, `ink.screen`, `marks`) to a document position (paragraph and
+  offset, cell, PDF page point, slide).
+- `suggest(document, {find, replace, author})`: a tracked change.
+- `comment`, `reply`, `resolve` on a document position.
+- `accept`, `reject` for one change or all.
+
+Each takes and returns document bytes, so a result is written back with the
+files API as one new release. The engines' React packages wrap the same
+operations for the editor.
+
+### Saving edits made in the browser
+
+Not built. Edits stay in the browser until exported. RuntimeVM's per-site
+database (`"database": true`, `env.DB`, COD-1439) is in progress and capped at
+25 MB per site, so it fits review state, not document bytes; site functions
+have 50 ms of CPU per request (COD-1435), so documents are never parsed in a
+function. A save path will be designed once those land.
+
+## Engines
+
+The editors are three MIT engines forked into the organization, with
+`extend-hq` as `upstream`; changes stay small enough to offer back:
+
+| Engine | Fork                                                                    | Parse and export                                                               |
+| ------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| DOCX   | [`react-docx`](https://github.com/The-Money-Company-Limited/react-docx) | Rust/WASM (`crates/docx-core`); edits in `packages/editor-ops`                 |
+| XLSX   | [`react-xlsx`](https://github.com/The-Money-Company-Limited/react-xlsx) | `@dukelib/sheets-wasm` (binary dependency); JS post-processes the exported zip |
+| PPTX   | [`react-pptx`](https://github.com/The-Money-Company-Limited/react-pptx) | Rust/WASM; viewer only                                                         |
+
+## Plan
+
+1. **Anchorable pages.** Window scrolling, stable ids, Viewing as the
+   default, keys through a text field, `?sheet=`. Verified by publishing a
+   sample of each format and leaving a click comment and an Ink drawing on it.
+2. **DOCX keeps its markup when edited.** Today typing in a paragraph with
+   tracked changes or comment anchors drops them on export (`editor-ops`
+   clears `sourceXml`): deleted text is lost and comments come unanchored.
+   Revisions become part of the model and are serialized.
+3. **Agent tools for DOCX**, DOM-free, as listed above.
+4. **Suggesting mode in the editor**: typing becomes tracked changes;
+   accept/reject any change; reply in comment cards.
+5. **XLSX**: threaded comments and agent cell suggestions, stored as threaded
+   comments by the agent, so Excel still shows them.
+6. **PPTX editing.**
+
 ## Open questions
 
-- **Two comment systems.** Comments stored in the document (DOCX
-  `comments.xml`, XLSX threaded comments) round-trip through Office. The
-  RuntimeVM site comment layer stores notes in Postgres and routes them to the
-  owner's agent. A template page either opts out of the layer or bridges the
-  two; RuntimeVM has no per-page opt-out today.
 - **Bundle storage per computer.** R2 content is addressed per computer, so
   every new document artifact uploads the 19 MiB bundle once. A platform-side
   template could share bundle bytes across computers.
 - **External resources.** Optional PDF fonts and stamps can still load from
   external URLs, so a private release is not fully self-contained.
+- **What the agent sees.** RuntimeVM COD-1430 (a screenshot or rendered Ink
+  for the agent) and COD-1413 (where a fix should land) are open; `locate`
+  answers the second for documents without a screenshot.
