@@ -1,9 +1,9 @@
 "use client"
 
 import * as React from "react"
+import { useDocumentSave } from "@/experiments/artifact-template/src/autosave-context"
 import type { DocumentState } from "@embedpdf/core"
 import {
-  useDocumentPermissions,
   useDocumentState,
   useRegistry,
 } from "@embedpdf/core/react"
@@ -497,8 +497,7 @@ export function PdfEditorSecurityDialog({
 }) {
   const { provides: documentManager } = useDocumentManagerCapability()
   const documentState = useDocumentState(documentId)
-  const permissions = useDocumentPermissions(documentId)
-  const { notify } = usePdfEditor()
+  const { permissions, notify } = usePdfEditor()
   const document = documentState?.document ?? null
   const isEncrypted = document?.isEncrypted ?? false
   const isOwnerUnlocked = document?.isOwnerUnlocked ?? false
@@ -573,6 +572,7 @@ export function PdfEditorSecurityDialog({
     )
   }
 
+  const save = useDocumentSave()
   const handleApply = () => {
     if (!documentManager || !canApply) return
 
@@ -603,8 +603,9 @@ export function PdfEditorSecurityDialog({
           setIsApplying(false)
 
           if (success) {
+            save?.dirty()
             notify(
-              "Protection is applied the next time you download the document.",
+              save ? "Protection updated." : "Protection is applied the next time you download the document.",
               "success"
             )
             onOpenChange(false)
@@ -632,8 +633,9 @@ export function PdfEditorSecurityDialog({
         setIsApplying(false)
 
         if (success) {
+          save?.dirty()
           notify(
-            "Protection is removed the next time you download the document.",
+            save ? "Protection removed." : "Protection is removed the next time you download the document.",
             "success"
           )
           onOpenChange(false)
@@ -882,8 +884,7 @@ export function PdfEditorPropertiesDialog({
 }) {
   const { registry } = useRegistry()
   const documentState = useDocumentState(documentId)
-  const permissions = useDocumentPermissions(documentId)
-  const { fileName, notify } = usePdfEditor()
+  const { permissions, fileName, notify } = usePdfEditor()
   const document = documentState?.document ?? null
   const [metadata, setMetadata] =
     React.useState<EditableMetadata>(EMPTY_METADATA)
@@ -957,6 +958,7 @@ export function PdfEditorPropertiesDialog({
   const updateField = (key: keyof EditableMetadata, value: string) =>
     setMetadata((previous) => ({ ...previous, [key]: value }))
 
+  const save = useDocumentSave()
   const handleSave = () => {
     if (!registry || !document) return
 
@@ -976,7 +978,8 @@ export function PdfEditorPropertiesDialog({
       .wait(
         () => {
           setIsSaving(false)
-          notify("Document properties saved.", "success")
+          save?.dirty()
+          if (!save) notify("Document properties updated.", "success")
           onOpenChange(false)
         },
         (failure) => {
@@ -1077,7 +1080,7 @@ export function PdfEditorPropertiesDialog({
             disabled={isLoading || !permissions.canModifyContents}
             onClick={handleSave}
           >
-            Save
+            Apply
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1848,7 +1851,7 @@ export const PDF_EDITOR_SHORTCUTS: Array<{
   {
     group: "Document",
     items: [
-      { keys: ["mod+S"], label: "Download" },
+
       { keys: ["mod+P"], label: "Print" },
       { keys: ["mod+F"], label: "Search" },
       { keys: ["mod+Z"], label: "Undo" },

@@ -2,6 +2,14 @@
 
 import * as React from "react"
 import {
+  SaveAccess,
+  SaveStatus,
+  useDocumentAdapter,
+  useDocumentRevision,
+  useSaveState,
+} from "@/experiments/artifact-template/src/autosave-context"
+
+import {
   DocxEditorViewer,
   paragraphLetterheadFloatSideAtNodeIndex,
   sameParagraphLocation,
@@ -1014,6 +1022,7 @@ function DocxEditorToolbar({
   showAppearanceToggle: boolean
   zoomScale: number
 }) {
+  const { canSave } = useSaveState()
   const isViewing = mode === "viewing"
   const { layout: pageLayout } = useDocxPageLayout(editor)
   const { paragraphStyles, selectedParagraphStyleId, setParagraphStyle } =
@@ -1237,6 +1246,7 @@ function DocxEditorToolbar({
             <span className="truncate text-sm font-semibold" title={fileName}>
               {fileName}
             </span>
+            <SaveStatus />
           </div>
           {mode === "viewing" ? zoomControls : null}
           {showAppearanceToggle ? (
@@ -1327,11 +1337,15 @@ function DocxEditorToolbar({
               className="size-4"
             />
           </ToolbarIconButton>
-          <DocxModeMenu
-            disabled={controlsDisabled}
-            mode={mode}
-            onModeChange={onModeChange}
-          />
+          {canSave ? (
+            <DocxModeMenu
+              disabled={controlsDisabled}
+              mode={mode}
+              onModeChange={onModeChange}
+            />
+          ) : (
+            <SaveAccess />
+          )}
           <Separator orientation="vertical" className="mx-1 h-4 self-center" />
           {onUploadClick ? (
             <ToolbarIconButton
@@ -2036,7 +2050,9 @@ function DocxEditorContent({
   )
   const [loadError, setLoadError] = React.useState<string>()
   const [isLoadingDocument, setIsLoadingDocument] = React.useState(Boolean(url))
-  const [mode, setMode] = React.useState(defaultMode)
+  const { canSave } = useSaveState()
+  const [chosenMode, setMode] = React.useState(defaultMode)
+  const mode = canSave ? chosenMode : "viewing"
   const [linkEditorOpen, setLinkEditorOpen] = React.useState(false)
   const [linkDraft, setLinkDraft] = React.useState("")
   const viewerBackgroundColor =
@@ -2058,6 +2074,16 @@ function DocxEditorContent({
     [author, defaultMode, displayFileName]
   )
   const editor = useDocxEditor(editorOptions)
+  useDocumentAdapter({
+    serialize: async () => ({
+      files: [{
+        path: `document/${displayFileName}`,
+        bytes: await editor.getDocumentBuffer(),
+      }],
+    }),
+    download: editor.exportDocx,
+  })
+  useDocumentRevision(editor.model, !isLoadingDocument && !editor.isImporting)
   const { layout: pageLayout } = useDocxPageLayout(editor)
   const fitZoomScale =
     viewerShellWidth && pageLayout.pageWidthPx
@@ -2148,15 +2174,11 @@ function DocxEditorContent({
   const handlePageCountChange = React.useCallback((nextPageCount: number) => {
     setReportedPageCount(Math.max(1, Math.round(nextPageCount || 1)))
   }, [])
+  const [pageScrollElement, setPageScrollElement] =
+    React.useState<HTMLElement | null>(null)
   const setViewportRef = React.useCallback((element: HTMLDivElement | null) => {
     viewportRef.current = element
     setViewportElement(element)
-  }, [])
-  // The page's scroller exists only in the browser: it is read after mount,
-  // so rendering on the server never touches document.
-  const [pageScrollElement, setPageScrollElement] =
-    React.useState<HTMLElement | null>(null)
-  React.useEffect(() => {
     setPageScrollElement(
       scrollsWindow ? (document.scrollingElement as HTMLElement | null) : null
     )

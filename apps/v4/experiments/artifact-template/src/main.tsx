@@ -4,6 +4,9 @@ import { createRoot } from "react-dom/client"
 import "../../../app/globals.css"
 import "./theme.css"
 
+import { Autosave } from "./autosave"
+import { AutosaveContext } from "./autosave-context"
+
 const DocxEditor = React.lazy(() =>
   import("@/components/extend/docx-editor").then((module) => ({
     default: module.DocxEditorPreview,
@@ -65,6 +68,9 @@ function storedTheme(): "dark" | "light" {
 }
 
 function App() {
+  const [reloadVersion, setReloadVersion] = React.useState("")
+  const [save] = React.useState(() => new Autosave(window, setReloadVersion))
+  React.useEffect(() => save.start(), [save])
   const [artifact, setArtifact] = React.useState<Artifact | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [theme, setTheme] = React.useState(storedTheme)
@@ -109,71 +115,75 @@ function App() {
     ? {
         className: `artifact-${artifact.kind} h-full min-h-0`,
         fileName: artifact.file.split("/").at(-1),
-        src: `./${artifact.file}`,
+        src: `./${artifact.file}${reloadVersion ? `?version=${encodeURIComponent(reloadVersion)}` : ""}`,
       }
     : null
 
   return (
-    <main className="artifact-editor">
-      {error ? (
-        <div className="artifact-state" role="alert">
-          <strong>Could not open this document</strong>
-          <span>{error}</span>
-          <button type="button" onClick={() => window.location.reload()}>
-            Reload
-          </button>
-        </div>
-      ) : documentProps ? (
-        <React.Suspense
-          fallback={<div className="artifact-state">Opening document…</div>}
-        >
-          {artifact?.kind === "docx" ? (
-            <DocxEditor
-              {...documentProps}
-              anchorIdPrefix=""
-              defaultMode="viewing"
-              scrollsWindow
-              showUpload={false}
-              isDark={isDark}
-              onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
-            />
-          ) : artifact?.kind === "xlsx" ? (
-            <XlsxEditor
-              {...documentProps}
-              cellAnchorIdPrefix=""
-              scrollsWindow
-              syncSheetToUrl
-              isDark={isDark}
-              onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
-            />
-          ) : artifact?.kind === "slides" ? (
-            <SlidesEditor
-              src={documentProps.src}
-              title={artifact.title}
-              isDark={isDark}
-              onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
-            />
-          ) : artifact?.kind === "pptx" ? (
-            <PptxViewer
-              {...documentProps}
-              defaultThumbnailSidebarOpen
-              scrollsWindow
-              showUpload={false}
-              slideIdPrefix=""
-            />
-          ) : (
-            <PdfEditor
-              {...documentProps}
-              anchorIdPrefix=""
-              scrollsWindow
-              showUpload={false}
-            />
-          )}
-        </React.Suspense>
-      ) : (
-        <div className="artifact-state">Opening artifact…</div>
-      )}
-    </main>
+    <AutosaveContext.Provider value={save}>
+      <main className="artifact-editor">
+        {error ? (
+          <div className="artifact-state" role="alert">
+            <strong>Could not open this document</strong>
+            <span>{error}</span>
+            <button type="button" onClick={() => window.location.reload()}>
+              Reload
+            </button>
+          </div>
+        ) : documentProps ? (
+          <React.Suspense
+            fallback={<div className="artifact-state">Opening document…</div>}
+          >
+            {artifact?.kind === "docx" ? (
+              <DocxEditor
+                {...documentProps}
+                anchorIdPrefix=""
+                defaultMode="editing"
+                scrollsWindow
+                showUpload={false}
+                isDark={isDark}
+                onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
+              />
+            ) : artifact?.kind === "xlsx" ? (
+              <XlsxEditor
+                {...documentProps}
+                cellAnchorIdPrefix=""
+                scrollsWindow
+                syncSheetToUrl
+                isDark={isDark}
+                onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
+              />
+            ) : artifact?.kind === "slides" ? (
+              <SlidesEditor
+                key={documentProps.src}
+                src={documentProps.src}
+                title={artifact.title}
+                isDark={isDark}
+                onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
+              />
+            ) : artifact?.kind === "pptx" ? (
+              <PptxViewer
+                {...documentProps}
+                defaultThumbnailSidebarOpen
+                scrollsWindow
+                showUpload={false}
+                slideIdPrefix=""
+              />
+            ) : (
+              <PdfEditor
+                key={documentProps.src}
+                {...documentProps}
+                anchorIdPrefix=""
+                scrollsWindow
+                showUpload={false}
+              />
+            )}
+          </React.Suspense>
+        ) : (
+          <div className="artifact-state">Opening artifact…</div>
+        )}
+      </main>
+    </AutosaveContext.Provider>
   )
 }
 

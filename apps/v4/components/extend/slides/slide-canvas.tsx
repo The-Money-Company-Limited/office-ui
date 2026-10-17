@@ -69,6 +69,7 @@ export function SlideCanvas({
 
   React.useLayoutEffect(() => {
     const container = content.current!
+    if (editing.current && editable) return
     const selectedId = selected.current?.id
     container.innerHTML = html
     renderCharts(container, editable)
@@ -360,6 +361,9 @@ export function SlideCanvas({
             (event.target as Element).closest<HTMLElement>("td, th") ||
               targetElement(event.target)
           )
+      }}
+      onInput={() => {
+        if (editable && editing.current) commit()
       }}
       onBlur={(event) => {
         if (event.target === editing.current) endText()

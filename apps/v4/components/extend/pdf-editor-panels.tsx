@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useDocumentSave } from "@/experiments/artifact-template/src/autosave-context"
 import { useDocumentState, useRegistry } from "@embedpdf/core/react"
 import {
   PDF_FORM_FIELD_TYPE,
@@ -502,6 +503,7 @@ export function PdfEditorAttachmentsPanel({
   const { registry } = useRegistry()
   const documentState = useDocumentState(documentId)
   const { notify, permissions } = usePdfEditor()
+  const save = useDocumentSave()
   const document = documentState?.document ?? null
   const [attachments, setAttachments] = React.useState<
     PdfAttachmentObject[] | null
@@ -560,6 +562,7 @@ export function PdfEditorAttachmentsPanel({
         () => {
           setBusy(false)
           refresh()
+          save?.dirty()
           notify("Attachment removed.", "success")
         },
         () => {
@@ -589,6 +592,7 @@ export function PdfEditorAttachmentsPanel({
           () => {
             setBusy(false)
             refresh()
+            save?.dirty()
             notify("Attachment added.", "success")
           },
           () => {

@@ -145,11 +145,9 @@ choosing a bundle version and composing on the server, so an upload of
 `report.xlsx` alone becomes an artifact. Existing releases keep the bundle they
 were published with; moving an artifact to a newer bundle is a new release.
 
-Browser edits are session state until the user exports a file; there is no
-autosave or save-back endpoint. Saving edited bytes needs a deliberate save
-flow, authorization, and a new release (the files API path above already
-does this for the owner). Public releases expose the original document to
-visitors; use the computer's private access setting when the document should
+Browser edits save through the page bridge as a new release, with access
+and version checks performed by the platform. Public releases expose the
+document to visitors; use the computer's private access setting when the document should
 be restricted. `artifact.json` is fetched by every visitor, so it holds no
 secrets.
 
@@ -243,11 +241,11 @@ accept or reject.
 
 ### Saving edits made in the browser
 
-Not built. Edits stay in the browser until exported. RuntimeVM's per-site
-database (`"database": true`, `env.DB`, COD-1439) is in progress and capped at
-25 MB per site, so it fits review state, not document bytes; site functions
-have 50 ms of CPU per request (COD-1435), so documents are never parsed in a
-function. A save path will be designed once those land.
+The four editors share the `cool: "doc"` page bridge. Access enables editing;
+changes debounce for two seconds and save the existing export bytes. Slides
+save changed HTML files and the manifest together. The bridge owns permissions
+and release versions; conflicts offer reload or a local download. See
+`dev/autosave-harness.mjs` for the folder-backed development bridge.
 
 ## Engines
 

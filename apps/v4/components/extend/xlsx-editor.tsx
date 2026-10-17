@@ -2,6 +2,14 @@
 
 import * as React from "react"
 import {
+  SaveAccess,
+  SaveStatus,
+  useDocumentAdapter,
+  useDocumentRevision,
+  useSaveState,
+} from "@/experiments/artifact-template/src/autosave-context"
+
+import {
   findXlsxCells,
   getXlsxSelectionStatistics,
   parseXlsxRange,
@@ -1849,6 +1857,8 @@ function EditorToolbar({
               <span className="truncate text-sm font-semibold" title={fileName}>
                 {fileName}
               </span>
+              <SaveStatus />
+              <SaveAccess />
             </>
           ) : null}
         </div>
@@ -1889,7 +1899,7 @@ function EditorToolbar({
           </div>
         </TooltipProvider>
       </div>
-      <TooltipProvider>
+      {!readOnly && <TooltipProvider>
         <ToolbarOverflow
           className="xlsx-editor-ribbon min-h-12 border-b bg-background px-3 py-2"
           end={
@@ -2517,7 +2527,7 @@ function EditorToolbar({
             />
           ) : null}
         </div>
-      </TooltipProvider>
+      </TooltipProvider>}
     </div>
   )
 }
@@ -3172,7 +3182,7 @@ export function XlsxEditorSurface({
             className={scrollsWindow ? "min-w-0" : "h-full min-h-0 min-w-0"}
             height={scrollsWindow ? undefined : "100%"}
             isDark={isDark}
-            readOnly={false}
+            readOnly={readOnly}
             rounded={false}
             showDefaultToolbar={false}
             showImages
@@ -3621,19 +3631,27 @@ function XlsxWorkbookLoadedEditor({
   workbookBuffer: ArrayBuffer
   workbookIdentity: string
 }) {
+  const { canSave } = useSaveState()
   const controller = useXlsxViewerController(
     React.useMemo(
       () => ({
         allowResizeInReadOnly: true,
         file: workbookBuffer,
         fileName,
-        readOnly: defaultReadOnly,
+        readOnly: defaultReadOnly || !canSave,
         readOnlyAboveBytes: XLSX_EDITOR_READ_ONLY_THRESHOLD_BYTES,
         useWorker: true,
       }),
-      [defaultReadOnly, fileName, workbookBuffer]
+      [canSave, defaultReadOnly, fileName, workbookBuffer]
     )
   )
+  useDocumentAdapter({
+    serialize: () => ({
+      files: [{ path: `document/${fileName}`, bytes: controller.getDocumentBuffer() }],
+    }),
+    download: controller.exportXlsx,
+  })
+  useDocumentRevision(controller.revision, !controller.isLoading && controller.canExport)
   const { activeSheetName, setActiveSheetByName } = controller
   const hasRestoredSheetRef = React.useRef(false)
 

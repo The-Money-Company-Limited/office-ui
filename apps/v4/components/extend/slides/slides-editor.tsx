@@ -1,4 +1,11 @@
 import * as React from "react"
+import {
+  SaveAccess,
+  SaveStatus,
+  useDocumentAdapter,
+  useDocumentRevision,
+  useSaveState,
+} from "@/experiments/artifact-template/src/autosave-context"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -41,6 +48,24 @@ export function SlidesEditor({
   const presentation = React.useRef(false)
   const returnSlide = React.useRef<string | null>(null)
   const deck = history?.current
+  const { canSave } = useSaveState()
+  const savedDeck = React.useRef<Deck | null>(null)
+  useDocumentRevision(deck, Boolean(deck))
+  useDocumentAdapter({
+    serialize: async () => {
+      if (!deck) throw new Error("The deck is not ready.")
+      const { serializeDeck } = await import("./export")
+      return {
+        files: serializeDeck(deck, savedDeck.current),
+        saved: () => {
+          savedDeck.current = deck
+        },
+      }
+    },
+    download: async () => {
+      if (deck) await (await import("./export")).downloadDeck(deck)
+    },
+  })
 
   const [chartSelection, setChartSelection] = React.useState<{
     id: string
@@ -97,6 +122,7 @@ export function SlidesEditor({
     loadDeck(src, controller.signal)
       .then((current) => {
         setError(null)
+        savedDeck.current = current
         setHistory({ past: [], current, future: [] })
         const index = current.manifest.order.indexOf(
           window.location.hash.slice(1)
@@ -203,6 +229,7 @@ export function SlidesEditor({
   }, [presenting, deck, exitPresentation])
 
   function updateSlide(id: string, html: string) {
+    if (!canSave) return
     setHistory(
       (value) =>
         value && {
@@ -216,6 +243,7 @@ export function SlidesEditor({
     )
   }
   function undo() {
+    if (!canSave) return
     setHistory((value) =>
       !value?.past.length
         ? value
@@ -227,6 +255,7 @@ export function SlidesEditor({
     )
   }
   function redo() {
+    if (!canSave) return
     setHistory((value) =>
       !value?.future.length
         ? value
@@ -345,6 +374,8 @@ export function SlidesEditor({
               >
                 {deck?.manifest.title || title}
               </strong>
+              <SaveStatus />
+              <SaveAccess />
             </div>
             <Button
               variant="ghost"
@@ -418,42 +449,44 @@ export function SlidesEditor({
               Present
             </Button>
           </div>
-          <div className="slides-ribbon">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Undo"
-              title="Undo"
-              disabled={!history?.past.length}
-              onClick={undo}
-            >
-              <IconPlaceholder
-                lucide="Undo2"
-                tabler="IconArrowBackUp"
-                hugeicons="Undo02Icon"
-                phosphor="ArrowUUpLeftIcon"
-                remixicon="RiArrowGoBackLine"
-                className="size-4"
-              />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Redo"
-              title="Redo"
-              disabled={!history?.future.length}
-              onClick={redo}
-            >
-              <IconPlaceholder
-                lucide="Redo2"
-                tabler="IconArrowForwardUp"
-                hugeicons="Redo02Icon"
-                phosphor="ArrowUUpRightIcon"
-                remixicon="RiArrowGoForwardLine"
-                className="size-4"
-              />
-            </Button>
-          </div>
+          {canSave && (
+            <div className="slides-ribbon">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Undo"
+                title="Undo"
+                disabled={!history?.past.length}
+                onClick={undo}
+              >
+                <IconPlaceholder
+                  lucide="Undo2"
+                  tabler="IconArrowBackUp"
+                  hugeicons="Undo02Icon"
+                  phosphor="ArrowUUpLeftIcon"
+                  remixicon="RiArrowGoBackLine"
+                  className="size-4"
+                />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Redo"
+                title="Redo"
+                disabled={!history?.future.length}
+                onClick={redo}
+              >
+                <IconPlaceholder
+                  lucide="Redo2"
+                  tabler="IconArrowForwardUp"
+                  hugeicons="Redo02Icon"
+                  phosphor="ArrowUUpRightIcon"
+                  remixicon="RiArrowGoForwardLine"
+                  className="size-4"
+                />
+              </Button>
+            </div>
+          )}
         </header>
       )}
       {error && (
@@ -505,7 +538,7 @@ export function SlidesEditor({
                       id={id}
                       html={deck.slides[id]}
                       scale={scale}
-                      editable={!presenting}
+                      editable={canSave && !presenting}
                       onChange={(html) => updateSlide(id, html)}
                       onUndo={undo}
                       onRedo={redo}

@@ -1,6 +1,14 @@
 "use client"
 
 import * as React from "react"
+import {
+  SaveAccess,
+  SaveStatus,
+  useDocumentAdapter,
+  useDocumentSave,
+  useSaveState,
+  useDocumentRevision,
+} from "@/experiments/artifact-template/src/autosave-context"
 import { createPluginRegistration } from "@embedpdf/core"
 import {
   EmbedPDF,
@@ -2288,7 +2296,18 @@ function PdfEditorInner({
   onSelectionAction,
 }: PdfEditorInnerProps) {
   const { registry } = useRegistry()
-  const permissions = useDocumentPermissions(documentId)
+  const save = useDocumentSave()
+  const { canSave } = useSaveState()
+  const documentPermissions = useDocumentPermissions(documentId)
+  const permissions = React.useMemo(
+    () => canSave ? documentPermissions : {
+      ...documentPermissions,
+      canModifyAnnotations: false,
+      canModifyContents: false,
+      canFillForms: false,
+    },
+    [canSave, documentPermissions]
+  )
   const { state: scrollState, provides: scroll } = useScroll(documentId)
   const { provides: scrollCapability } = useScrollCapability()
   const { state: zoomState, provides: zoom } = useZoom(documentId)
@@ -2308,7 +2327,8 @@ function PdfEditorInner({
   const { provides: formCapability } = useFormCapability()
   const { provides: selectionCapability } = useSelectionCapability()
 
-  const [mode, setModeState] = React.useState<PdfEditorMode>(defaultMode)
+  const [chosenMode, setModeState] = React.useState<PdfEditorMode>(defaultMode)
+  const mode = canSave ? chosenMode : "view"
   const [rightPanel, setRightPanel] =
     React.useState<PdfEditorRightPanel | null>(null)
   const [dialog, setDialog] = React.useState<PdfEditorDialogRequest | null>(
@@ -2465,11 +2485,11 @@ function PdfEditorInner({
 
   React.useEffect(() => {
     annotation?.setLocked(
-      mode === "forms" && formDesignMode
+      !canSave ? { type: LockModeType.All } : mode === "forms" && formDesignMode
         ? { type: LockModeType.None }
         : { type: LockModeType.Include, categories: ["form"] }
     )
-  }, [annotation, formDesignMode, mode])
+  }, [annotation, canSave, formDesignMode, mode])
 
   React.useEffect(() => {
     if (mode !== "forms" && formDesignMode) setFormDesignMode(false)
@@ -2489,8 +2509,11 @@ function PdfEditorInner({
     }
 
     sync()
-    return historyScope.onHistoryChange(sync)
-  }, [historyScope])
+    return historyScope.onHistoryChange(() => {
+      sync()
+      save?.dirty()
+    })
+  }, [historyScope, save])
 
   /* ---- callbacks: page, annotations, forms, redactions ------------------ */
 
@@ -2517,6 +2540,7 @@ function PdfEditorInner({
 
     const unsubscribe = annotation.onAnnotationEvent((event) => {
       onAnnotationEventRef.current?.(event)
+      if (event.type !== "loaded" && event.committed) save?.dirty()
 
       if (!onAnnotationsChangeRef.current) return
       if (event.type === "loaded" || !event.committed) return
@@ -2535,15 +2559,16 @@ function PdfEditorInner({
       if (timeout !== null) window.clearTimeout(timeout)
       unsubscribe()
     }
-  }, [annotation])
+  }, [annotation, save])
 
   React.useEffect(() => {
     if (!formScope) return
 
     return formScope.onFieldValueChange(() => {
+      save?.dirty()
       onFormValuesChangeRef.current?.(formScope.getFormValues())
     })
-  }, [formScope])
+  }, [formScope, save])
 
   React.useEffect(() => {
     if (!redaction) return
@@ -2556,12 +2581,13 @@ function PdfEditorInner({
           "Redactions applied. The content was removed from the document.",
           "success"
         )
+        save?.dirty()
         onRedactionsAppliedRef.current?.()
       } else {
         notify("The redactions could not be applied.", "error")
       }
     })
-  }, [notify, redaction])
+  }, [notify, redaction, save])
 
   /* ---- initial zoom (numeric defaults never lift the viewport gate) ----- */
 
@@ -2611,11 +2637,7 @@ function PdfEditorInner({
     if (!exportScope) throw new Error("The document is not ready.")
 
     if (annotation && annotationState.hasPendingChanges) {
-      try {
-        await annotation.commit().toPromise()
-      } catch {
-        // Continue with whatever the engine currently holds.
-      }
+      await annotation.commit().toPromise()
     }
 
     return exportScope.saveAsCopy().toPromise()
@@ -2640,6 +2662,14 @@ function PdfEditorInner({
     },
     [fileName, getDocumentBuffer, notify, onSave]
   )
+
+  useDocumentAdapter({
+    serialize: async () => ({
+      files: [{ path: `document/${fileName}`, bytes: await getDocumentBuffer() }],
+    }),
+    download: downloadDocument,
+  })
+  useDocumentRevision(documentId, !controlsDisabled)
 
   const flattenDocument = React.useCallback(() => {
     setDialog({
@@ -2668,6 +2698,7 @@ function PdfEditorInner({
           }
 
           const buffer = await engine.saveAsCopy(pdfDocument).toPromise()
+          save?.dirty()
           onReplaceDocument(buffer, fileName)
           notify("Annotations flattened into the page content.", "success")
         } catch (error) {
@@ -2684,6 +2715,7 @@ function PdfEditorInner({
     onReplaceDocument,
     pdfDocument,
     registry,
+    save,
   ])
 
   const exportAnnotationsJson = React.useCallback(() => {
@@ -2830,21 +2862,21 @@ function PdfEditorInner({
 
       if (
         (key === "Delete" || key === "Backspace") &&
-        selectedAnnotations.length > 0
+        selectedAnnotations.length > 0 && canSave
       ) {
         deleteSelectedAnnotations()
         event.preventDefault()
         return
       }
 
-      if (mod && key.toLowerCase() === "z") {
+      if (canSave && mod && key.toLowerCase() === "z") {
         if (event.shiftKey) historyScope?.redo()
         else historyScope?.undo()
         event.preventDefault()
         return
       }
 
-      if (mod && key.toLowerCase() === "y") {
+      if (canSave && mod && key.toLowerCase() === "y") {
         historyScope?.redo()
         event.preventDefault()
         return
@@ -2875,7 +2907,8 @@ function PdfEditorInner({
       }
 
       if (mod && key.toLowerCase() === "s" && showDownload) {
-        void downloadDocument()
+        if (save) void save.flush()
+        else void downloadDocument()
         event.preventDefault()
         return
       }
@@ -2912,6 +2945,7 @@ function PdfEditorInner({
       annotation,
       annotationState.pages,
       controlsDisabled,
+      canSave,
       deactivateTools,
       deleteSelectedAnnotations,
       downloadDocument,
@@ -2922,6 +2956,7 @@ function PdfEditorInner({
       selectedAnnotations.length,
       selectionScope,
       showDownload,
+      save,
       zoom,
     ]
   )
@@ -2981,8 +3016,10 @@ function PdfEditorInner({
       selectionActions,
       formDesignMode,
       setFormDesignMode,
-      replaceDocument: (buffer, name) =>
-        onReplaceDocument(buffer, name ?? fileName),
+      replaceDocument: (buffer, name) => {
+        save?.dirty()
+        onReplaceDocument(buffer, name ?? fileName)
+      },
       downloadDocument,
       getDocumentBuffer,
       scrollToPage,
@@ -3006,6 +3043,7 @@ function PdfEditorInner({
       onReplaceDocument,
       onSelectionAction,
       openDialog,
+      save,
       pdfDocument,
       permissions,
       rightPanel,
@@ -3625,6 +3663,8 @@ function PdfEditorInner({
                     >
                       <PanelLeftGlyph className="size-4" />
                     </PdfEditorToolButton>
+                    <span className="truncate text-sm font-semibold">{fileName}</span>
+                    <SaveStatus />
                     <PdfEditorPageControl
                       activePage={activePage}
                       numPages={numPages}
@@ -3635,15 +3675,19 @@ function PdfEditorInner({
                       className="min-w-0 flex-1"
                       end={
                         <>
-                          <PdfEditorModeSwitch
-                            mode={mode}
-                            features={features}
-                            onModeChange={setMode}
-                          />
+                          {canSave ? (
+                            <PdfEditorModeSwitch
+                              mode={mode}
+                              features={features}
+                              onModeChange={setMode}
+                            />
+                          ) : (
+                            <SaveAccess />
+                          )}
                           {showDownload ? (
                             <PdfEditorToolButton
                               label="Download"
-                              shortcut="mod+S"
+                              shortcut={save ? undefined : "mod+S"}
                               disabled={controlsDisabled || isDownloading}
                               onClick={() => void downloadDocument()}
                             >
@@ -4319,6 +4363,7 @@ export const PDFEditor = React.forwardRef<PDFEditorHandle, PDFEditorProps>(
     },
     ref
   ) {
+    const { canSave } = useSaveState()
     const { engine, error: engineError } = useSharedPdfEngine()
     const {
       source,
@@ -4327,8 +4372,11 @@ export const PDFEditor = React.forwardRef<PDFEditorHandle, PDFEditorProps>(
     } = useEditorSource(src, fileName)
     const handleRef = React.useRef<EditorHandleImpl | null>(null)
     const resolvedFeatures = React.useMemo<PdfEditorResolvedFeatures>(
-      () => ({ ...PDF_EDITOR_DEFAULT_FEATURES, ...features }),
-      [features]
+      () => ({ ...PDF_EDITOR_DEFAULT_FEATURES, ...features, ...(!canSave ? {
+        annotate: false, redact: false, forms: false, sign: false, stamps: false,
+        pages: false, security: false, comments: false, attachments: false,
+      } : {}) }),
+      [canSave, features]
     )
     const resolvedSelectionActions = React.useMemo(
       () => selectionActions ?? [],

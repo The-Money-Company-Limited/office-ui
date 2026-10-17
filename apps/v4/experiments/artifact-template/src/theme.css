@@ -385,7 +385,8 @@ html:has(.artifact-editor) {
 }
 
 .artifact-page [data-slot="tooltip-popup"],
-.artifact-page [data-slot="tooltip-popup"]:is([data-starting-style], [data-ending-style]) {
+.artifact-page
+  [data-slot="tooltip-popup"]:is([data-starting-style], [data-ending-style]) {
   transition-duration: 100ms;
   transition-timing-function: var(--default-transition-timing-function);
 }
@@ -431,4 +432,20 @@ html:has(.artifact-editor) {
    the sheet tabs' right end (the selection's Sum) out from under it. */
 .artifact-xlsx .xlsx-editor-sheet-tabs {
   padding-right: 8rem;
+}
+
+@keyframes autosave-saved {
+  0%,
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-autosave-status] {
+    animation: none !important;
+  }
 }

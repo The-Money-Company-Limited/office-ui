@@ -25,11 +25,22 @@ function fileName(title: string) {
   return title.replace(/[^a-zA-Z0-9 _-]/g, "").trim() || "deck"
 }
 
+export function serializeDeck(deck: Deck, previous: Deck | null = null) {
+  const encode = (path: string, text: string) => ({
+    path,
+    bytes: new TextEncoder().encode(text).buffer,
+  })
+  return [
+    encode("deck/deck.json", JSON.stringify(deck.manifest, null, 2) + "\n"),
+    ...deck.manifest.order
+      .filter((id) => deck.slides[id] !== previous?.slides[id])
+      .map((id) => encode(`deck/slides/${id}.html`, deck.slides[id] + "\n")),
+  ]
+}
+
 export async function downloadDeck(deck: Deck) {
   const zip = new JSZip()
-  zip.file("deck/deck.json", JSON.stringify(deck.manifest, null, 2) + "\n")
-  for (const id of deck.manifest.order)
-    zip.file(`deck/slides/${id}.html`, deck.slides[id] + "\n")
+  for (const file of serializeDeck(deck)) zip.file(file.path, file.bytes)
   saveBlob(
     await zip.generateAsync({ type: "blob" }),
     `${fileName(deck.manifest.title)}.zip`

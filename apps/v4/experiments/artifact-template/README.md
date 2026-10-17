@@ -16,20 +16,20 @@ appearance button persists the choice under RuntimeVM's
 
 | File | UI in this fork                                                               | Save path              |
 | ---- | ----------------------------------------------------------------------------- | ---------------------- |
-| XLSX | Experimental spreadsheet editor, including chart selection and movement       | Export XLSX            |
-| DOCX | Experimental word processor                                                   | Export DOCX            |
+| XLSX | Experimental spreadsheet editor, including chart selection and movement       | Automatic via page bridge |
+| DOCX | Experimental word processor                                                   | Automatic via page bridge |
 | PPTX | Presentation viewer only; this fork has no PPTX editor                        | Download original PPTX |
-| PDF  | PDF editor for annotations, forms, signatures, redaction, and page operations | Download PDF           |
+| PDF  | PDF editor for annotations, forms, signatures, redaction, and page operations | Automatic via page bridge |
 
-The PDF editor does not rewrite arbitrary existing page text. Edits remain in
-the browser session until exported; this template has no server-side save API.
+The PDF editor does not rewrite arbitrary existing page text. DOCX, XLSX, PDF,
+and HTML slide edits save through the injected `cool: "doc"` page bridge.
+Without an access response granting `canSave`, documents open in viewing mode.
 The XLSX editor switches to read-only above 5 MiB. The bundled PDFium WASM is
 served from the artifact itself; optional fonts and stamp resources may still
 use external URLs.
 
-Casual Slides is the selected candidate for a future editable PPTX experiment;
-its integration is deferred while the ready DOCX, XLSX, and PDF editors are
-prioritized.
+HTML slide decks use the built-in slides editor. Saves contain the changed
+slide HTML files and `deck/deck.json` together; Download still offers ZIP and PPTX.
 
 ## Engines
 
@@ -94,3 +94,30 @@ A release staged here is the composition a future template feature would do
 on the server: a versioned bundle (`template.json`) plus one document. See
 [ARCHITECTURE.md](./ARCHITECTURE.md#contract-for-a-later-artifact-template-feature).
 This experiment leaves RuntimeVM untouched.
+
+## Autosave development and verification
+
+`dev/autosave-harness.mjs <release folder> [port]` serves a staged artifact,
+injects the same-window page contract, and writes saves into that folder.
+`POST /__doc/control` accepts `mode` (`online`, `offline`, `read_only`,
+`signed_out`, `conflict`) or `changed: true`. `GET /__doc/control` lists saves.
+The production bridge still owns authorization, size limits and atomic releases.
+
+Run checks on Modal only, from `office-remote`:
+
+```sh
+./r sync office-ui react-docx react-xlsx
+./r run react-docx 'pnpm --filter @extend-ai/react-docx build'
+./r run react-xlsx 'pnpm --filter @extend-ai/react-xlsx build'
+./r run office-ui 'sh apps/v4/experiments/artifact-template/dev/verify.sh'
+./r run office-ui 'sh apps/v4/experiments/artifact-template/dev/browser.sh'
+./r run office-ui 'node apps/v4/experiments/artifact-template/dev/negative.mjs'
+```
+
+The browser cases use real edits, download conflict copies, verify persisted
+bytes after reload, check clean external reloads, and exercise read-only and
+offline access for all four kinds. Negative controls temporarily build the
+original entry point from `HEAD` and require every browser case to fail, then
+restore the working source and bundle. Contract negative controls disconnect
+the message handler and require every test to fail. Results and screenshots
+stay in the ignored `dev/results/` directory.
