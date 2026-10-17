@@ -1,0 +1,77 @@
+{
+  "name": "@extend-ai/react-pptx",
+  "version": "0.2.2",
+  "description": "Browser-native, virtualized React viewer for PowerPoint PPT and PPTX files",
+  "type": "module",
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./pptx_wasm_bg.wasm": "./dist/pptx_wasm_bg.wasm",
+    "./styles.css": "./dist/index.css",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "THIRD_PARTY_NOTICES.md",
+    "THIRD_PARTY_LICENSES"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --root ../.. packages/react-viewer/src"
+  },
+  "peerDependencies": {
+    "react": ">=18.2 <20",
+    "react-dom": ">=18.2 <20"
+  },
+  "devDependencies": {
+    "@types/d3-geo": "^3.1.0",
+    "@types/d3-hierarchy": "^3.1.7",
+    "@types/d3-scale": "^4.0.9",
+    "@types/d3-shape": "^3.1.8",
+    "@types/geojson": "^7946.0.16",
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.5",
+    "@types/topojson-client": "^3.1.5",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3",
+    "us-atlas": "^3.0.1",
+    "vitest": "^4.1.11",
+    "world-atlas": "^2.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/extend-hq/react-pptx.git",
+    "directory": "packages/react-viewer"
+  },
+  "bugs": {
+    "url": "https://github.com/extend-hq/react-pptx/issues"
+  },
+  "homepage": "https://github.com/extend-hq/react-pptx#readme",
+  "license": "MIT",
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.13.12",
+    "@tanstack/virtual-core": "^3.13.12",
+    "d3-geo": "^3.1.1",
+    "d3-hierarchy": "^3.1.2",
+    "d3-scale": "^4.0.2",
+    "d3-shape": "^3.2.0",
+    "regl": "^2.1.1",
+    "topojson-client": "^3.1.0"
+  }
+}

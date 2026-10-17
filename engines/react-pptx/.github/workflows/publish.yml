@@ -1,0 +1,312 @@
+name: Publish Packages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-packages
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      dist_tag: ${{ steps.meta.outputs.dist_tag }}
+      name: ${{ steps.meta.outputs.name }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      published: ${{ steps.npm_state.outputs.published }}
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Read release metadata
+        id: meta
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs = require('node:fs');
+          const pkg = JSON.parse(
+            fs.readFileSync('packages/react-viewer/package.json', 'utf8'),
+          );
+
+          if (pkg.private) {
+            throw new Error(`${pkg.name} is marked private`);
+          }
+
+          const prerelease = pkg.version.match(
+            /^[0-9]+\.[0-9]+\.[0-9]+-([0-9A-Za-z-]+)/,
+          );
+          console.log(`name=${pkg.name}`);
+          console.log(`version=${pkg.version}`);
+          console.log(`tag=v${pkg.version}`);
+          console.log(`dist_tag=${prerelease?.[1] ?? 'latest'}`);
+          console.log(`prerelease=${prerelease ? 'true' : 'false'}`);
+          NODE
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 9.15.0
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+
+      - name: Check npm publish state
+        id: npm_state
+        run: |
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import { readFileSync } from 'node:fs';
+
+          const name = process.env.PACKAGE_NAME;
+          const version = process.env.PACKAGE_VERSION;
+          const url = `https://registry.npmjs.org/${encodeURIComponent(name)}/${encodeURIComponent(version)}`;
+          const response = await fetch(url, {
+            headers: { accept: 'application/json' },
+          });
+
+          if (response.status === 404) {
+            console.log('published=false');
+            process.exit(0);
+          }
+          if (!response.ok) {
+            throw new Error(`npm registry returned ${response.status} for ${name}@${version}`);
+          }
+
+          const manifest = await response.json();
+          if (manifest.name !== name || manifest.version !== version) {
+            throw new Error(`npm registry returned unexpected metadata for ${name}@${version}`);
+          }
+          if (!manifest.dist?.shasum) {
+            throw new Error(`npm registry did not return a tarball shasum for ${name}@${version}`);
+          }
+          if (!manifest.dist?.integrity) {
+            throw new Error(`npm registry did not return tarball integrity for ${name}@${version}`);
+          }
+
+          if (!manifest.gitHead) {
+            const releases = JSON.parse(
+              readFileSync('.github/release-bootstrap.json', 'utf8'),
+            );
+            const release = releases[`${name}@${version}`];
+            if (release) {
+              if (
+                release.shasum !== manifest.dist.shasum ||
+                release.integrity !== manifest.dist.integrity
+              ) {
+                throw new Error(`npm integrity does not match the bootstrap record for ${name}@${version}`);
+              }
+              if (!/^[0-9a-f]{40}$/.test(release.commit)) {
+                throw new Error(`bootstrap record has an invalid commit for ${name}@${version}`);
+              }
+            }
+          }
+
+          console.log('published=true');
+          console.error(`${name}@${version} already exists on npm.`);
+          NODE
+        env:
+          PACKAGE_NAME: ${{ steps.meta.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.meta.outputs.version }}
+
+      - name: Stop when this version is already on npm
+        if: steps.npm_state.outputs.published == 'true'
+        run: echo "${{ steps.meta.outputs.name }}@${{ steps.meta.outputs.version }} already exists on npm; skipping publish."
+
+      - name: Install dependencies
+        if: steps.npm_state.outputs.published != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Set up Rust
+        if: steps.npm_state.outputs.published != 'true'
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.93.1
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        if: steps.npm_state.outputs.published != 'true'
+        run: cargo install wasm-pack --version 0.13.1 --locked
+
+      - name: Build release package
+        if: steps.npm_state.outputs.published != 'true'
+        run: pnpm build
+
+      - name: Typecheck release package
+        if: steps.npm_state.outputs.published != 'true'
+        run: pnpm typecheck
+
+      - name: Stamp the validated release commit
+        if: steps.npm_state.outputs.published != 'true'
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'packages/react-viewer/package.json';
+          const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
+          pkg.gitHead = process.env.RELEASE_COMMIT;
+          fs.writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
+          NODE
+
+      - name: Create and verify the release tarball
+        if: steps.npm_state.outputs.published != 'true'
+        env:
+          REACT_PPTX_PACK_OUTPUT: ${{ runner.temp }}/react-pptx.tgz
+          REACT_PPTX_GIT_HEAD: ${{ github.sha }}
+        run: pnpm pack:check
+
+      - name: Upload the verified release tarball
+        if: steps.npm_state.outputs.published != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: react-pptx-${{ github.sha }}
+          path: ${{ runner.temp }}/react-pptx.tgz
+          retention-days: 1
+
+  publish:
+    needs: prepare
+    if: >-
+      needs.prepare.result == 'success' &&
+      needs.prepare.outputs.published != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      PACKAGE_TARBALL: /tmp/react-pptx.tgz
+      USE_NPM_TOKEN: ${{ vars.NPM_PUBLISH_USE_TOKEN == 'true' && 'true' || 'false' }}
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Node and npm registry
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+
+      - name: Resolve the release commit
+        id: release
+        run: |
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release tag availability
+        env:
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
+            TAG_COMMIT=$(git rev-list -n 1 "$TAG")
+            if [ "$TAG_COMMIT" != "$RELEASE_COMMIT" ]; then
+              echo "$TAG already points to $TAG_COMMIT instead of $RELEASE_COMMIT." >&2
+              exit 1
+            fi
+          fi
+
+      - name: Download the verified release tarball
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: react-pptx-${{ github.sha }}
+          path: /tmp
+
+      - name: Verify npm supports Trusted Publishing
+        if: env.USE_NPM_TOKEN != 'true'
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require('node:child_process');
+          const version = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim();
+          const [major = 0, minor = 0, patch = 0] = version.split('.').map(Number);
+          if (
+            major < 11 ||
+            (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))
+          ) {
+            throw new Error(`npm ${version} does not support Trusted Publishing; expected >=11.5.1`);
+          }
+          console.log(`npm ${version} supports Trusted Publishing.`);
+          NODE
+
+      - name: Validate first-release npm token
+        if: env.USE_NPM_TOKEN == 'true'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "NPM_PUBLISH_USE_TOKEN is true, but the NPM_TOKEN secret is empty." >&2
+            exit 1
+          fi
+
+      - name: Publish with first-release npm token
+        if: env.USE_NPM_TOKEN == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish "$PACKAGE_TARBALL" --access public --provenance --tag "${{ needs.prepare.outputs.dist_tag }}"
+
+      - name: Publish with npm Trusted Publishing
+        if: env.USE_NPM_TOKEN != 'true'
+        run: npm publish "$PACKAGE_TARBALL" --access public --provenance --tag "${{ needs.prepare.outputs.dist_tag }}"
+
+      - name: Create the GitHub release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ needs.prepare.outputs.name }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "$TAG already has a GitHub release."
+            exit 0
+          fi
+
+          RELEASE_ARGS=(
+            "$TAG"
+            --title "$TAG"
+            --generate-notes
+            --notes "Published [$PACKAGE_NAME@$VERSION](https://www.npmjs.com/package/$PACKAGE_NAME/v/$VERSION) to npm."
+          )
+          if git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
+            RELEASE_ARGS+=(--verify-tag)
+          else
+            RELEASE_ARGS+=(--target "$RELEASE_COMMIT")
+          fi
+          if [ "$PRERELEASE" = "true" ]; then
+            RELEASE_ARGS+=(--prerelease)
+          fi
+          gh release create "${RELEASE_ARGS[@]}"
+
+      - name: Verify the remote release tag
+        env:
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          REMOTE_TAG=$(git ls-remote origin "refs/tags/$TAG^{}" | cut -f1)
+          if [ -z "$REMOTE_TAG" ]; then
+            REMOTE_TAG=$(git ls-remote origin "refs/tags/$TAG" | cut -f1)
+          fi
+          if [ "$REMOTE_TAG" != "$RELEASE_COMMIT" ]; then
+            echo "Remote $TAG resolves to $REMOTE_TAG instead of $RELEASE_COMMIT." >&2
+            exit 1
+          fi
