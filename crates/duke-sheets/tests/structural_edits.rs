@@ -24,6 +24,9 @@ fn structural_edits_survive_xlsx_roundtrip() {
         .unwrap();
     wb.define_name("Total", "Sheet1!$B$3").unwrap();
     let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_print_area(CellRange::parse("A1:D10").unwrap());
+    sheet.set_repeat_rows(0, 2);
+    sheet.set_repeat_cols(0, 2);
     let mut style = Style::default();
     style.font.bold = true;
     sheet.set_cell_style("B3", &style).unwrap();
@@ -129,6 +132,12 @@ fn structural_edits_survive_xlsx_roundtrip() {
         "note"
     );
     let sheet = loaded.worksheet(1).unwrap();
+    assert_eq!(
+        sheet.print_area(),
+        Some(&CellRange::parse("A1:E11").unwrap())
+    );
+    assert_eq!(sheet.repeat_rows(), Some((0, 3)));
+    assert_eq!(sheet.repeat_cols(), Some((0, 3)));
     assert!(sheet.cell_style("C4").unwrap().unwrap().font.bold);
     assert_eq!(sheet.row_height(3), 30.0);
     assert_eq!(sheet.column_width(2), 22.0);
@@ -157,6 +166,42 @@ fn structural_edits_survive_xlsx_roundtrip() {
     assert!(
         matches!(&chart.payload.series[0].values, DataReference::Formula(formula) if formula == "'Renamed Sheet'!$C$4:$C$6")
     );
+}
+
+#[test]
+fn custom_error_bar_references_follow_structural_edits_after_loading() {
+    use duke_sheets_chart::{ErrorBarDirection, ErrorBarType, ErrorBars, ErrorValueType};
+
+    let mut workbook = Workbook::new();
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    let mut series = DataSeries::new(DataReference::formula("Sheet1!$B$3:$B$4"));
+    series.error_bars = Some(ErrorBars {
+        direction: ErrorBarDirection::Y,
+        bar_type: ErrorBarType::Both,
+        value_type: ErrorValueType::Custom,
+        value: None,
+        no_end_cap: None,
+        plus: Some(DataReference::formula("Sheet1!$C$3:$C$4")),
+        minus: Some(DataReference::formula("Sheet1!$D$3:$D$4")),
+    });
+    chart.add_series(series);
+    workbook.worksheet_mut(0).unwrap().add_chart(chart, DrawingAnchor::TwoCell {
+        from: CellMarker::default(),
+        to: CellMarker { row: 10, col: 5, ..Default::default() },
+        edit_as: None,
+    }).unwrap();
+    let mut bytes = Vec::new();
+    XlsxWriter::write(&workbook, Cursor::new(&mut bytes)).unwrap();
+    let mut workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+    workbook.insert_rows(0, 1, 2).unwrap();
+    workbook.rename_worksheet(0, "Renamed Sheet").unwrap();
+    let mut bytes = Vec::new();
+    XlsxWriter::write(&workbook, Cursor::new(&mut bytes)).unwrap();
+    let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+    let chart = workbook.worksheet(0).unwrap().charts().next().unwrap();
+    let errors = chart.payload.series[0].error_bars.as_ref().unwrap();
+    assert_eq!(errors.plus, Some(DataReference::formula("'Renamed Sheet'!$C$5:$C$6")));
+    assert_eq!(errors.minus, Some(DataReference::formula("'Renamed Sheet'!$D$5:$D$6")));
 }
 
 const TEST_PNG_1X1: &[u8] = &[

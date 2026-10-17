@@ -41,7 +41,13 @@ impl AxisEdit {
             return self.interval(end, start).map(|(a, b)| (b, a));
         }
         if !self.delete {
-            return Some((self.point(start)?, self.point(end)?));
+            // A range touching the grid edge remains bounded by that edge.
+            let end = if end == self.limit() - 1 {
+                end
+            } else {
+                self.point(end)?
+            };
+            return Some((self.point(start)?, end));
         }
         let after = self.index + self.count;
         if end < self.index {
@@ -77,12 +83,7 @@ impl AxisEdit {
         } else {
             (range.start.col.into(), range.end.col.into())
         };
-        // Full-column/row validation and formatting ranges retain their grid edge.
-        let (start, end) = if !self.delete && end == self.limit() - 1 {
-            (self.point(start)?, end)
-        } else {
-            self.interval(start, end)?
-        };
+        let (start, end) = self.interval(start, end)?;
         if self.rows {
             range.start.row = start;
             range.end.row = end;
@@ -108,6 +109,7 @@ pub(crate) enum ReferenceEdit<'a> {
     Axis { sheet: &'a str, edit: AxisEdit },
     Rename { old: &'a str, new: &'a str },
     DeleteSheet { sheet: &'a str },
+    Qualify { sheet: &'a str },
 }
 
 #[derive(Clone)]
@@ -196,6 +198,60 @@ fn name_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '.' | '\\' | '$')
 }
 
+fn sheet_prefix(text: &str, start: usize) -> Option<(String, usize)> {
+    let mut pos = start;
+    let mut name = String::new();
+    if text[pos..].starts_with('\'') {
+        pos += 1;
+        while pos < text.len() {
+            let ch = text[pos..].chars().next()?;
+            pos += ch.len_utf8();
+            if ch == '\'' {
+                if text[pos..].starts_with('\'') {
+                    name.push('\'');
+                    pos += 1;
+                } else {
+                    break;
+                }
+            } else {
+                name.push(ch);
+            }
+        }
+    } else {
+        while pos < text.len()
+            && text[pos..]
+                .chars()
+                .next()
+                .is_some_and(|ch| name_char(ch) || ch == ':')
+        {
+            pos += text[pos..].chars().next()?.len_utf8();
+        }
+        name.push_str(&text[start..pos]);
+    }
+    text[pos..].starts_with('!').then_some((name, pos + 1))
+}
+
+fn rewrite_sheet_prefix(prefix: &str, sheet: &str, change: &ReferenceEdit<'_>) -> String {
+    if !sheet.contains('[') {
+        if let ReferenceEdit::Rename { old, new } = change {
+            let names: Vec<_> = sheet
+                .split(':')
+                .map(|name| {
+                    if name.eq_ignore_ascii_case(old) {
+                        *new
+                    } else {
+                        name
+                    }
+                })
+                .collect();
+            if names.join(":") != sheet {
+                return format!("'{}'!", names.join(":").replace('\'', "''"));
+            }
+        }
+    }
+    prefix.to_owned()
+}
+
 // Keep strings, structured references, and external workbook references opaque.
 // Only reference tokens are replaced, preserving all other formula spelling.
 pub(crate) fn rewrite_references(text: &str, context: &str, change: &ReferenceEdit<'_>) -> String {
@@ -260,86 +316,59 @@ pub(crate) fn rewrite_references(text: &str, context: &str, change: &ReferenceEd
             continue;
         }
         let start = i;
-        let mut pos = i;
-        let mut sheet = None;
-        let mut prefix_end = i;
-        if c == '\'' {
-            pos += 1;
-            let mut name = String::new();
-            while pos < text.len() {
-                let ch = text[pos..].chars().next().unwrap();
-                pos += ch.len_utf8();
-                if ch == '\'' {
-                    if text[pos..].starts_with('\'') {
-                        name.push('\'');
-                        pos += 1;
-                    } else {
-                        break;
-                    }
-                } else {
-                    name.push(ch);
-                }
-            }
-            if text[pos..].starts_with('!') {
-                pos += 1;
-                prefix_end = pos;
-                sheet = Some(name);
-            } else {
-                out.push_str(&text[start..pos]);
-                i = pos;
-                continue;
-            }
-        } else {
-            while pos < text.len()
-                && text[pos..]
-                    .chars()
-                    .next()
-                    .is_some_and(|ch| name_char(ch) || ch == ':')
-            {
-                pos += text[pos..].chars().next().unwrap().len_utf8();
-            }
-            if text[pos..].starts_with('!') {
-                sheet = Some(text[start..pos].to_owned());
-                pos += 1;
-                prefix_end = pos;
-            } else {
-                pos = start;
-            }
-        }
+        let (sheet, prefix_end) = match sheet_prefix(text, start) {
+            Some((name, end)) => (Some(name), end),
+            None => (None, start),
+        };
+        let pos = prefix_end;
         let external = sheet.as_ref().is_some_and(|s| s.contains('['));
-        let mut prefix = text[start..prefix_end].to_owned();
-        if !external {
-            if let (Some(sheet), ReferenceEdit::Rename { old, new }) = (&sheet, change) {
-                let names: Vec<_> = sheet
-                    .split(':')
-                    .map(|name| {
-                        if name.eq_ignore_ascii_case(old) {
-                            *new
-                        } else {
-                            name
-                        }
-                    })
-                    .collect();
-                if names.join(":") != *sheet {
-                    prefix = format!("'{}'!", names.join(":").replace('\'', "''"));
-                }
+        let mut prefix = rewrite_sheet_prefix(
+            &text[start..prefix_end],
+            sheet.as_deref().unwrap_or(""),
+            change,
+        );
+        if sheet.is_none() {
+            if let ReferenceEdit::Qualify { sheet } = change {
+                prefix = format!("'{}'!", sheet.replace('\'', "''"));
             }
         }
-        let parsed = endpoint(text, pos).and_then(|(a, end)| {
-            if text[end..].starts_with(':') {
-                let (b, end) = endpoint(text, end + 1)?;
+        let parsed = endpoint(text, pos).and_then(|(a, first_end)| {
+            if text[first_end..].starts_with(':') {
+                let second_start = first_end + 1;
+                let (second_prefix, second_pos) =
+                    if let Some((name, end)) = sheet_prefix(text, second_start) {
+                        if !name.eq_ignore_ascii_case(sheet.as_deref().unwrap_or(context)) {
+                            return None;
+                        }
+                        (
+                            rewrite_sheet_prefix(&text[second_start..end], &name, change),
+                            end,
+                        )
+                    } else {
+                        (String::new(), second_start)
+                    };
+                let (b, end) = endpoint(text, second_pos)?;
                 (a.row.is_some() == b.row.is_some() && a.col.is_some() == b.col.is_some())
-                    .then_some((a, Some(b), end))
+                    .then_some((a, Some(b), first_end, second_prefix, second_pos, end))
             } else {
-                (a.row.is_some() && a.col.is_some()).then_some((a, None, end))
+                (a.row.is_some() && a.col.is_some()).then_some((
+                    a,
+                    None,
+                    first_end,
+                    String::new(),
+                    first_end,
+                    first_end,
+                ))
             }
         });
-        if let Some((mut a, mut b, end)) = parsed.filter(|(_, _, end)| {
-            !text[*end..]
-                .chars()
-                .next()
-                .is_some_and(|ch| name_char(ch) || matches!(ch, '(' | '[' | '!'))
-        }) {
+        if let Some((mut a, mut b, first_end, second_prefix, second_pos, end)) =
+            parsed.filter(|(_, _, _, _, _, end)| {
+                !text[*end..]
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| name_char(ch) || matches!(ch, '(' | '[' | '!'))
+            })
+        {
             let target = sheet.as_deref().unwrap_or(context);
             let mut valid = true;
             let mut changed = false;
@@ -394,10 +423,16 @@ pub(crate) fn rewrite_references(text: &str, context: &str, change: &ReferenceEd
                     out.push_str(&a.render());
                     if let Some(b) = b {
                         out.push(':');
+                        out.push_str(&second_prefix);
                         out.push_str(&b.render());
                     }
                 } else {
-                    out.push_str(&text[pos..end]);
+                    out.push_str(&text[pos..first_end]);
+                    if b.is_some() {
+                        out.push(':');
+                        out.push_str(&second_prefix);
+                        out.push_str(&text[second_pos..end]);
+                    }
                 }
             } else {
                 out.push_str("#REF!");

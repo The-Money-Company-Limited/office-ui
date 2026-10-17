@@ -783,10 +783,11 @@ fn write_series_tx(w: &mut XmlWriter, name: &str) -> XlsxResult<()> {
 
 fn write_data_ref(w: &mut XmlWriter, outer_tag: &str, data: &DataReference) -> XlsxResult<()> {
     w.write_event(Event::Start(BytesStart::new(outer_tag)))?;
+    let is_custom_error = matches!(outer_tag, "c:plus" | "c:minus");
 
     match data {
         DataReference::Formula(f) => {
-            let is_value = outer_tag == "c:val" || outer_tag == "c:yVal";
+            let is_value = outer_tag == "c:val" || outer_tag == "c:yVal" || is_custom_error;
             let ref_tag = if is_value { "c:numRef" } else { "c:strRef" };
             w.write_event(Event::Start(BytesStart::new(ref_tag)))?;
             w.create_element("c:f")
@@ -794,8 +795,12 @@ fn write_data_ref(w: &mut XmlWriter, outer_tag: &str, data: &DataReference) -> X
             w.write_event(Event::End(BytesEnd::new(ref_tag)))?;
         }
         DataReference::Numbers(nums) => {
-            w.write_event(Event::Start(BytesStart::new("c:numRef")))?;
-            w.write_event(Event::Start(BytesStart::new("c:numCache")))?;
+            if is_custom_error {
+                w.write_event(Event::Start(BytesStart::new("c:numLit")))?;
+            } else {
+                w.write_event(Event::Start(BytesStart::new("c:numRef")))?;
+                w.write_event(Event::Start(BytesStart::new("c:numCache")))?;
+            }
             let count = nums.len().to_string();
             w.create_element("c:ptCount")
                 .with_attribute(("val", count.as_str()))
@@ -810,8 +815,12 @@ fn write_data_ref(w: &mut XmlWriter, outer_tag: &str, data: &DataReference) -> X
                     .write_text_content(BytesText::new(&val))?;
                 w.write_event(Event::End(BytesEnd::new("c:pt")))?;
             }
-            w.write_event(Event::End(BytesEnd::new("c:numCache")))?;
-            w.write_event(Event::End(BytesEnd::new("c:numRef")))?;
+            if is_custom_error {
+                w.write_event(Event::End(BytesEnd::new("c:numLit")))?;
+            } else {
+                w.write_event(Event::End(BytesEnd::new("c:numCache")))?;
+                w.write_event(Event::End(BytesEnd::new("c:numRef")))?;
+            }
         }
         DataReference::Strings(strs) => {
             w.write_event(Event::Start(BytesStart::new("c:strRef")))?;
@@ -1012,14 +1021,20 @@ fn write_error_bars(w: &mut XmlWriter, eb: &ErrorBars) -> XlsxResult<()> {
         .with_attribute(("val", val_type))
         .write_empty()?;
 
+    write_bool_element(w, "c:noEndCap", eb.no_end_cap)?;
+    if let Some(plus) = &eb.plus {
+        write_data_ref(w, "c:plus", plus)?;
+    }
+    if let Some(minus) = &eb.minus {
+        write_data_ref(w, "c:minus", minus)?;
+    }
+
     if let Some(val) = eb.value {
         let s = val.to_string();
         w.create_element("c:val")
             .with_attribute(("val", s.as_str()))
             .write_empty()?;
     }
-
-    write_bool_element(w, "c:noEndCap", eb.no_end_cap)?;
 
     w.write_event(Event::End(BytesEnd::new("c:errBars")))?;
     Ok(())

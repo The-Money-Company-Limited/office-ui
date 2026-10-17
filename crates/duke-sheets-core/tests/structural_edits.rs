@@ -236,3 +236,178 @@ fn invalid_edits_are_atomic() {
         30.0
     );
 }
+
+#[test]
+fn workbook_name_retains_its_definition_sheet_after_structural_edits() {
+    let mut wb = workbook();
+    wb.set_active_sheet(1).unwrap();
+    wb.define_name("Total", "B3").unwrap();
+    wb.define_name("Calculation", "=SUM(B3:B4)+42+Other!A1+\"B3\"")
+        .unwrap();
+    wb.set_active_sheet(0).unwrap();
+    wb.insert_rows(1, 2, 1).unwrap();
+    assert_eq!(
+        wb.get_named_range("Total", 0).unwrap().refers_to,
+        "'Other'!B4"
+    );
+    assert_eq!(
+        wb.get_named_range("Calculation", 0).unwrap().refers_to,
+        "=SUM('Other'!B4:B5)+42+Other!A1+\"B3\""
+    );
+    wb.insert_rows(0, 2, 1).unwrap();
+    assert_eq!(
+        wb.get_named_range("Total", 0).unwrap().refers_to,
+        "'Other'!B4"
+    );
+}
+
+#[test]
+fn ranges_with_two_sheet_qualified_endpoints_move_together() {
+    let mut wb = workbook();
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_cell_formula("A1", "=SUM('Old Name'!$A$1:'Old Name'!A3)")
+        .unwrap();
+    wb.insert_rows(0, 0, 1).unwrap();
+    assert_eq!(
+        wb.worksheet(1).unwrap().get_formula_at(0, 0),
+        Some("=SUM('Old Name'!$A$2:'Old Name'!A4)")
+    );
+    wb.rename_worksheet(0, "New Name").unwrap();
+    assert_eq!(
+        wb.worksheet(1).unwrap().get_formula_at(0, 0),
+        Some("=SUM('New Name'!$A$2:'New Name'!A4)")
+    );
+    wb.delete_rows(0, 1, 1).unwrap();
+    assert_eq!(
+        wb.worksheet(1).unwrap().get_formula_at(0, 0),
+        Some("=SUM('New Name'!$A$2:'New Name'!A3)")
+    );
+}
+
+#[test]
+fn whole_grid_formula_ranges_keep_their_terminal_edge() {
+    let mut wb = workbook();
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_cell_formula("A1", "=SUM('Old Name'!A:XFD)+SUM('Old Name'!1:1048576)")
+        .unwrap();
+    wb.insert_columns(0, 1, 1).unwrap();
+    wb.insert_rows(0, 1, 1).unwrap();
+    assert_eq!(
+        wb.worksheet(1).unwrap().get_formula_at(0, 0),
+        Some("=SUM('Old Name'!A:XFD)+SUM('Old Name'!1:1048576)")
+    );
+}
+
+#[test]
+fn print_area_and_repeating_headings_follow_structural_edits() {
+    let mut wb = workbook();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_print_area(CellRange::parse("A1:D10").unwrap());
+    ws.set_repeat_rows(0, 2);
+    ws.set_repeat_cols(0, 2);
+    wb.insert_rows(0, 1, 1).unwrap();
+    wb.insert_columns(0, 1, 1).unwrap();
+    let ws = wb.worksheet(0).unwrap();
+    assert_eq!(ws.print_area(), Some(&CellRange::parse("A1:E11").unwrap()));
+    assert_eq!(ws.repeat_rows(), Some((0, 3)));
+    assert_eq!(ws.repeat_cols(), Some((0, 3)));
+    wb.delete_rows(0, 0, 4).unwrap();
+    wb.delete_columns(0, 0, 4).unwrap();
+    let ws = wb.worksheet(0).unwrap();
+    assert_eq!(ws.print_area(), Some(&CellRange::parse("A1:A7").unwrap()));
+    assert_eq!(ws.repeat_rows(), None);
+    assert_eq!(ws.repeat_cols(), None);
+}
+
+#[test]
+fn chart_series_name_references_follow_sheet_rename_and_insertions() {
+    use duke_sheets_chart::{DataReference, DataSeries};
+    let mut wb = workbook();
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(
+        DataSeries::new(DataReference::formula("'Old Name'!B2:B4")).with_name("'Old Name'!$B$1"),
+    );
+    chart.add_series(DataSeries::new(DataReference::numbers(vec![1.0])).with_name("B1"));
+    wb.worksheet_mut(1)
+        .unwrap()
+        .add_chart(chart, DrawingAnchor::default())
+        .unwrap();
+    wb.rename_worksheet(0, "New Name").unwrap();
+    wb.insert_rows(0, 0, 1).unwrap();
+    let chart = wb.worksheet(1).unwrap().charts().next().unwrap();
+    assert_eq!(
+        chart.payload.series[0].name.as_deref(),
+        Some("'New Name'!$B$2")
+    );
+    assert_eq!(chart.payload.series[1].name.as_deref(), Some("B1"));
+}
+
+fn drawing_bounds(ws: &Worksheet, anchor: &DrawingAnchor) -> (i128, i128, i128, i128) {
+    let DrawingAnchor::TwoCell { from, to, .. } = anchor.to_two_cell_with_metrics(ws) else {
+        unreachable!()
+    };
+    let (x, y) = duke_sheets_chart::marker_position_emu(&from, ws);
+    let (right, bottom) = duke_sheets_chart::marker_position_emu(&to, ws);
+    (x, y, right - x, bottom - y)
+}
+
+#[test]
+fn drawing_placement_modes_preserve_size_and_absolute_position() {
+    use duke_sheets_chart::EditAs;
+    let mut wb = workbook();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_row_height(0, 40.0);
+    ws.set_row_height(3, 35.0);
+    ws.set_column_width(0, 25.0);
+    for edit_as in [EditAs::OneCell, EditAs::Absolute] {
+        ws.add_chart(
+            Chart::new(ChartType::ColumnClustered),
+            DrawingAnchor::TwoCell {
+                from: CellMarker {
+                    row: 2,
+                    col: 2,
+                    row_offset_emu: 1234,
+                    col_offset_emu: 2345,
+                },
+                to: CellMarker {
+                    row: 5,
+                    col: 5,
+                    row_offset_emu: 4321,
+                    col_offset_emu: 5432,
+                },
+                edit_as: Some(edit_as),
+            },
+        )
+        .unwrap();
+    }
+    let before: Vec<_> = ws
+        .drawings()
+        .iter()
+        .map(|d| drawing_bounds(ws, &d.anchor))
+        .collect();
+    wb.insert_rows(0, 3, 2).unwrap();
+    wb.insert_columns(0, 3, 2).unwrap();
+    let ws = wb.worksheet(0).unwrap();
+    assert_eq!(drawing_bounds(ws, &ws.drawings()[0].anchor), before[0]);
+    assert_eq!(drawing_bounds(ws, &ws.drawings()[1].anchor), before[1]);
+    wb.insert_rows(0, 0, 1).unwrap();
+    wb.insert_columns(0, 0, 1).unwrap();
+    let ws = wb.worksheet(0).unwrap();
+    let moved = drawing_bounds(ws, &ws.drawings()[0].anchor);
+    assert!(moved.0 > before[0].0 && moved.1 > before[0].1);
+    assert_eq!((moved.2, moved.3), (before[0].2, before[0].3));
+    assert_eq!(drawing_bounds(ws, &ws.drawings()[1].anchor), before[1]);
+}
+
+#[test]
+fn insertion_does_not_freeze_a_previously_unfrozen_axis() {
+    let mut wb = workbook();
+    wb.worksheet_mut(0).unwrap().set_freeze_panes(0, 1);
+    wb.insert_rows(0, 0, 1).unwrap();
+    assert_eq!(wb.worksheet(0).unwrap().freeze_panes().unwrap().row, 0);
+    wb.worksheet_mut(0).unwrap().set_freeze_panes(1, 0);
+    wb.insert_columns(0, 0, 1).unwrap();
+    assert_eq!(wb.worksheet(0).unwrap().freeze_panes().unwrap().col, 0);
+}

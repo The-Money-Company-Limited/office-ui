@@ -129,7 +129,17 @@ impl Workbook {
         self.calc_cache = None;
     }
 
-    pub(super) fn remap_name_scopes(&mut self, remap: impl Fn(usize) -> Option<usize>) {
+    pub(super) fn remap_sheet_indices(&mut self, remap: impl Fn(usize) -> Option<usize>) {
+        self.active_sheet = remap(self.active_sheet).unwrap_or(self.active_sheet);
+        self.sheet_order.retain_mut(|slot| {
+            if let SheetSlot::Worksheet(index) = slot {
+                let Some(mapped) = remap(*index) else {
+                    return false;
+                };
+                *index = mapped;
+            }
+            true
+        });
         let names: Vec<_> = self.named_ranges.iter().cloned().collect();
         self.named_ranges = NamedRangeCollection::new();
         for mut name in names {

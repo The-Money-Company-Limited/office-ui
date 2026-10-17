@@ -2,10 +2,26 @@ use super::*;
 use crate::conditional_format::{CfRuleType, CfValueType};
 use crate::structural::{rewrite_references, AxisEdit, ReferenceEdit};
 use crate::validation::ValidationType;
-use duke_sheets_chart::{DataReference, EditAs};
+use duke_sheets_chart::{marker_at_emu, marker_position_emu, DataReference, DataSeries, EditAs};
 
 impl Worksheet {
     pub(crate) fn edit_axis(&mut self, edit: AxisEdit) {
+        let drawings = std::mem::take(&mut self.drawings);
+        let drawing_bounds: Vec<_> = drawings
+            .iter()
+            .map(|drawing| match &drawing.anchor {
+                DrawingAnchor::TwoCell {
+                    from,
+                    to,
+                    edit_as: Some(EditAs::OneCell | EditAs::Absolute),
+                } => {
+                    let (x, y) = marker_position_emu(from, self);
+                    let (right, bottom) = marker_position_emu(to, self);
+                    Some((x, y, right - x, bottom - y))
+                }
+                _ => None,
+            })
+            .collect();
         self.cells.edit_axis(edit);
         self.hyperlinks = std::mem::take(&mut self.hyperlinks)
             .into_iter()
@@ -99,28 +115,59 @@ impl Worksheet {
                 self.auto_filter = None;
             }
         }
-        self.drawings.retain_mut(|drawing| {
-            if let DrawingKind::Comment { row, col, .. } = &mut drawing.kind {
-                let Some((r, c)) = edit.cell(*row, *col) else {
-                    return false;
-                };
-                *row = r;
-                *col = c;
-            }
-            match &mut drawing.anchor {
-                DrawingAnchor::TwoCell { from, to, edit_as }
-                    if *edit_as != Some(EditAs::Absolute) =>
-                {
-                    edit.anchor(&mut from.row, &mut from.col);
-                    edit.anchor(&mut to.row, &mut to.col);
+        self.drawings = drawings
+            .into_iter()
+            .zip(drawing_bounds)
+            .filter_map(|(mut drawing, bounds)| {
+                if let DrawingKind::Comment { row, col, .. } = &mut drawing.kind {
+                    let (r, c) = edit.cell(*row, *col)?;
+                    *row = r;
+                    *col = c;
                 }
-                DrawingAnchor::OneCell { from, .. } => edit.anchor(&mut from.row, &mut from.col),
-                _ => {}
-            }
-            true
-        });
+                match &mut drawing.anchor {
+                    DrawingAnchor::TwoCell { from, to, edit_as } => {
+                        if let Some((x, y, width, height)) = bounds {
+                            let (x, y) = if *edit_as == Some(EditAs::Absolute) {
+                                *from = marker_at_emu(x, y, self);
+                                (x, y)
+                            } else {
+                                edit.anchor(&mut from.row, &mut from.col);
+                                marker_position_emu(from, self)
+                            };
+                            *to = marker_at_emu(x + width, y + height, self);
+                        } else {
+                            edit.anchor(&mut from.row, &mut from.col);
+                            edit.anchor(&mut to.row, &mut to.col);
+                        }
+                    }
+                    DrawingAnchor::OneCell { from, .. } => {
+                        edit.anchor(&mut from.row, &mut from.col)
+                    }
+                    DrawingAnchor::Absolute { .. } => {}
+                }
+                Some(drawing)
+            })
+            .collect();
         if let Some(panes) = &mut self.freeze_panes {
-            edit.anchor(&mut panes.row, &mut panes.col);
+            if (edit.rows && panes.row > 0) || (!edit.rows && panes.col > 0) {
+                edit.anchor(&mut panes.row, &mut panes.col);
+            }
+        }
+        self.page_setup.print_area = self
+            .page_setup
+            .print_area
+            .and_then(|range| edit.range(range));
+        if edit.rows {
+            self.page_setup.repeat_rows = self
+                .page_setup
+                .repeat_rows
+                .and_then(|(start, end)| edit.interval(start, end));
+        } else {
+            self.page_setup.repeat_cols = self
+                .page_setup
+                .repeat_cols
+                .and_then(|(start, end)| edit.interval(start.into(), end.into()))
+                .map(|(start, end)| (start as u16, end as u16));
         }
         if let Some(panes) = &mut self.split_panes {
             if let Some((row, col)) = &mut panes.top_left {
@@ -245,24 +292,37 @@ impl Worksheet {
     }
 }
 
-pub(crate) fn rewrite_chart(chart: &mut Chart, rewrite: &impl Fn(&mut String)) {
-    for series in &mut chart.series {
-        if let DataReference::Formula(formula) = &mut series.values {
-            rewrite(formula);
-        }
-        if let Some(DataReference::Formula(formula)) = &mut series.categories {
-            rewrite(formula);
+fn rewrite_series(series: &mut DataSeries, rewrite: &impl Fn(&mut String)) {
+    if let Some(name) = &mut series.name {
+        // The chart writer uses the same distinction between labels and strRef.
+        if name.contains('!') {
+            rewrite(name);
         }
     }
-    for group in &mut chart.type_groups {
-        for series in &mut group.series {
-            if let DataReference::Formula(formula) = &mut series.values {
-                rewrite(formula);
-            }
-            if let Some(DataReference::Formula(formula)) = &mut series.categories {
-                rewrite(formula);
-            }
+    let rewrite_data = |data: &mut DataReference| {
+        if let DataReference::Formula(formula) = data {
+            rewrite(formula);
         }
+    };
+    rewrite_data(&mut series.values);
+    if let Some(categories) = &mut series.categories {
+        rewrite_data(categories);
+    }
+    if let Some(bars) = &mut series.error_bars {
+        for data in [&mut bars.plus, &mut bars.minus].into_iter().flatten() {
+            rewrite_data(data);
+        }
+    }
+}
+
+pub(crate) fn rewrite_chart(chart: &mut Chart, rewrite: &impl Fn(&mut String)) {
+    for series in chart.series.iter_mut().chain(
+        chart
+            .type_groups
+            .iter_mut()
+            .flat_map(|group| &mut group.series),
+    ) {
+        rewrite_series(series, rewrite);
     }
 }
 

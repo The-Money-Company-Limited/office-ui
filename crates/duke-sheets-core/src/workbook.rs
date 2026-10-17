@@ -831,22 +831,14 @@ impl Workbook {
 
         let name = self.worksheets[index].name().to_owned();
         self.rewrite_references(&crate::structural::ReferenceEdit::DeleteSheet { sheet: &name });
-        self.remap_name_scopes(|i| if i == index { None } else { Some(if i > index { i - 1 } else { i }) });
-        if self.active_sheet > index { self.active_sheet -= 1; }
-        let worksheet = self.worksheets.remove(index);
-
-        // Update sheet_order: remove the entry and decrement indices above it
-        if !self.sheet_order.is_empty() {
-            self.sheet_order
-                .retain(|slot| *slot != SheetSlot::Worksheet(index));
-            for slot in &mut self.sheet_order {
-                if let SheetSlot::Worksheet(ref mut idx) = slot {
-                    if *idx > index {
-                        *idx -= 1;
-                    }
-                }
+        self.remap_sheet_indices(|i| {
+            if i == index {
+                None
+            } else {
+                Some(if i > index { i - 1 } else { i })
             }
-        }
+        });
+        let worksheet = self.worksheets.remove(index);
 
         // Adjust active sheet index
         if !self.worksheets.is_empty() {
@@ -869,49 +861,43 @@ impl Workbook {
             return Err(Error::SheetOutOfBounds(to, self.worksheets.len()));
         }
 
-        self.remap_name_scopes(|i| Some(if i == from { to }
-            else if from < to && i > from && i <= to { i - 1 }
-            else if from > to && i >= to && i < from { i + 1 }
-            else { i }));
         let worksheet = self.worksheets.remove(from);
         self.worksheets.insert(to, worksheet);
 
         // Move the worksheet tabs as well as the underlying worksheet objects.
-        let mut tabs: Vec<_> = self.sheet_order.iter().filter_map(|slot| match slot {
-            SheetSlot::Worksheet(index) => Some(*index), _ => None,
-        }).collect();
-        if let (Some(source), Some(target)) = (tabs.iter().position(|i| *i == from), tabs.iter().position(|i| *i == to)) {
+        let mut tabs: Vec<_> = self
+            .sheet_order
+            .iter()
+            .filter_map(|slot| match slot {
+                SheetSlot::Worksheet(index) => Some(*index),
+                _ => None,
+            })
+            .collect();
+        if let (Some(source), Some(target)) = (
+            tabs.iter().position(|i| *i == from),
+            tabs.iter().position(|i| *i == to),
+        ) {
             let moved = tabs.remove(source);
             tabs.insert(target, moved);
             let mut tabs = tabs.into_iter();
             for slot in &mut self.sheet_order {
-                if let SheetSlot::Worksheet(index) = slot { *index = tabs.next().unwrap(); }
-            }
-        }
-
-        // Update sheet_order indices to reflect the move
-        if !self.sheet_order.is_empty() {
-            for slot in &mut self.sheet_order {
-                if let SheetSlot::Worksheet(ref mut idx) = slot {
-                    if *idx == from {
-                        *idx = to;
-                    } else if from < to && *idx > from && *idx <= to {
-                        *idx -= 1;
-                    } else if from > to && *idx >= to && *idx < from {
-                        *idx += 1;
-                    }
+                if let SheetSlot::Worksheet(index) = slot {
+                    *index = tabs.next().unwrap();
                 }
             }
         }
 
-        // Adjust active sheet if needed
-        if self.active_sheet == from {
-            self.active_sheet = to;
-        } else if from < self.active_sheet && to >= self.active_sheet {
-            self.active_sheet = self.active_sheet.saturating_sub(1);
-        } else if from > self.active_sheet && to <= self.active_sheet {
-            self.active_sheet = self.active_sheet.saturating_add(1);
-        }
+        self.remap_sheet_indices(|i| {
+            Some(if i == from {
+                to
+            } else if from < to && i > from && i <= to {
+                i - 1
+            } else if from > to && i >= to && i < from {
+                i + 1
+            } else {
+                i
+            })
+        });
         self.structural_generation += 1;
         Ok(())
     }
@@ -1026,13 +1012,29 @@ impl Workbook {
         self.define_name_with_scope(name, refers_to, NameScope::Workbook)
     }
 
-    /// Define a named range with a specific scope
+    /// Define a named range with a specific scope. Unqualified workbook-scoped
+    /// references bind to the active worksheet at definition time.
     pub fn define_name_with_scope(
         &mut self,
         name: &str,
         refers_to: &str,
         scope: NameScope,
     ) -> Result<()> {
+        let refers_to = if scope == NameScope::Workbook {
+            if let Some(sheet) = self.worksheet(self.active_sheet) {
+                crate::structural::rewrite_references(
+                    refers_to,
+                    sheet.name(),
+                    &crate::structural::ReferenceEdit::Qualify {
+                        sheet: sheet.name(),
+                    },
+                )
+            } else {
+                refers_to.to_owned()
+            }
+        } else {
+            refers_to.to_owned()
+        };
         let range = NamedRange::new(name, refers_to, scope);
         self.named_ranges
             .define(range)

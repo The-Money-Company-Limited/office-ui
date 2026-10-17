@@ -247,6 +247,13 @@ struct ChartParser {
     err_val_type: Option<ErrorValueType>,
     err_val: Option<f64>,
     err_no_end_cap: Option<bool>,
+    err_plus: Option<DataReference>,
+    err_minus: Option<DataReference>,
+    in_err_data: bool,
+    in_err_data_f: bool,
+    in_err_data_v: bool,
+    err_data_formula: Option<String>,
+    err_data_values: Vec<f64>,
     in_cat_ax: bool,
     in_val_ax: bool,
     in_ser_ax: bool,
@@ -453,6 +460,13 @@ impl ChartParser {
             err_val_type: None,
             err_val: None,
             err_no_end_cap: None,
+            err_plus: None,
+            err_minus: None,
+            in_err_data: false,
+            in_err_data_f: false,
+            in_err_data_v: false,
+            err_data_formula: None,
+            err_data_values: Vec::new(),
             in_cat_ax: false,
             in_val_ax: false,
             in_ser_ax: false,
@@ -722,7 +736,16 @@ impl ChartParser {
             self.err_val_type = None;
             self.err_val = None;
             self.err_no_end_cap = None;
+            self.err_plus = None;
+            self.err_minus = None;
         }
+        b"plus" | b"minus" if self.in_err_bars => {
+            self.in_err_data = true;
+            self.err_data_formula = None;
+            self.err_data_values.clear();
+        }
+        b"f" if self.in_err_data => self.in_err_data_f = true,
+        b"v" if self.in_err_data => self.in_err_data_v = true,
         // Marker (series or data point level)
         b"marker" if self.in_ser && !self.in_dlbls && !self.in_trendline && !self.in_err_bars => {
             self.in_marker = true;
@@ -1241,6 +1264,12 @@ impl ChartParser {
             push_text(&mut self.ser_name, text_str);
         } else if self.in_ser_tx_v {
             push_text(&mut self.ser_name, text_str);
+        } else if self.in_err_data_f {
+            push_text(&mut self.err_data_formula, text_str);
+        } else if self.in_err_data_v {
+            if let Ok(v) = text_str.parse::<f64>() {
+                self.err_data_values.push(v);
+            }
         } else if self.in_ser_val_num_ref_f {
             push_text(&mut self.ser_val_formula, text_str);
         } else if self.in_ser_val_pt_v {
@@ -1541,6 +1570,21 @@ impl ChartParser {
             self.in_trendline = false;
         }
         // Error bars
+        b"f" if self.in_err_data_f => self.in_err_data_f = false,
+        b"v" if self.in_err_data_v => self.in_err_data_v = false,
+        b"plus" | b"minus" if self.in_err_data => {
+            let data = if let Some(formula) = self.err_data_formula.take() {
+                DataReference::formula(formula)
+            } else {
+                DataReference::numbers(std::mem::take(&mut self.err_data_values))
+            };
+            if tag == b"plus" {
+                self.err_plus = Some(data);
+            } else {
+                self.err_minus = Some(data);
+            }
+            self.in_err_data = false;
+        }
         b"errBars" if self.in_err_bars => {
             self.ser_error_bars = Some(ErrorBars {
                 direction: self.err_dir.unwrap_or(ErrorBarDirection::Y),
@@ -1548,8 +1592,8 @@ impl ChartParser {
                 value_type: self.err_val_type.unwrap_or(ErrorValueType::FixedValue),
                 value: self.err_val.take(),
                 no_end_cap: self.err_no_end_cap.take(),
-                plus: None,
-                minus: None,
+                plus: self.err_plus.take(),
+                minus: self.err_minus.take(),
             });
             self.in_err_bars = false;
         }
@@ -2872,6 +2916,56 @@ mod tests {
         assert_eq!(eb.value_type, ErrorValueType::StandardError);
         assert!(eb.value.is_none());
         assert_eq!(eb.no_end_cap, Some(false));
+    }
+
+    fn assert_custom_error_data(plus: &str, minus: &str, expected_plus: DataReference, expected_minus: DataReference) {
+        let xml = format!(r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+          <c:chart><c:plotArea><c:barChart><c:barDir val="col"/>
+            <c:ser><c:idx val="0"/>
+              <c:errBars><c:errValType val="cust"/><c:plus>{plus}</c:plus><c:minus>{minus}</c:minus></c:errBars>
+              <c:cat><c:strRef><c:f>Data!$A$2:$A$3</c:f></c:strRef></c:cat>
+              <c:val><c:numRef><c:f>Data!$B$2:$B$3</c:f><c:numCache><c:pt idx="0"><c:v>100</c:v></c:pt></c:numCache></c:numRef></c:val>
+            </c:ser>
+            <c:ser><c:idx val="1"/><c:val><c:numRef><c:f>Data!$C$2:$C$3</c:f></c:numRef></c:val></c:ser>
+          </c:barChart></c:plotArea></c:chart>
+        </c:chartSpace>"#);
+        let chart = parse_chart_xml(xml.as_bytes()).unwrap();
+        let check = |chart: &Chart| {
+            let series = &chart.series[0];
+            let errors = series.error_bars.as_ref().unwrap();
+            assert_eq!(errors.plus.as_ref(), Some(&expected_plus));
+            assert_eq!(errors.minus.as_ref(), Some(&expected_minus));
+            assert_eq!(series.values, DataReference::formula("Data!$B$2:$B$3"));
+            assert_eq!(series.categories, Some(DataReference::formula("Data!$A$2:$A$3")));
+            assert_eq!(chart.series[1].values, DataReference::formula("Data!$C$2:$C$3"));
+            assert!(chart.series[1].error_bars.is_none());
+        };
+        check(&chart);
+        #[cfg(feature = "write")]
+        {
+            let saved = crate::write::chart_part_bytes(&chart).unwrap();
+            check(&parse_chart_xml(saved.as_slice()).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_custom_error_data_references_roundtrip() {
+        assert_custom_error_data(
+            "<c:numRef><c:f>'Error Data'!$D$2:$D$3</c:f><c:numCache><c:pt idx=\"0\"><c:v>7</c:v></c:pt></c:numCache></c:numRef>",
+            "<c:numRef><c:f>'Error Data'!$E$2:$E$3</c:f><c:numCache><c:pt idx=\"0\"><c:v>3</c:v></c:pt></c:numCache></c:numRef>",
+            DataReference::formula("'Error Data'!$D$2:$D$3"),
+            DataReference::formula("'Error Data'!$E$2:$E$3"),
+        );
+    }
+
+    #[test]
+    fn test_custom_error_data_literals_roundtrip() {
+        assert_custom_error_data(
+            "<c:numLit><c:ptCount val=\"2\"/><c:pt idx=\"0\"><c:v>7</c:v></c:pt><c:pt idx=\"1\"><c:v>11</c:v></c:pt></c:numLit>",
+            "<c:numLit><c:ptCount val=\"2\"/><c:pt idx=\"0\"><c:v>3</c:v></c:pt><c:pt idx=\"1\"><c:v>5</c:v></c:pt></c:numLit>",
+            DataReference::numbers(vec![7.0, 11.0]),
+            DataReference::numbers(vec![3.0, 5.0]),
+        );
     }
 
     #[test]

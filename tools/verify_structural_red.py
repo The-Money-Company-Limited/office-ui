@@ -7,7 +7,7 @@ path = Path("crates/duke-sheets-core/src/workbook/structural.rs")
 original = path.read_text()
 try:
     disabled = original
-    signatures = list(re.finditer(r"fn (edit_axis|rewrite_references|remap_name_scopes)\b[^\{]*\{", disabled))
+    signatures = list(re.finditer(r"fn (edit_axis|rewrite_references|remap_sheet_indices)\b[^\{]*\{", disabled))
     for match in reversed(signatures):
         start = match.end()
         depth = 1
@@ -18,7 +18,7 @@ try:
             end += 1
         disabled = disabled[:start] + (" Ok(()) " if match.group(1) == "edit_axis" else " ") + disabled[end - 1:]
     path.write_text(disabled)
-    for package, expected in [("duke-sheets-core", 6), ("duke-sheets", 1)]:
+    for package, expected in [("duke-sheets-core", 13), ("duke-sheets", 2)]:
         result = subprocess.run(["cargo", "test", "-p", package, "--test", "structural_edits"], capture_output=True, text=True)
         log = result.stdout + result.stderr
         Path(f"structural-red-{package}.log").write_text(log)
