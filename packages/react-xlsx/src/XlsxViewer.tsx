@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-virtual";
 import { resolveBuiltinTableStyle } from "./builtin-table-styles";
 import { resolveCellTextClipOverscan } from "./cell-text-clip";
+import { getCellGeneralAlignment, getWorksheetRowsBatch } from "./worksheet-batch";
 import { growScrollDisplayLimit } from "./scroll-display-limit";
 import { createWindowScrollViewport, createWindowVirtualizerObservers, type ScrollViewport, type ScrollViewportRect } from "./scroll-viewport";
 import { expandHighlightedRange, getHighlightAxisExtent, getHighlightScrollOffset } from "./range-highlight";
@@ -1144,13 +1145,10 @@ type CellChartHighlight = {
   strokeColor: string;
 };
 
-type WorksheetWithRowsBatch = Worksheet & {
-  getRowsBatch?: (startRow: number, maxRows: number, options?: unknown) => unknown;
-};
-
 type WorksheetBatchCellEntry = {
   col?: unknown;
   formula?: unknown;
+  generalAlignment?: unknown;
   hyperlink?: unknown;
   isMergedSecondary?: unknown;
   mergeSpan?: unknown;
@@ -1165,6 +1163,7 @@ type WorksheetBatchRowEntry = {
 
 type BatchedCellData = {
   formula: string | null;
+  generalAlignment: "left" | "center" | "right";
   hyperlink: {
     location?: string;
     target?: string;
@@ -4223,6 +4222,9 @@ function buildWorksheetBatchWindow(
         const formula = typeof cellEntry.formula === "string" ? cellEntry.formula : null;
         cells.set(`${row}:${col}`, {
           formula,
+          generalAlignment: cellEntry.generalAlignment === "right" || cellEntry.generalAlignment === "center"
+            ? cellEntry.generalAlignment
+            : "left",
           hyperlink: normalizeBatchedHyperlink(cellEntry.hyperlink),
           isMergedSecondary: cellEntry.isMergedSecondary === true,
           mergeSpan: normalizeBatchedMergeSpan(cellEntry.mergeSpan),
@@ -9837,20 +9839,9 @@ function XlsxGrid({
       return null;
     }
 
-    const worksheetWithRowsBatch = worksheet as WorksheetWithRowsBatch;
-    if (typeof worksheetWithRowsBatch.getRowsBatch !== "function") {
-      return null;
-    }
-
     try {
-      const rows = worksheetWithRowsBatch.getRowsBatch(viewportRequest.startRow, viewportRequest.endRow - viewportRequest.startRow + 1, {
-        includeFormulas: true,
-        includeHyperlinks: true,
-        includeMergeInfo: true,
-        includeStyles: true,
-        useFormattedValues: true
-      });
-      return buildWorksheetBatchWindow(rows as unknown[] | null, activeSheet ?? null, viewportRequest.startRow, viewportRequest.endRow);
+      const rows = getWorksheetRowsBatch(worksheet, viewportRequest.startRow, viewportRequest.endRow - viewportRequest.startRow + 1);
+      return buildWorksheetBatchWindow(rows, activeSheet ?? null, viewportRequest.startRow, viewportRequest.endRow);
     } catch {
       return null;
     }
@@ -10172,9 +10163,8 @@ function XlsxGrid({
     };
 
     if (!alignment?.horizontal || alignment.horizontal === "general") {
-      const value = worksheet?.getCalculatedValueAt(row, col);
-      if (value?.is_number) nextData.style.textAlign = "right";
-      else if (value?.is_boolean) nextData.style.textAlign = "center";
+      nextData.style.textAlign = batchedCell?.generalAlignment
+        ?? (worksheet ? getCellGeneralAlignment(worksheet, row, col) : "left");
     }
 
     if (getCellStyle) {

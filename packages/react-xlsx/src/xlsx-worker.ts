@@ -14,6 +14,7 @@ import {
 import type { WorkbookStructureAssets } from "./images";
 import { safeCalculate } from "./safe-calculate";
 import { getXlsxInitialActiveCell } from "./selection-tools";
+import { getWorksheetRowsBatch } from "./worksheet-batch";
 import { getSheetsWasmModule, setWasmSource, type WorkerWasmSource } from "./wasm";
 import type {
   XlsxChart,
@@ -943,20 +944,8 @@ async function handleMessage(message: WorkerRequest) {
         return null;
       }
 
-      const worksheet = workbook.getSheet(message.payload.workbookSheetIndex) as ReturnType<Workbook["getSheet"]> & {
-        getRowsBatch?: (startRow: number, maxRows: number, options?: unknown) => unknown;
-      };
-      if (typeof worksheet.getRowsBatch !== "function") {
-        return null;
-      }
-
-      return worksheet.getRowsBatch(message.payload.startRow, message.payload.rowCount, {
-        includeFormulas: true,
-        includeHyperlinks: true,
-        includeMergeInfo: true,
-        includeStyles: true,
-        useFormattedValues: true
-      }) as unknown[] | null;
+      const worksheet = workbook.getSheet(message.payload.workbookSheetIndex);
+      return getWorksheetRowsBatch(worksheet, message.payload.startRow, message.payload.rowCount);
     }
     default:
       return null;
