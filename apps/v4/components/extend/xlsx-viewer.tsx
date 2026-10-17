@@ -4,6 +4,7 @@ import * as React from "react"
 import {
   useXlsxViewer,
   useXlsxViewerController,
+  useXlsxViewerEditing,
   useXlsxViewerThumbnails,
   useXlsxViewerZoom,
   XlsxViewer,
@@ -1115,6 +1116,36 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
   status,
   sheets,
 }: WorkbookSheetTabsInnerProps) {
+  const { readOnly, renameSheet, moveSheet, deleteSheet } = useXlsxViewerEditing()
+  const canEdit = Boolean(onAddSheet) && !readOnly
+  const [renaming, setRenaming] = React.useState<{ index: number; name: string } | null>(null)
+  const cancelRenameRef = React.useRef(false)
+  const dragIndexRef = React.useRef<number | null>(null)
+  const [tabError, setTabError] = React.useState<string | null>(null)
+  const [tabMenu, setTabMenu] = React.useState<{ index: number; getBoundingClientRect: () => DOMRect } | null>(null)
+  const beginRename = (index: number) => {
+    cancelRenameRef.current = false
+    setTabError(null)
+    setRenaming({ index, name: sheets[index].name })
+  }
+  const runTabAction = (action: () => void) => {
+    try {
+      action()
+      setTabError(null)
+    } catch (error) {
+      setTabError(error instanceof Error ? error.message : "Unable to change sheet.")
+    }
+  }
+  const finishRename = () => {
+    if (!renaming || cancelRenameRef.current) return
+    try {
+      if (renaming.name !== sheets[renaming.index].name) renameSheet(renaming.index, renaming.name)
+      setRenaming(null)
+      setTabError(null)
+    } catch (error) {
+      setTabError(error instanceof Error ? error.message : "Unable to rename sheet.")
+    }
+  }
   const [visiblePreviewIndex, setVisiblePreviewIndex] = React.useState<
     number | null
   >(null)
@@ -1341,15 +1372,56 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
         >
           <div className="flex h-full items-center">
             <TabsList className="shrink-0">
-              {sheets.map((sheet, index) => (
+              {sheets.map((sheet, index) => renaming?.index === index ? (
+                <Input
+                  key={`rename-${sheet.workbookSheetIndex}`}
+                  autoFocus
+                  aria-label="Sheet name"
+                  aria-invalid={Boolean(tabError)}
+                  className="h-8 w-40"
+                  value={renaming.name}
+                  onFocus={(event) => event.currentTarget.select()}
+                  onChange={(event) => setRenaming({ index, name: event.target.value })}
+                  onBlur={finishRename}
+                  onKeyDown={(event) => {
+                    event.stopPropagation()
+                    if (event.key === "Enter") {
+                      event.preventDefault()
+                      event.currentTarget.blur()
+                    } else if (event.key === "Escape") {
+                      cancelRenameRef.current = true
+                      setRenaming(null)
+                      setTabError(null)
+                    }
+                  }}
+                />
+              ) : (
                 <TabsTrigger
                   key={`${sheet.workbookSheetIndex}-${sheet.name}`}
-                  ref={(node) => {
-                    itemRefs.current[index] = node
-                  }}
+                  ref={(node) => { itemRefs.current[index] = node }}
                   value={String(index)}
                   className="max-w-48 flex-none"
                   onMouseEnter={() => handleItemEnter(index)}
+                  onDoubleClick={canEdit ? () => beginRename(index) : undefined}
+                  onContextMenu={canEdit ? (event) => {
+                    event.preventDefault()
+                    const rect = new DOMRect(event.clientX, event.clientY, 0, 0)
+                    setTabMenu({ index, getBoundingClientRect: () => rect })
+                  } : undefined}
+                  draggable={canEdit}
+                  onDragStart={(event) => {
+                    dragIndexRef.current = index
+                    event.dataTransfer.effectAllowed = "move"
+                    event.dataTransfer.setData("text/plain", sheet.name)
+                  }}
+                  onDragOver={canEdit ? (event) => event.preventDefault() : undefined}
+                  onDrop={canEdit ? (event) => {
+                    event.preventDefault()
+                    const from = dragIndexRef.current
+                    dragIndexRef.current = null
+                    if (from !== null) runTabAction(() => moveSheet(from, index))
+                  } : undefined}
+                  onDragEnd={() => { dragIndexRef.current = null }}
                 >
                   <span className="truncate">{sheet.name}</span>
                 </TabsTrigger>
@@ -1358,6 +1430,22 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
           </div>
         </ScrollArea>
       </Tabs>
+      <DropdownMenu open={tabMenu !== null} onOpenChange={(open) => { if (!open) setTabMenu(null) }}>
+        <DropdownMenuContent anchor={tabMenu} className={XLSX_DROPDOWN_Z_INDEX_CLASS} finalFocus={false}>
+          <DropdownMenuItem onClick={() => { if (tabMenu) beginRename(tabMenu.index) }}>Rename</DropdownMenuItem>
+          <DropdownMenuItem disabled={!tabMenu || tabMenu.index === 0} onClick={() => {
+            if (tabMenu) runTabAction(() => moveSheet(tabMenu.index, tabMenu.index - 1))
+          }}>Move left</DropdownMenuItem>
+          <DropdownMenuItem disabled={!tabMenu || tabMenu.index === sheets.length - 1} onClick={() => {
+            if (tabMenu) runTabAction(() => moveSheet(tabMenu.index, tabMenu.index + 1))
+          }}>Move right</DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled={sheets.length <= 1} onClick={() => {
+            if (tabMenu) runTabAction(() => deleteSheet(tabMenu.index))
+          }}>Delete</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {tabError ? <span role="alert" className="text-xs text-destructive">{tabError}</span> : null}
       {status ? <div className="shrink-0">{status}</div> : null}
       {typeof document !== "undefined" &&
       previewSheet &&

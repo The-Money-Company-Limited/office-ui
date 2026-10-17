@@ -2967,9 +2967,13 @@ export function XlsxEditorSurface({
   workbookIdentity: string
 }) {
   const { activeSheet, error } = useXlsxViewer()
-  const { activeCell, selectRange } = useXlsxViewerSelection()
+  const { activeCell, selectRange, selection } = useXlsxViewerSelection()
   const {
     addSheet,
+    insertRows,
+    deleteRows,
+    insertColumns,
+    deleteColumns,
     clearSelectedCells,
     copySelectionToClipboard,
     cutSelectionToClipboard,
@@ -2985,11 +2989,26 @@ export function XlsxEditorSurface({
     sheet: string
   } | null>(null)
   const [contextMenu, setContextMenu] = React.useState<{
+    axis?: "row" | "column"
     getBoundingClientRect: () => DOMRect
   } | null>(null)
   const [clipboardError, setClipboardError] = React.useState<string | null>(
     null
   )
+  const selectedStart = selection ? {
+    row: Math.min(selection.start.row, selection.end.row),
+    col: Math.min(selection.start.col, selection.end.col),
+  } : activeCell ?? { row: 0, col: 0 }
+  const rowCount = selection ? Math.abs(selection.end.row - selection.start.row) + 1 : 1
+  const colCount = selection ? Math.abs(selection.end.col - selection.start.col) + 1 : 1
+  const runStructuralAction = (action: () => void) => {
+    try {
+      action()
+      setClipboardError(null)
+    } catch (error) {
+      setClipboardError(error instanceof Error ? error.message : "Unable to change worksheet.")
+    }
+  }
   const getKeyboardInput = React.useCallback(
     () =>
       surfaceRef.current?.querySelector<HTMLTextAreaElement>(
@@ -3179,6 +3198,10 @@ export function XlsxEditorSurface({
             }
             renderTableHeaderMenu={renderTableHeaderMenu}
             onCommentClick={openThread}
+            onHeaderContextMenu={(axis, _index, event) => {
+              const rect = new DOMRect(event.clientX, event.clientY, 0, 0)
+              setContextMenu({ axis, getBoundingClientRect: () => rect })
+            }}
             onCellContextMenu={(_cell, event) => {
               const rect = new DOMRect(event.clientX, event.clientY, 0, 0)
               setContextMenu({ getBoundingClientRect: () => rect })
@@ -3227,6 +3250,33 @@ export function XlsxEditorSurface({
               >
                 Clear contents
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {contextMenu?.axis !== "column" ? (
+                <>
+                  <DropdownMenuItem disabled={readOnly} onClick={() => runStructuralAction(() => insertRows(selectedStart.row, rowCount))}>
+                    Insert {rowCount} {rowCount === 1 ? "row" : "rows"} above
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={readOnly} onClick={() => runStructuralAction(() => insertRows(selectedStart.row + rowCount, rowCount))}>
+                    Insert {rowCount} {rowCount === 1 ? "row" : "rows"} below
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={readOnly} onClick={() => runStructuralAction(() => deleteRows(selectedStart.row, rowCount))}>
+                    Delete {rowCount === 1 ? "row" : `${rowCount} rows`}
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+              {contextMenu?.axis !== "row" ? (
+                <>
+                  <DropdownMenuItem disabled={readOnly} onClick={() => runStructuralAction(() => insertColumns(selectedStart.col, colCount))}>
+                    Insert {colCount} {colCount === 1 ? "column" : "columns"} left
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={readOnly} onClick={() => runStructuralAction(() => insertColumns(selectedStart.col + colCount, colCount))}>
+                    Insert {colCount} {colCount === 1 ? "column" : "columns"} right
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={readOnly} onClick={() => runStructuralAction(() => deleteColumns(selectedStart.col, colCount))}>
+                    Delete {colCount === 1 ? "column" : `${colCount} columns`}
+                  </DropdownMenuItem>
+                </>
+              ) : null}
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 disabled={readOnly}
