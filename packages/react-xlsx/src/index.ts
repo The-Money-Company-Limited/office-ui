@@ -1,3 +1,4 @@
+export { XlsxFormulaInput } from "./FormulaInput";
 export { findXlsxCells, getXlsxSelectionStatistics, resolveXlsxFindIndex } from "./selection-tools";
 export { useXlsxViewerController, XlsxFileSizeLimitExceededError } from "./controller";
 export { parseXlsxRange } from "./range-reference";

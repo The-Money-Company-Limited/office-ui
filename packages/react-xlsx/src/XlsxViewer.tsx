@@ -14,7 +14,10 @@ import { resolveWorkbookColor, resolveWorkbookFillStyle } from "./colors";
 import { listCellAnchors } from "./cell-anchors";
 import { parseCellRef, type XlsxSuggestion } from "./comments";
 import { useXlsxViewerController, XlsxFileSizeLimitExceededError } from "./controller";
-import { useXlsxFormulaAssist, XlsxFormulaAssistPopup } from "./FormulaAssist";
+import { FormulaEditingContext, FormulaEditingProvider } from "./FormulaEditing";
+import { formulaReferences } from "./formula-assist";
+import { XlsxFormulaInput } from "./FormulaInput";
+import { useXlsxFormulaAssist, XlsxFormulaAssistPopup, type XlsxFormulaAssistState } from "./FormulaAssist";
 import { MemoChartSvg } from "./chart-renderer";
 import {
   emuToPixels,
@@ -6613,6 +6616,8 @@ type GridRowProps = {
   actualRow: number;
   editingCell: XlsxCellAddress | null;
   editingValue: string;
+  editingInputRef: React.RefObject<HTMLInputElement | null>;
+  formulaAssist: XlsxFormulaAssistState;
   frozenRowHeaderZIndex: number;
   getCellData: (row: number, col: number) => CellRenderData;
   headerLabelLiveScale: number;
@@ -6645,6 +6650,8 @@ function GridRow({
   actualRow,
   editingCell,
   editingValue,
+  editingInputRef,
+  formulaAssist,
   frozenRowHeaderZIndex,
   getCellData,
   headerLabelLiveScale,
@@ -6795,6 +6802,9 @@ function GridRow({
         }
         if (isEditing) {
           cellStyle.padding = 0;
+          cellStyle.overflow = "visible";
+          cellStyle.position = cellStyle.position ?? "relative";
+          cellStyle.zIndex = 40;
         }
 
         const cellContentStyle: React.CSSProperties = {
@@ -6954,47 +6964,53 @@ function GridRow({
               </div>
             ) : null}
             {isEditing ? (
-              <input
-                autoFocus
-                onBlur={onEditingBlur}
-                onChange={(event) => onEditingValueChange(event.target.value)}
-                onKeyDown={(event) => {
-                  event.stopPropagation();
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    onEditingCommit();
-                    return;
-                  }
+              <>
+                <XlsxFormulaInput
+                  ref={editingInputRef}
+                  onSelect={formulaAssist.onSelect}
+                  autoFocus
+                  onBlur={onEditingBlur}
+                  onChange={(event) => onEditingValueChange(event.target.value)}
+                  onKeyDown={(event) => {
+                    event.stopPropagation();
+                    if (formulaAssist.handleKeyDown(event)) return;
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      onEditingCommit();
+                      return;
+                    }
 
-                  if (event.key === "Escape") {
-                    event.preventDefault();
-                    onEditingCancel();
-                    return;
-                  }
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      onEditingCancel();
+                      return;
+                    }
 
-                  if (
-                    event.key === "ArrowDown" ||
-                    event.key === "ArrowLeft" ||
-                    event.key === "ArrowRight" ||
-                    event.key === "ArrowUp"
-                  ) {
-                    event.preventDefault();
-                    onEditingNavigate(event.key, event.currentTarget.value);
-                  }
-                }}
-                style={{
-                  backgroundColor: "transparent",
-                  border: 0,
-                  color: "inherit",
-                  font: "inherit",
-                  height: "100%",
-                  margin: 0,
-                  outline: "none",
-                  padding: scaleCssLengthExpression(DEFAULT_CELL_PADDING, zoomFactor),
-                  width: "100%"
-                }}
-                value={editingValue}
-              />
+                    if (
+                      event.key === "ArrowDown" ||
+                      event.key === "ArrowLeft" ||
+                      event.key === "ArrowRight" ||
+                      event.key === "ArrowUp"
+                    ) {
+                      event.preventDefault();
+                      onEditingNavigate(event.key, event.currentTarget.value);
+                    }
+                  }}
+                  style={{
+                    backgroundColor: "transparent",
+                    border: 0,
+                    color: "inherit",
+                    font: "inherit",
+                    height: "100%",
+                    margin: 0,
+                    outline: "none",
+                    padding: scaleCssLengthExpression(DEFAULT_CELL_PADDING, zoomFactor),
+                    width: "100%"
+                  }}
+                  value={editingValue}
+                />
+                <XlsxFormulaAssistPopup palette={palette} state={formulaAssist} style={{ left: 0, top: "100%", marginTop: 4 }} />
+              </>
             ) : isSpilling ? (
               <div
                 style={{
@@ -7099,7 +7115,7 @@ const MemoGridRow = React.memo(GridRow, (prev, next) => {
     return false;
   }
 
-  if (prevEditingCol !== -1 && prev.editingValue !== next.editingValue) {
+  if (prevEditingCol !== -1 && (prev.editingValue !== next.editingValue || prev.formulaAssist !== next.formulaAssist)) {
     return false;
   }
 
@@ -7460,6 +7476,7 @@ function XlsxGrid({
   const [editingCell, setEditingCell] = React.useState<XlsxCellAddress | null>(null);
   const [editingValue, setEditingValue] = React.useState("");
   const formulaAssist = useXlsxFormulaAssist(editingValue, setEditingValue, editingInputRef);
+  const formulaEditing = React.useContext(FormulaEditingContext);
   const [openTableMenu, setOpenTableMenu] = React.useState<{ col: number; row: number; tableName: string } | null>(null);
   const [fillPreviewRange, setFillPreviewRange] = React.useState<XlsxCellRange | null>(null);
   const [chartPreviewRect, setChartPreviewRect] = React.useState<{ id: string; rect: XlsxImageRect } | null>(null);
@@ -9583,6 +9600,11 @@ function XlsxGrid({
     }
   }, [focusGridElement]);
 
+  function shouldKeepFormulaFocus(target: EventTarget | null) {
+    const editor = formulaEditing?.editor.current;
+    return Boolean(editor && (editor.canPoint() || (target instanceof Element && target.closest('[role="listbox"]'))));
+  }
+
   React.useEffect(() => {
     const handleDocumentPointerDown = (event: PointerEvent) => {
       const scroller = scrollRef.current;
@@ -9596,6 +9618,7 @@ function XlsxGrid({
         return;
       }
 
+      if (shouldKeepFormulaFocus(event.target)) return;
       gridKeyboardActiveRef.current = true;
       focusGridElement();
     };
@@ -9620,7 +9643,7 @@ function XlsxGrid({
       document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
       document.removeEventListener("keydown", handleDocumentKeyDown);
     };
-  }, [focusGridElement]);
+  }, [focusGridElement, formulaEditing]);
 
   const openHyperlink = React.useCallback((target?: string | null, location?: string | null) => {
     const internalTarget = parseInternalSheetLink(location ?? target);
@@ -9654,9 +9677,9 @@ function XlsxGrid({
 
       selectCell(cell);
       setEditingCell(cell);
-      setEditingValue(initialValue ?? getControllerCellDisplayValue(cell));
+      setEditingValue(initialValue ?? (controller.getCellFormula(cell) || getControllerCellDisplayValue(cell)));
     },
-    [getControllerCellDisplayValue, readOnly, selectCell]
+    [controller.getCellFormula, getControllerCellDisplayValue, readOnly, selectCell]
   );
 
   const commitEditing = React.useCallback(() => {
@@ -9672,29 +9695,33 @@ function XlsxGrid({
       return;
     }
 
+    formulaAssist.onBlur();
     setCellValue(editingCell, editingValue);
     editingCellRef.current = null;
     setEditingCell(null);
     setEditingValue("");
     focusGrid();
-  }, [editingCell, editingValue, focusGrid, readOnly, setCellValue]);
+  }, [editingCell, editingValue, focusGrid, formulaAssist.onBlur, readOnly, setCellValue]);
 
   const cancelEditing = React.useCallback(() => {
+    formulaAssist.onBlur();
     editingCellRef.current = null;
     setEditingCell(null);
     setEditingValue("");
     focusGrid();
-  }, [focusGrid]);
+  }, [focusGrid, formulaAssist.onBlur]);
 
   const handleEditingBlur = React.useCallback(() => {
+    formulaAssist.onBlur();
     if (!editingCellRef.current) {
       return;
     }
 
     commitEditing();
-  }, [commitEditing]);
+  }, [commitEditing, formulaAssist.onBlur]);
 
   const handleEditingNavigate = React.useCallback((key: string, value: string) => {
+    formulaAssist.onBlur();
     const cell = editingCellRef.current;
     if (!cell) {
       return;
@@ -9740,7 +9767,26 @@ function XlsxGrid({
     setEditingValue("");
     moveSelection(nextRowIndex, nextColIndex, false);
     focusGrid();
-  }, [colIndexByActual, focusGrid, rowIndexByActual, setCellValue, visibleCols, visibleRows]);
+  }, [colIndexByActual, focusGrid, formulaAssist.onBlur, rowIndexByActual, setCellValue, visibleCols, visibleRows]);
+
+  React.useLayoutEffect(() => {
+    if (!formulaEditing) return;
+    formulaEditing.navigate.current = (key, extend) => {
+      const editor = formulaEditing.editor.current;
+      const origin = editor?.point?.focus ?? activeCellRef.current;
+      if (!editor?.canPoint() || !origin) return false;
+      const rowIndex = rowIndexByActual.get(origin.row);
+      const colIndex = colIndexByActual.get(origin.col);
+      if (rowIndex === undefined || colIndex === undefined) return false;
+      const row = Math.max(0, Math.min(visibleRows.length - 1, rowIndex + (key === "ArrowDown" ? 1 : key === "ArrowUp" ? -1 : 0)));
+      const col = Math.max(0, Math.min(visibleCols.length - 1, colIndex + (key === "ArrowRight" ? 1 : key === "ArrowLeft" ? -1 : 0)));
+      if (visibleRows[row] === undefined || visibleCols[col] === undefined) return false;
+      editor.insert({ row: visibleRows[row], col: visibleCols[col] }, extend);
+      ensureCellVisible(row, col);
+      return true;
+    };
+    return () => { formulaEditing.navigate.current = null; };
+  });
 
   React.useEffect(() => {
     commitEditingRef.current = commitEditing;
@@ -11167,7 +11213,16 @@ function XlsxGrid({
     overlay.style.visibility = "visible";
   }, [getCellData, resolveOverlayRect, zoomFactor]);
 
+  const pointFormulaRange = React.useCallback((range: XlsxCellRange) => {
+    const editor = formulaEditing?.editor.current;
+    if (!editor?.canPoint()) return false;
+    editor.insert(range.start);
+    editor.insert(range.end, true);
+    return true;
+  }, [formulaEditing]);
+
   const commitSelectionRange = React.useCallback((range: XlsxCellRange) => {
+    if (pointFormulaRange(range)) return;
     gridKeyboardActiveRef.current = true;
     const normalized = normalizeRange(range);
     if (
@@ -11207,7 +11262,7 @@ function XlsxGrid({
         selectRange(pendingRange);
       });
     });
-  }, [selectRange, startSelectionTransition]);
+  }, [pointFormulaRange, selectRange, startSelectionTransition]);
 
   const refreshOverlayFromCurrentSelection = React.useCallback(() => {
     if (displayedSelectionRef.current) {
@@ -11381,6 +11436,7 @@ function XlsxGrid({
     }
 
     dragState.previewRange = nextRange;
+    if (pointFormulaRange({ start: dragState.anchor, end: nextCell })) return;
     selectionPreviewRangeRef.current = nextRange;
     displayedSelectionRef.current = nextRange;
     applyPreviewOverlay(nextRange);
@@ -11411,8 +11467,10 @@ function XlsxGrid({
     cachedScrollerRectRef.current = getScrollViewport()?.getBoundingClientRect() ?? null;
     pendingState.didDrag = true;
     selectionDragRef.current = pendingState;
-    selectionPreviewRangeRef.current = pendingState.previewRange;
-    displayedSelectionRef.current = pendingState.previewRange;
+    if (!formulaEditing?.editor.current?.canPoint()) {
+      selectionPreviewRangeRef.current = pendingState.previewRange;
+      displayedSelectionRef.current = pendingState.previewRange;
+    }
     setInteractionMode("select");
     document.body.style.userSelect = "none";
     installSelectionDragListeners(pendingState.pointerId);
@@ -11544,7 +11602,8 @@ function XlsxGrid({
 
       selectionDragRef.current = null;
       cachedScrollerRectRef.current = null;
-      if (nextRange && (dragState?.didDrag || !dragState?.committedOnPointerDown)) {
+      const pointed = nextRange && pointFormulaRange(dragState && nextCell ? { start: dragState.anchor, end: nextCell } : nextRange);
+      if (!pointed && nextRange && (dragState?.didDrag || !dragState?.committedOnPointerDown)) {
         selectionPreviewRangeRef.current = nextRange;
         displayedSelectionRef.current = nextRange;
         if (dragState?.axis === "column") {
@@ -11680,16 +11739,16 @@ function XlsxGrid({
   }, [activeCell, editingCell, revision, syncActiveValidationOverlay]);
 
   const handleCellDoubleClick = React.useCallback((cell: XlsxCellAddress) => {
-    startEditing(cell);
-  }, [startEditing]);
+    if (!formulaEditing?.editor.current) startEditing(cell);
+  }, [formulaEditing, startEditing]);
 
   const handleCellClick = React.useCallback((cell: XlsxCellAddress, cellData: CellRenderData) => {
-    if (!cellData.hyperlink) {
+    if (formulaEditing?.editor.current || !cellData.hyperlink) {
       return;
     }
 
     openHyperlink(cellData.hyperlink.target, cellData.hyperlink.location);
-  }, [openHyperlink]);
+  }, [formulaEditing, openHyperlink]);
 
   const handleCellPointerDown = React.useCallback((
     event: React.PointerEvent<HTMLTableCellElement>,
@@ -11700,18 +11759,19 @@ function XlsxGrid({
     }
 
     event.preventDefault();
-    focusGrid();
+    const pointing = formulaEditing?.editor.current?.canPoint() ?? false;
+    if (!pointing) focusGrid();
     axisSelectionRef.current = null;
     const targetCell =
       event.currentTarget.colSpan > 1 || event.currentTarget.rowSpan > 1
         ? resolvePointerCellFromGeometry(event.clientX, event.clientY) ?? cell
         : cell;
     const currentSelection = selectionRef.current;
-    const anchor = event.shiftKey && currentSelection ? currentSelection.start : targetCell;
+    const anchor = !pointing && event.shiftKey && currentSelection ? currentSelection.start : targetCell;
     const initialRange = normalizeRange({ start: anchor, end: targetCell });
     const isActive = isSameCell(activeCellRef.current, targetCell);
-    const committedOnPointerDown = !isActive || !editingCellRef.current;
-    if (editingCellRef.current && !isActive) {
+    const committedOnPointerDown = pointing || !isActive || !editingCellRef.current;
+    if (!pointing && editingCellRef.current && !isActive) {
       commitEditingRef.current();
     }
     const pointerOrigin =
@@ -11739,10 +11799,12 @@ function XlsxGrid({
       event.clientX,
       event.clientY
     );
-    if (targetCell.row === cell.row && targetCell.col === cell.col) {
-      applyPreviewOverlayFromElement(event.currentTarget, initialRange);
-    } else {
-      applyPreviewOverlay(initialRange);
+    if (!pointing) {
+      if (targetCell.row === cell.row && targetCell.col === cell.col) {
+        applyPreviewOverlayFromElement(event.currentTarget, initialRange);
+      } else {
+        applyPreviewOverlay(initialRange);
+      }
     }
     if (committedOnPointerDown) {
       commitSelectionRange(initialRange);
@@ -11752,6 +11814,7 @@ function XlsxGrid({
     applyPreviewOverlayFromElement,
     commitSelectionRange,
     focusGrid,
+    formulaEditing,
     resolveCellPointerOrigin,
     resolveCellPointerOriginFromClient,
     resolveMountedCellOverlayRect,
@@ -12130,14 +12193,15 @@ function XlsxGrid({
     }
 
     event.preventDefault();
-    focusGrid();
+    const pointing = formulaEditing?.editor.current?.canPoint() ?? false;
+    if (!pointing) focusGrid();
     axisSelectionRef.current = null;
     const currentSelection = selectionRef.current;
-    const anchor = event.shiftKey && currentSelection ? currentSelection.start : cell;
+    const anchor = !pointing && event.shiftKey && currentSelection ? currentSelection.start : cell;
     const initialRange = normalizeRange({ start: anchor, end: cell });
     const isActive = isSameCell(activeCellRef.current, cell);
-    const committedOnPointerDown = !isActive || !editingCellRef.current;
-    if (editingCellRef.current && !isActive) {
+    const committedOnPointerDown = pointing || !isActive || !editingCellRef.current;
+    if (!pointing && editingCellRef.current && !isActive) {
       commitEditingRef.current();
     }
     const rowIndex = rowIndexByActual.get(cell.row);
@@ -12164,7 +12228,7 @@ function XlsxGrid({
       event.clientX,
       event.clientY
     );
-    applyPreviewOverlay(initialRange);
+    if (!pointing) applyPreviewOverlay(initialRange);
     if (committedOnPointerDown) {
       commitSelectionRange(initialRange);
     }
@@ -12174,6 +12238,7 @@ function XlsxGrid({
     colPrefixSums,
     commitSelectionRange,
     focusGrid,
+    formulaEditing,
     resolveOverlayRect,
     resolvePointerCellFromClient,
     rowIndexByActual,
@@ -12191,7 +12256,7 @@ function XlsxGrid({
   }, [getCellData, handleCellClick, resolvePointerCellFromClient]);
 
   const handleCanvasBodyDoubleClick = React.useCallback((event: React.MouseEvent<HTMLElement>) => {
-    if (readOnly) {
+    if (readOnly || formulaEditing?.editor.current) {
       return;
     }
 
@@ -12201,7 +12266,7 @@ function XlsxGrid({
     }
 
     startEditing(cell);
-  }, [readOnly, resolvePointerCellFromClient, startEditing]);
+  }, [formulaEditing, readOnly, resolvePointerCellFromClient, startEditing]);
 
   const handleCanvasColumnHeaderPointerDown = React.useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     if (event.button !== 0 || firstVisibleRow === undefined || lastVisibleRow === undefined) {
@@ -15388,9 +15453,11 @@ function XlsxGrid({
       startClientX,
       startClientY
     };
-    selectionPreviewRangeRef.current = previewRange;
-    displayedSelectionRef.current = previewRange;
-    applyPreviewOverlay(previewRange);
+    if (!formulaEditing?.editor.current?.canPoint()) {
+      selectionPreviewRangeRef.current = previewRange;
+      displayedSelectionRef.current = previewRange;
+      applyPreviewOverlay(previewRange);
+    }
     installPendingSelectionDragListeners(pointerId, target);
   }
 
@@ -16044,6 +16111,7 @@ function XlsxGrid({
         return;
       }
 
+      if (shouldKeepFormulaFocus(event.target)) return;
       gridKeyboardActiveRef.current = true;
       focusGridElement();
     },
@@ -16052,6 +16120,7 @@ function XlsxGrid({
         return;
       }
 
+      if (shouldKeepFormulaFocus(event.target)) return;
       gridKeyboardActiveRef.current = true;
       focusGridElement();
     },
@@ -16433,7 +16502,7 @@ function XlsxGrid({
                       zIndex: 28
                     }}
                   >
-                    <input
+                    <XlsxFormulaInput
                       ref={editingInputRef}
                       autoFocus
                       onBlur={handleEditingBlur}
@@ -16627,6 +16696,8 @@ function XlsxGrid({
                           actualRow={actualRow}
                           editingCell={editingCell}
                           editingValue={editingValue}
+                          editingInputRef={editingInputRef}
+                          formulaAssist={formulaAssist}
                           frozenRowHeaderZIndex={frozenRowHeaderOverlayZIndex}
                           getCellData={getCellData}
                           key={virtualRow.key}
@@ -16685,6 +16756,15 @@ function XlsxGrid({
                 zIndex: 24
               }}
             >
+              {formulaReferences(formulaEditing?.editor.current?.input.value ?? "").map((reference) => {
+                if (reference.sheetName && reference.sheetName !== activeSheet?.name) return null;
+                const rect = resolveOverlayRect(reference.range);
+                return rect ? <div
+                  key={reference.start}
+                  data-xlsx-formula-reference={reference.text}
+                  style={{ ...rect, position: "absolute", boxSizing: "border-box", border: `2px solid ${reference.color}`, pointerEvents: "none", zIndex: 27 }}
+                /> : null;
+              })}
               <div
                 ref={selectionOverlayRef}
                 style={{
@@ -16759,7 +16839,7 @@ function XlsxGrid({
                   border: `${Math.max(1, zoomFactor)}px solid ${palette.surface}`,
                   contain: "layout paint",
                   cursor: "crosshair",
-                  display: !readOnly && resolvedSelectionOverlay ? "block" : "none",
+                  display: !readOnly && !formulaEditing?.editor.current && resolvedSelectionOverlay ? "block" : "none",
                   height: 8 * zoomFactor,
                   left: resolvedSelectionOverlay ? resolvedSelectionOverlay.left + resolvedSelectionOverlay.width - (4 * zoomFactor) : 0,
                   pointerEvents: "auto",
@@ -16934,75 +17014,77 @@ function XlsxViewerInner({
 
   return (
     <ViewerAppearanceContext.Provider value={{ headerBackgroundColor, headerTextColor, isDark }}>
-      <ViewerContext.Provider value={controller}>
-        {customFileTooLarge !== undefined ? (
-          customFileTooLarge
-        ) : (
-          <div
-            className={classNames("react-xlsx-viewer", className)}
-            style={{
-              blockSize: height,
-              backgroundColor: palette.surface,
-              borderRadius: rounded ? 12 : 0,
-              color: palette.text,
-              display: "flex",
-              flex: "1 1 auto",
-              flexDirection: "column",
-              inlineSize: "100%",
-              isolation: "isolate",
-              maxHeight: scrollTarget === "window" ? undefined : "100%",
-              maxWidth: "100%",
-              minHeight: 0,
-              minWidth: 0,
-              // Any clipping ancestor would become the sticky headers' scroll container in window mode.
-              overflow: scrollTarget === "window" ? "visible" : "hidden",
-              position: "relative",
-              width: "100%"
-            }}
-          >
-            <style>{RANGE_HIGHLIGHT_STYLES}</style>
-            {resolveToolbar(toolbar, showDefaultToolbar, controller, palette)}
-            <div style={{ display: "flex", flex: 1, minHeight: 0, minWidth: 0 }}>
-              <XlsxGrid
-                allowResizeInReadOnly={allowResizeInReadOnly}
-                controller={controller}
-                emptyState={emptyState}
-                enableCanvasSelectionAnimation={enableCanvasSelectionAnimation}
-                enableGestureZoom={enableGestureZoom}
-                errorState={errorState}
-                experimentalCanvas={experimentalCanvas}
-                fileTooLargeState={fileTooLargeState}
-                getCellStyle={getCellStyle}
-                highlightClassName={highlightClassName}
-                loadingComponent={loadingComponent}
-                loadingState={loadingState}
-                onFormControlAction={onFormControlAction}
-                onFormControlChange={onFormControlChange}
-                palette={palette}
-                renderChartLoading={renderChartLoading}
-                renderFormControl={renderFormControl}
-                renderImage={renderImage}
-                renderImageSelection={renderImageSelection}
-                renderScroller={renderScroller}
-                renderTableHeaderMenu={renderTableHeaderMenu}
-                renderActiveCellOverlay={renderActiveCellOverlay}
-                renderCommentIndicator={renderCommentIndicator}
-                onCommentClick={onCommentClick}
-                onCellContextMenu={onCellContextMenu}
-                onFind={onFind}
-                scrollToCell={scrollToCell}
-                cellAnchorIdPrefix={cellAnchorIdPrefix}
-                scrollTarget={scrollTarget}
-                selectionColor={selectionColor}
-                selectionFillColor={selectionFillColor}
-                selectionHeaderColor={selectionHeaderColor}
-                showImages={showImages}
-                stickyTop={stickyTop}
-              />
+      <FormulaEditingProvider>
+        <ViewerContext.Provider value={controller}>
+          {customFileTooLarge !== undefined ? (
+            customFileTooLarge
+          ) : (
+            <div
+              className={classNames("react-xlsx-viewer", className)}
+              style={{
+                blockSize: height,
+                backgroundColor: palette.surface,
+                borderRadius: rounded ? 12 : 0,
+                color: palette.text,
+                display: "flex",
+                flex: "1 1 auto",
+                flexDirection: "column",
+                inlineSize: "100%",
+                isolation: "isolate",
+                maxHeight: scrollTarget === "window" ? undefined : "100%",
+                maxWidth: "100%",
+                minHeight: 0,
+                minWidth: 0,
+                // Any clipping ancestor would become the sticky headers' scroll container in window mode.
+                overflow: scrollTarget === "window" ? "visible" : "hidden",
+                position: "relative",
+                width: "100%"
+              }}
+            >
+              <style>{RANGE_HIGHLIGHT_STYLES}</style>
+              {resolveToolbar(toolbar, showDefaultToolbar, controller, palette)}
+              <div style={{ display: "flex", flex: 1, minHeight: 0, minWidth: 0 }}>
+                <XlsxGrid
+                  allowResizeInReadOnly={allowResizeInReadOnly}
+                  controller={controller}
+                  emptyState={emptyState}
+                  enableCanvasSelectionAnimation={enableCanvasSelectionAnimation}
+                  enableGestureZoom={enableGestureZoom}
+                  errorState={errorState}
+                  experimentalCanvas={experimentalCanvas}
+                  fileTooLargeState={fileTooLargeState}
+                  getCellStyle={getCellStyle}
+                  highlightClassName={highlightClassName}
+                  loadingComponent={loadingComponent}
+                  loadingState={loadingState}
+                  onFormControlAction={onFormControlAction}
+                  onFormControlChange={onFormControlChange}
+                  palette={palette}
+                  renderChartLoading={renderChartLoading}
+                  renderFormControl={renderFormControl}
+                  renderImage={renderImage}
+                  renderImageSelection={renderImageSelection}
+                  renderScroller={renderScroller}
+                  renderTableHeaderMenu={renderTableHeaderMenu}
+                  renderActiveCellOverlay={renderActiveCellOverlay}
+                  renderCommentIndicator={renderCommentIndicator}
+                  onCommentClick={onCommentClick}
+                  onCellContextMenu={onCellContextMenu}
+                  onFind={onFind}
+                  scrollToCell={scrollToCell}
+                  cellAnchorIdPrefix={cellAnchorIdPrefix}
+                  scrollTarget={scrollTarget}
+                  selectionColor={selectionColor}
+                  selectionFillColor={selectionFillColor}
+                  selectionHeaderColor={selectionHeaderColor}
+                  showImages={showImages}
+                  stickyTop={stickyTop}
+                />
+              </div>
             </div>
-          </div>
-        )}
-      </ViewerContext.Provider>
+          )}
+        </ViewerContext.Provider>
+      </FormulaEditingProvider>
     </ViewerAppearanceContext.Provider>
   );
 }
@@ -17020,7 +17102,9 @@ function XlsxViewerProviderWithInlineController({
   const controller = useXlsxViewerController(options);
   return (
     <ViewerAppearanceContext.Provider value={{ isDark }}>
-      <ViewerContext.Provider value={controller}>{children}</ViewerContext.Provider>
+      <FormulaEditingProvider>
+        <ViewerContext.Provider value={controller}>{children}</ViewerContext.Provider>
+      </FormulaEditingProvider>
     </ViewerAppearanceContext.Provider>
   );
 }
@@ -17029,7 +17113,9 @@ export function XlsxViewerProvider({ children, controller, isDark = false, ...op
   if (controller) {
     return (
       <ViewerAppearanceContext.Provider value={{ isDark }}>
-        <ViewerContext.Provider value={controller}>{children}</ViewerContext.Provider>
+        <FormulaEditingProvider>
+          <ViewerContext.Provider value={controller}>{children}</ViewerContext.Provider>
+        </FormulaEditingProvider>
       </ViewerAppearanceContext.Provider>
     );
   }
