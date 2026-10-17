@@ -70,8 +70,6 @@ const ZOOM_MODE_LABELS = {
   "fit-width": "Fit width",
   automatic: "Automatic",
 } satisfies Record<Exclude<ViewerZoomLevel, number>, string>
-const PPTX_THUMBNAIL_FOCUS_RING_CLASS =
-  "group-focus-visible/pptx-thumbnail-sidebar:ring-2 group-focus-visible/pptx-thumbnail-sidebar:ring-ring group-focus-visible/pptx-thumbnail-sidebar:ring-offset-1 group-focus-visible/pptx-thumbnail-sidebar:ring-offset-background"
 
 type UploadedPresentation = {
   file: File
@@ -639,8 +637,10 @@ function PptxSidebarThumbnail({
       isLoading={status !== "ready" && status !== "error"}
       hasError={status === "error"}
       className={cn(
-        "w-full rounded-sm border-0 shadow-xs ring-0 transition-shadow duration-150",
-        isActive && "shadow-sm"
+        "w-28 max-w-full rounded-sm border-0 shadow-none transition-shadow duration-150",
+        isActive
+          ? "ring-2 ring-ring"
+          : "ring-0 group-hover/pptx-thumbnail:ring-1 group-hover/pptx-thumbnail:ring-border"
       )}
     />
   )
@@ -781,9 +781,9 @@ function PptxThumbnailSidebarList({
 
   return (
     <ScrollArea
-      className="h-full"
-      scrollFade
-      viewportClassName="group/pptx-thumbnail-sidebar focus-visible:ring-0 focus-visible:ring-offset-0"
+      className="h-full [&_[data-slot=scroll-area-scrollbar]]:hidden"
+      orientation="vertical"
+      viewportClassName="focus-visible:ring-0 focus-visible:ring-offset-0"
       viewportProps={{
         "aria-activedescendant": activeDescendantId,
         "aria-busy": isLoading || undefined,
@@ -840,11 +840,10 @@ function PptxThumbnailSidebarList({
                   aria-selected={isActive}
                   aria-setsize={slideCount}
                   className={cn(
-                    "flex h-auto w-full cursor-default flex-col items-center gap-2 rounded-md p-2 text-xs transition-colors outline-none select-none hover:bg-sidebar-accent",
+                    "group/pptx-thumbnail flex h-auto w-full cursor-default flex-col items-center gap-2 p-2 text-xs outline-none select-none",
                     isActive
-                      ? "bg-sidebar-accent text-foreground"
-                      : "text-muted-foreground",
-                    isActive && PPTX_THUMBNAIL_FOCUS_RING_CLASS
+                      ? "text-foreground"
+                      : "text-muted-foreground"
                   )}
                   onClick={() => onSelectSlide(thumbnail.slideIndex)}
                 >

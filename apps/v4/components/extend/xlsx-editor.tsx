@@ -14,6 +14,7 @@ import {
   useXlsxViewerSelection,
   useXlsxViewerZoom,
   XlsxFormulaAssistPopup,
+  XlsxFormulaInput,
   XlsxViewer,
   XlsxViewerProvider,
   type XlsxCellAddress,
@@ -2484,6 +2485,9 @@ function EditorToolbar({
             </GroupText>
             <GroupSeparator />
             <Input
+              type="text"
+              aria-label="Formula bar"
+              render={<XlsxFormulaInput />}
               className={cn(
                 "h-8 flex-1",
                 XLSX_EDITOR_FORMULA_INPUT_CHROME_CLASS
@@ -2493,6 +2497,7 @@ function EditorToolbar({
               value={formulaFocused ? formulaDraft : selectedCellInputValue}
               onSelect={formulaAssist.onSelect}
               onBlur={() => {
+                formulaAssist.onBlur()
                 commitFormula()
                 setFormulaFocused(false)
               }}
@@ -2508,7 +2513,13 @@ function EditorToolbar({
                 if (event.key === "Enter") {
                   event.preventDefault()
                   commitFormula()
-                  setFormulaFocused(false)
+                  event.currentTarget.blur()
+                } else if (event.key === "Escape") {
+                  event.preventDefault()
+                  // Blur normally saves; treat the cancelled draft as already handled.
+                  formulaInitialValueRef.current = formulaDraft
+                  setFormulaDraft(selectedCellInputValue)
+                  event.currentTarget.blur()
                 }
               }}
               placeholder="Select a cell, then enter a value or formula"
