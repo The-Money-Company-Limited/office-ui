@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title>React XLSX Playground</title>
+  <defs>
+    <linearGradient id="bg" x1="0%" x2="100%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#1f9d67" />
+      <stop offset="100%" stop-color="#0f5132" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)" />
+  <rect x="28" y="24" width="72" height="80" rx="10" fill="#f7fbf9" />
+  <path d="M44 24h40v18H44z" fill="#d5efe2" />
+  <path d="M28 50h72" stroke="#b7d9c8" stroke-width="4" />
+  <path d="M28 68h72" stroke="#b7d9c8" stroke-width="4" />
+  <path d="M28 86h72" stroke="#b7d9c8" stroke-width="4" />
+  <path d="M52 24v80" stroke="#b7d9c8" stroke-width="4" />
+  <path d="M76 24v80" stroke="#b7d9c8" stroke-width="4" />
+  <path d="M35 95l14-20 14 11 30-38" fill="none" stroke="#1f9d67" stroke-linecap="round" stroke-linejoin="round" stroke-width="8" />
+</svg>

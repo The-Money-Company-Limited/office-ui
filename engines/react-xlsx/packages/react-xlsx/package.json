@@ -1,0 +1,87 @@
+{
+  "name": "@extend-ai/react-xlsx",
+  "version": "0.17.2",
+  "description": "React components and hooks for viewing XLSX workbooks",
+  "license": "MIT",
+  "keywords": [
+    "react",
+    "xlsx",
+    "excel",
+    "spreadsheet",
+    "workbook",
+    "worksheet",
+    "viewer",
+    "xlsx-viewer",
+    "excel-viewer",
+    "spreadsheet-viewer",
+    "charts",
+    "tables"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/extend-hq/react-xlsx.git"
+  },
+  "bugs": {
+    "url": "https://github.com/extend-hq/react-xlsx/issues"
+  },
+  "homepage": "https://github.com/extend-hq/react-xlsx#readme",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./agent": {
+      "types": "./dist/agent.d.ts",
+      "import": "./dist/agent.js",
+      "require": "./dist/agent.cjs"
+    },
+    "./duke_sheets_wasm_bg.wasm": "./dist/duke_sheets_wasm_bg.wasm",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "react-xlsx-agent": "./agent-cli.mjs"
+  },
+  "files": [
+    "dist",
+    "agent-cli.mjs",
+    "vendor/sheets-wasm"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.13.12",
+    "d3-geo": "^3.1.1",
+    "d3-hierarchy": "^3.1.2",
+    "d3-scale": "^4.0.2",
+    "d3-shape": "^3.2.0",
+    "fflate": "^0.8.3",
+    "regl": "^2.1.1",
+    "topojson-client": "^3.1.0",
+    "us-atlas": "^3.0.1",
+    "world-atlas": "^2.0.2"
+  },
+  "scripts": {
+    "build": "tsup --config tsup.config.ts && node ../../scripts/copy-duke-wasm.mjs dist",
+    "test": "node --experimental-strip-types --test src/safe-calculate.test.ts src/builtin-table-styles.test.ts src/cell-text-clip.test.ts src/colors.test.ts src/zip-entry-names.test.ts src/viewer-palette.test.ts src/scroll-display-limit.test.ts src/scroll-viewport.test.ts src/comments.test.ts src/agent.test.ts src/cell-anchors.test.ts src/formula-assist.test.ts src/selection-tools.test.ts build/atlas-json.test.ts src/structural-edits.test.ts src/drawing-geometry.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/d3-geo": "^3.1.0",
+    "@types/d3-hierarchy": "^3.1.7",
+    "@types/d3-scale": "^4.0.9",
+    "@types/d3-shape": "^3.1.8",
+    "@types/geojson": "^7946.0.16",
+    "@types/topojson-client": "^3.1.5"
+  }
+}

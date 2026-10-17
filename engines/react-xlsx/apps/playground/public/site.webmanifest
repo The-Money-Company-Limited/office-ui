@@ -1,0 +1,16 @@
+{
+  "name": "React XLSX Playground",
+  "short_name": "XLSX Playground",
+  "description": "Interactive playground for testing workbook rendering, editing, canvas mode, and spreadsheet behaviors in react-xlsx.",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "theme_color": "#1f9d67",
+  "background_color": "#f4fbf7",
+  "display": "standalone"
+}

@@ -1,0 +1,119 @@
+name: Publish Package
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: publish-package
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      PACKAGE_DIR: packages/react-xlsx
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Read package metadata
+        id: pkg
+        run: |
+          echo "name=$(node -p 'require("./'"${PACKAGE_DIR}"'/package.json").name')" >> "$GITHUB_OUTPUT"
+          echo "version=$(node -p 'require("./'"${PACKAGE_DIR}"'/package.json").version')" >> "$GITHUB_OUTPUT"
+          echo "tag=v$(node -p 'require("./'"${PACKAGE_DIR}"'/package.json").version')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Check npm publish state
+        id: state
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if npm view "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }}" version > /dev/null 2>&1; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stop when this version is already on npm
+        if: steps.state.outputs.already_published == 'true'
+        run: echo "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }} already exists on npm; skipping publish."
+
+      - name: Install dependencies
+        if: steps.state.outputs.already_published != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck package
+        if: steps.state.outputs.already_published != 'true'
+        run: pnpm --filter @extend-ai/react-xlsx typecheck
+
+      - name: Build package
+        if: steps.state.outputs.already_published != 'true'
+        run: pnpm --filter @extend-ai/react-xlsx build
+
+      - name: Publish with npm token bootstrap
+        if: steps.state.outputs.already_published != 'true' && env.NPM_TOKEN != ''
+        working-directory: packages/react-xlsx
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+      - name: Publish with npm trusted publishing
+        if: steps.state.outputs.already_published != 'true' && env.NPM_TOKEN == ''
+        working-directory: packages/react-xlsx
+        run: npm publish --access public
+
+      - name: Push release tag
+        if: steps.state.outputs.already_published != 'true'
+        run: |
+          if git rev-parse -q --verify "refs/tags/${{ steps.pkg.outputs.tag }}" > /dev/null; then
+            echo "${{ steps.pkg.outputs.tag }} already exists; skipping tag push."
+          else
+            git tag "${{ steps.pkg.outputs.tag }}"
+            git push origin "${{ steps.pkg.outputs.tag }}"
+          fi
+
+      - name: Create GitHub release
+        if: steps.state.outputs.already_published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > /tmp/release-notes.md <<EOF
+          Published \`${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }}\` to npm.
+
+          Install with:
+
+          \`\`\`bash
+          pnpm add ${{ steps.pkg.outputs.name }}
+          \`\`\`
+
+          This repository currently publishes the package privately on npm.
+          EOF
+          if gh release view "${{ steps.pkg.outputs.tag }}" > /dev/null 2>&1; then
+            echo "${{ steps.pkg.outputs.tag }} release already exists; skipping release creation."
+          else
+            gh release create "${{ steps.pkg.outputs.tag }}" \
+              --title "${{ steps.pkg.outputs.tag }}" \
+              --notes-file /tmp/release-notes.md
+          fi
