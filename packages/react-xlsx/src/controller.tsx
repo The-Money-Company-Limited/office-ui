@@ -19,6 +19,7 @@ import {
   buildChartSeriesFormula,
   hydrateWorkbookChartStyles,
   loadWorkbookChartAssets,
+  removeWorkbookChart,
   updateWorkbookChartAnchor,
   updateWorkbookChartDefinition,
   type WorkbookChartAssets
@@ -42,6 +43,7 @@ import {
   resolveSheetRowHeightPixels,
   resizeImageRect,
   revokeWorkbookImageAssets,
+  removeWorkbookImage,
   updateWorkbookImageAnchor,
   xlsxAnchorToDukeDrawingAnchor,
   type WorkbookImageAssets,
@@ -3030,6 +3032,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   }, [selectedChart, selectedChartElement, selectedChartId]);
 
   const selectChart = React.useCallback((id: string | null) => {
+    setSelection(null);
+    setActiveCell(null);
     setSelectedImageId(null);
     setSelectedChartId(id);
     setSelectedChartElement(id ? { chartId: id, kind: "chart" } : null);
@@ -3045,6 +3049,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   }, [selectedChartId]);
 
   const selectChartElement = React.useCallback((selection: XlsxChartElementSelection | null) => {
+    setSelection(null);
+    setActiveCell(null);
     setSelectedImageId(null);
     setSelectedChartId(selection?.chartId ?? null);
     setSelectedChartElement(selection);
@@ -3139,6 +3145,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   );
 
   const selectImage = React.useCallback((id: string | null) => {
+    setSelection(null);
+    setActiveCell(null);
     setSelectedChartId(null);
     setSelectedChartElement(null);
     setSelectedImageId(id);
@@ -4243,64 +4251,49 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     };
   }, [getColumnWidthPx, getRowHeightPx]);
 
+  const finishDrawingMutation = React.useCallback((before: SnapshotHistoryEntry, selectedId?: string, kind?: "chart" | "image") => {
+    if (!workbook) return;
+    const bytes = createSavedWorkbookBytes(workbook);
+    installWorkbookSnapshot(Workbook.fromBytes(bytes), { ...before, bytes });
+    setSelection(null);
+    setActiveCell(null);
+    if (kind === "chart") setSelectedChartId(selectedId ?? null);
+    if (kind === "image") setSelectedImageId(selectedId ?? null);
+    pushHistoryEntry(undoStackRef.current, before);
+    redoStackRef.current = [];
+    setHistoryRevision((current) => current + 1);
+  }, [createSavedWorkbookBytes, installWorkbookSnapshot, workbook]);
+
+  const deleteSelectedDrawing = React.useCallback(() => {
+    if (readOnly || !workbook || !imageAssetsRef.current) return;
+    const before = createHistoryEntry();
+    if (!before) return;
+    const chartAssets = ensureChartAssetsHydrated(workbook, sheets);
+    const removed = selectedImageId
+      ? removeWorkbookImage(imageAssetsRef.current, selectedImageId)
+      : selectedChartId && chartAssets
+        ? removeWorkbookChart(imageAssetsRef.current, chartAssets, selectedChartId) : false;
+    if (removed) finishDrawingMutation(before);
+  }, [createHistoryEntry, ensureChartAssetsHydrated, finishDrawingMutation, readOnly, selectedChartId, selectedImageId, sheets, workbook]);
+
   const setChartRect = React.useCallback((id: string, rect: XlsxImageRect, layout?: XlsxDrawingLayout) => {
-    const hydratedChartAssets = ensureChartAssetsHydrated(workbook, sheets);
-    console.info("[react-xlsx debug] setChartRect", {
-      hasActiveSheet: Boolean(activeSheet),
-      hasHydratedChartAssets: Boolean(hydratedChartAssets),
-      hasImageAssets: Boolean(imageAssetsRef.current),
-      hasWorkbook: Boolean(workbook),
-      id,
-      readOnly,
-      rect
-    });
-    if (readOnly || !workbook || !activeSheet || !imageAssetsRef.current || !hydratedChartAssets) {
-      return;
-    }
-
+    const chartAssets = ensureChartAssetsHydrated(workbook, sheets);
+    if (readOnly || !workbook || !activeSheet || !imageAssetsRef.current || !chartAssets) return;
     const worksheet = workbook.getSheet(activeSheet.workbookSheetIndex);
-    const currentChart = getChartById(id);
-    console.info("[react-xlsx debug] currentChart", {
-      activeWorkbookSheetIndex: activeSheet.workbookSheetIndex,
-      editable: currentChart?.editable,
-      found: Boolean(currentChart),
-      originCount: hydratedChartAssets.chartOriginsById.size,
-      workbookSheetIndex: currentChart?.workbookSheetIndex
-    });
-    if (!currentChart || currentChart.editable === false || currentChart.workbookSheetIndex !== activeSheet.workbookSheetIndex) {
-      return;
-    }
-
-    const nextAnchor = rectToImageAnchor(rect, currentChart.anchor, {
+    const chart = getChartById(id);
+    if (!chart || chart.editable === false || chart.workbookSheetIndex !== activeSheet.workbookSheetIndex) return;
+    const anchor = rectToImageAnchor(rect, chart.anchor, {
       contentOffsetLeft: GRID_ROW_HEADER_WIDTH,
       contentOffsetTop: GRID_HEADER_HEIGHT,
       getColumnWidthPx: (col) => layout?.columnWidths[col] ?? getColumnWidthPx(worksheet, col),
       getRowHeightPx: (row) => layout?.rowHeights[row] ?? getRowHeightPx(worksheet, row)
     });
-
-    recordHistoryBeforeMutation();
-    const didUpdateAnchor = updateWorkbookChartAnchor(imageAssetsRef.current, hydratedChartAssets, id, nextAnchor);
-    console.info("[react-xlsx debug] updateWorkbookChartAnchor", { didUpdateAnchor, nextAnchor });
-
-    hydratedChartAssets.chartsByWorkbookSheetIndex = hydratedChartAssets.chartsByWorkbookSheetIndex.map((sheetCharts) => (
-      sheetCharts.map((chart) => chart.id === id ? { ...chart, anchor: nextAnchor } : chart)
-    ));
-
-    setChartsByWorkbookSheetIndex((current) => current.map((sheetCharts) => (
-      sheetCharts.map((chart) => chart.id === id ? { ...chart, anchor: nextAnchor } : chart)
-    )));
-    setRevision((current) => current + 1);
-  }, [
-    activeSheet,
-    getChartById,
-    getColumnWidthPx,
-    getRowHeightPx,
-    ensureChartAssetsHydrated,
-    readOnly,
-    recordHistoryBeforeMutation,
-    sheets,
-    workbook
-  ]);
+    if (JSON.stringify(xlsxAnchorToDukeDrawingAnchor(anchor)) === JSON.stringify(xlsxAnchorToDukeDrawingAnchor(chart.anchor))) return;
+    const before = createHistoryEntry();
+    if (before && updateWorkbookChartAnchor(imageAssetsRef.current, chartAssets, id, anchor)) {
+      finishDrawingMutation(before, id, "chart");
+    }
+  }, [activeSheet, createHistoryEntry, ensureChartAssetsHydrated, finishDrawingMutation, getChartById, getColumnWidthPx, getRowHeightPx, readOnly, sheets, workbook]);
 
   const setImageRect = React.useCallback((id: string, rect: XlsxImageRect, layout?: XlsxDrawingLayout) => {
     if (readOnly || !workbook || !activeSheet || !imageAssetsRef.current) {
@@ -4320,20 +4313,19 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       getRowHeightPx: (row) => layout?.rowHeights[row] ?? getRowHeightPx(worksheet, row)
     });
 
-    recordHistoryBeforeMutation();
-    if (!updateWorkbookImageAnchor(imageAssetsRef.current, id, nextAnchor)) {
-      return;
+    if (JSON.stringify(xlsxAnchorToDukeDrawingAnchor(nextAnchor)) === JSON.stringify(xlsxAnchorToDukeDrawingAnchor(currentImage.anchor))) return;
+    const before = createHistoryEntry();
+    if (before && updateWorkbookImageAnchor(imageAssetsRef.current, id, nextAnchor)) {
+      finishDrawingMutation(before, id, "image");
     }
-
-    setImagesByWorkbookSheetIndex([...imageAssetsRef.current.imagesByWorkbookSheetIndex]);
-    setRevision((current) => current + 1);
   }, [
     activeSheet,
     getColumnWidthPx,
     getImageById,
     getRowHeightPx,
     readOnly,
-    recordHistoryBeforeMutation,
+    createHistoryEntry,
+    finishDrawingMutation,
     workbook
   ]);
 
@@ -5372,6 +5364,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       setRangeStyle,
       setSelectedFormula,
       setZoomScale,
+      deleteSelectedDrawing,
       setChartRect,
       setChartSeriesFormula,
       setImageRect,
@@ -5515,6 +5508,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       setRangeStyle,
       setSelectedFormula,
       setZoomScale,
+      deleteSelectedDrawing,
       setChartRect,
       setChartSeriesFormula,
       setImageRect,

@@ -12,6 +12,7 @@
     "dev": "pnpm --filter @react-xlsx/playground dev",
     "test": "pnpm --filter @extend-ai/react-xlsx test",
     "typecheck": "pnpm -r --filter './packages/*' run typecheck && pnpm --filter @react-xlsx/playground typecheck",
+    "test:drawings:browser": "node --test tests/drawings.browser.mjs",
     "test:structural:browser": "node tests/structural-browser.mjs"
   },
   "devDependencies": {

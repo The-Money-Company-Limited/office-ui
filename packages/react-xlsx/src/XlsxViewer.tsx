@@ -22,6 +22,7 @@ import { MemoChartSvg } from "./chart-renderer";
 import {
   emuToPixels,
   resizeImageRect,
+  snapImageRect,
   resolveRenderedSheetAxisPixels,
   resolveSheetColumnWidthPixels,
   resolveSheetRowHeightPixels
@@ -7218,6 +7219,7 @@ function XlsxGrid({
     clearSelectedChart,
     clearSelectedImage,
     clearSelectedCells,
+    deleteSelectedDrawing,
     continueDeferredLoad,
     deferredLoadFileSize,
     displayFileName,
@@ -13969,7 +13971,7 @@ function XlsxGrid({
       return;
     }
 
-    if (image.hyperlink) {
+    if (image.hyperlink && readOnlyRef.current) {
       openHyperlink(image.hyperlink);
     }
   }, [openHyperlink]);
@@ -15017,6 +15019,8 @@ function XlsxGrid({
                     ? IMAGE_HANDLE_POSITIONS.map((position) => (
                         <div
                           key={position}
+                          aria-label={`Resize image ${position}`}
+                          data-xlsx-resize={position}
                           onPointerDown={(event) => startImageResize(event, image, rect, position)}
                           style={resolveImageHandleStyle(position, DRAWING_SELECTION_STROKE, drawingSelectionSurface, zoomFactor)}
                         />
@@ -15052,6 +15056,8 @@ function XlsxGrid({
                   ? IMAGE_HANDLE_POSITIONS.map((position) => (
                       <div
                         key={position}
+                        aria-label={`Resize image ${position}`}
+                        data-xlsx-resize={position}
                         onPointerDown={(event) => startImageResize(event, image, rect, position)}
                         style={resolveImageHandleStyle(position, DRAWING_SELECTION_STROKE, drawingSelectionSurface, zoomFactor)}
                       />
@@ -15068,6 +15074,8 @@ function XlsxGrid({
           ? <div style={style}>{renderImage({ defaultNode, image, rect, style })}</div>
           : <div style={style}>{defaultNode}</div>}
         <div
+          data-xlsx-drawing="image"
+          aria-label={image.name ?? "Image"}
           onClick={() => handleImageClick(image)}
           onPointerDown={(event) => startImageMove(event, image, rect)}
           style={{
@@ -15135,6 +15143,8 @@ function XlsxGrid({
             ? IMAGE_HANDLE_POSITIONS.map((position) => (
                 <div
                   key={position}
+                  aria-label={`Resize chart ${position}`}
+                  data-xlsx-resize={position}
                   onPointerDown={(event) => startChartResize(event, chart, rect, position)}
                   style={resolveImageHandleStyle(position, DRAWING_SELECTION_STROKE, drawingSelectionSurface, zoomFactor)}
                 />
@@ -15147,8 +15157,10 @@ function XlsxGrid({
       return (
         <React.Fragment key={`${pane}-${chart.id}`}>
           <div
+            data-xlsx-drawing="chart"
+            aria-label={chart.title ?? "Chart"}
             onClick={() => handleChartClick(chart)}
-            onPointerDown={(event) => startChartMove(event, chart, rect)}
+            onPointerDownCapture={(event) => startChartMove(event, chart, rect)}
             style={{
               ...style,
               cursor: canEditChart && selectedChartId === chart.id ? "move" : "cell",
@@ -15186,7 +15198,7 @@ function XlsxGrid({
     position: "sticky",
     top: stickyTopOffset,
     width: 0,
-    zIndex: 25
+    zIndex: 33
   };
   const leftOverlayStyle: React.CSSProperties = {
     height: 0,
@@ -15195,7 +15207,7 @@ function XlsxGrid({
     pointerEvents: "none",
     position: "sticky",
     width: 0,
-    zIndex: 25
+    zIndex: 33
   };
   const cornerOverlayStyle: React.CSSProperties = {
     height: 0,
@@ -15205,7 +15217,7 @@ function XlsxGrid({
     position: "sticky",
     top: stickyTopOffset,
     width: 0,
-    zIndex: 26
+    zIndex: 34
   };
   const canvasOverlayPaneBaseStyle: React.CSSProperties = {
     overflow: "hidden",
@@ -15501,27 +15513,34 @@ function XlsxGrid({
   function installImageInteractionListeners(pointerId: number) {
     imageInteractionCleanupRef.current?.();
 
+    const viewport = getScrollViewport();
+    const startScroll = { left: viewport?.scrollLeft ?? 0, top: viewport?.scrollTop ?? 0 };
+    const startViewportRect = viewport?.getBoundingClientRect();
+    const columnEdges = colPrefixSums.map((value) => value + displayRowHeaderWidth);
+    const rowEdges = rowPrefixSums.map((value) => value + displayHeaderHeight);
     const resolveInteractionRect = (
       interaction: NonNullable<typeof imageInteractionRef.current>,
-      clientX: number,
-      clientY: number
+      event: PointerEvent
     ) => {
-      const deltaX = clientX - interaction.startClientX;
-      const deltaY = clientY - interaction.startClientY;
-      return clampImageRect(
-        interaction.type === "move"
-          ? {
-              ...interaction.baseRect,
-              left: interaction.baseRect.left + deltaX,
-              top: interaction.baseRect.top + deltaY
-            }
-          : resizeImageRect(interaction.baseRect, interaction.handle, deltaX, deltaY, displayImageMinSize),
-        {
-          contentOffsetLeft: displayRowHeaderWidth,
-          contentOffsetTop: displayHeaderHeight,
-          minSizePx: displayImageMinSize
-        }
-      );
+      const pane = resolveDrawingPane(interaction.baseRect);
+      const viewportRect = viewport?.getBoundingClientRect();
+      const deltaX = event.clientX - interaction.startClientX
+        + (startViewportRect && viewportRect ? startViewportRect.left - viewportRect.left : 0)
+        + (pane === "scroll" || pane === "top" ? (getScrollViewport()?.scrollLeft ?? 0) - startScroll.left : 0);
+      const deltaY = event.clientY - interaction.startClientY
+        + (startViewportRect && viewportRect ? startViewportRect.top - viewportRect.top : 0)
+        + (pane === "scroll" || pane === "left" ? (getScrollViewport()?.scrollTop ?? 0) - startScroll.top : 0);
+      let rect = interaction.type === "move"
+        ? { ...interaction.baseRect, left: interaction.baseRect.left + deltaX, top: interaction.baseRect.top + deltaY }
+        : resizeImageRect(interaction.baseRect, interaction.handle, deltaX, deltaY, displayImageMinSize, event.shiftKey || interaction.handle.length === 2);
+      if (interaction.type === "move" && !event.altKey) {
+        rect = snapImageRect(rect, columnEdges, rowEdges, 5 * zoomFactor);
+      }
+      return clampImageRect(rect, {
+        contentOffsetLeft: displayRowHeaderWidth,
+        contentOffsetTop: displayHeaderHeight,
+        minSizePx: displayImageMinSize
+      });
     };
 
     const handlePointerMove = (event: PointerEvent) => {
@@ -15539,7 +15558,7 @@ function XlsxGrid({
       if (!interaction.didMove && (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3)) {
         interaction.didMove = true;
       }
-      const nextRect = resolveInteractionRect(interaction, event.clientX, event.clientY);
+      const nextRect = resolveInteractionRect(interaction, event);
       scheduleImagePreviewRect({ id: interaction.imageId, rect: nextRect });
     };
 
@@ -15566,7 +15585,7 @@ function XlsxGrid({
         setImagePreviewRect(pendingPreview);
       }
       const finalRect = interaction
-        ? resolveInteractionRect(interaction, event.clientX, event.clientY)
+        ? resolveInteractionRect(interaction, event)
         : null;
       imageInteractionRef.current = null;
       imageInteractionCleanupRef.current = null;
@@ -15578,7 +15597,7 @@ function XlsxGrid({
         if (interaction.didMove) {
           skipNextImageClickRef.current = interaction.imageId;
         }
-        if (interaction.didMove && finalRect) {
+        if (event.type !== "pointercancel" && interaction.didMove && finalRect) {
           setImageRect(interaction.imageId, toLogicalRect(finalRect), {
             columnWidths: actualColWidths,
             rowHeights: actualRowHeights
@@ -15598,27 +15617,34 @@ function XlsxGrid({
   function installChartInteractionListeners(pointerId: number) {
     chartInteractionCleanupRef.current?.();
 
+    const viewport = getScrollViewport();
+    const startScroll = { left: viewport?.scrollLeft ?? 0, top: viewport?.scrollTop ?? 0 };
+    const startViewportRect = viewport?.getBoundingClientRect();
+    const columnEdges = colPrefixSums.map((value) => value + displayRowHeaderWidth);
+    const rowEdges = rowPrefixSums.map((value) => value + displayHeaderHeight);
     const resolveInteractionRect = (
       interaction: NonNullable<typeof chartInteractionRef.current>,
-      clientX: number,
-      clientY: number
+      event: PointerEvent
     ) => {
-      const deltaX = clientX - interaction.startClientX;
-      const deltaY = clientY - interaction.startClientY;
-      return clampImageRect(
-        interaction.type === "move"
-          ? {
-              ...interaction.baseRect,
-              left: interaction.baseRect.left + deltaX,
-              top: interaction.baseRect.top + deltaY
-            }
-          : resizeImageRect(interaction.baseRect, interaction.handle, deltaX, deltaY, 48 * zoomFactor),
-        {
-          contentOffsetLeft: displayRowHeaderWidth,
-          contentOffsetTop: displayHeaderHeight,
-          minSizePx: 48 * zoomFactor
-        }
-      );
+      const pane = resolveDrawingPane(interaction.baseRect);
+      const viewportRect = viewport?.getBoundingClientRect();
+      const deltaX = event.clientX - interaction.startClientX
+        + (startViewportRect && viewportRect ? startViewportRect.left - viewportRect.left : 0)
+        + (pane === "scroll" || pane === "top" ? (getScrollViewport()?.scrollLeft ?? 0) - startScroll.left : 0);
+      const deltaY = event.clientY - interaction.startClientY
+        + (startViewportRect && viewportRect ? startViewportRect.top - viewportRect.top : 0)
+        + (pane === "scroll" || pane === "left" ? (getScrollViewport()?.scrollTop ?? 0) - startScroll.top : 0);
+      let rect = interaction.type === "move"
+        ? { ...interaction.baseRect, left: interaction.baseRect.left + deltaX, top: interaction.baseRect.top + deltaY }
+        : resizeImageRect(interaction.baseRect, interaction.handle, deltaX, deltaY, 48 * zoomFactor, event.shiftKey);
+      if (interaction.type === "move" && !event.altKey) {
+        rect = snapImageRect(rect, columnEdges, rowEdges, 5 * zoomFactor);
+      }
+      return clampImageRect(rect, {
+        contentOffsetLeft: displayRowHeaderWidth,
+        contentOffsetTop: displayHeaderHeight,
+        minSizePx: 48 * zoomFactor
+      });
     };
 
     const handlePointerMove = (event: PointerEvent) => {
@@ -15636,7 +15662,7 @@ function XlsxGrid({
       if (!interaction.didMove && (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3)) {
         interaction.didMove = true;
       }
-      const nextRect = resolveInteractionRect(interaction, event.clientX, event.clientY);
+      const nextRect = resolveInteractionRect(interaction, event);
       scheduleChartPreviewRect({ id: interaction.chartId, rect: nextRect });
     };
 
@@ -15663,7 +15689,7 @@ function XlsxGrid({
         setChartPreviewRect(pendingPreview);
       }
       const finalRect = interaction
-        ? resolveInteractionRect(interaction, event.clientX, event.clientY)
+        ? resolveInteractionRect(interaction, event)
         : null;
       chartInteractionRef.current = null;
       chartInteractionCleanupRef.current = null;
@@ -15675,7 +15701,7 @@ function XlsxGrid({
         if (interaction.didMove) {
           skipNextChartClickRef.current = interaction.chartId;
         }
-        if (interaction.didMove && finalRect) {
+        if (event.type !== "pointercancel" && interaction.didMove && finalRect) {
           setChartRect(interaction.chartId, toLogicalRect(finalRect), {
             columnWidths: actualColWidths,
             rowHeights: actualRowHeights
@@ -15868,6 +15894,31 @@ function XlsxGrid({
         redo();
         return;
       }
+    }
+
+    if (selectedChartId || selectedImageId) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        clearSelectedChart();
+        clearSelectedImage();
+      } else if (!readOnly && (event.key === "Delete" || event.key === "Backspace")) {
+        event.preventDefault();
+        deleteSelectedDrawing();
+      } else if (!readOnly && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+        event.preventDefault();
+        const drawing = selectedImageId
+          ? imageRects.find(({ image }) => image.id === selectedImageId)
+          : chartRects.find(({ chart }) => chart.id === selectedChartId);
+        if (drawing) {
+          const step = (event.shiftKey ? 10 : 1) * zoomFactor;
+          const rect = { ...drawing.rect,
+            left: drawing.rect.left + (event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0),
+            top: drawing.rect.top + (event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0) };
+          const setRect = selectedImageId ? setImageRect : setChartRect;
+          setRect((selectedImageId ?? selectedChartId)!, toLogicalRect(rect), { columnWidths: actualColWidths, rowHeights: actualRowHeights });
+        }
+      }
+      return;
     }
 
     const currentCell = resolveCurrentCell();
@@ -16148,6 +16199,7 @@ function XlsxGrid({
     startEditing(currentCell, text);
   };
   const handleClipboardCopy = (event: React.ClipboardEvent, cut: boolean) => {
+    if (selectedChartId || selectedImageId) return;
     if (editingCell || (cut && readOnly)) {
       return;
     }
@@ -16169,6 +16221,7 @@ function XlsxGrid({
     void (cut ? cutSelectionToClipboard() : copySelectionToClipboard());
   };
   const handleClipboardPaste = (event: React.ClipboardEvent) => {
+    if (selectedChartId || selectedImageId) return;
     if (editingCell || readOnly) {
       return;
     }
@@ -16333,7 +16386,7 @@ function XlsxGrid({
     width: totalWidth
   });
   const drawingOverlayPanes = (experimentalCanvas && hasCanvasDomDrawingOverlays) || rangeHighlightNodes.length > 0 || commentIndicatorNodes.length > 0 || cellAnchorPaneNodes ? (
-    <div style={{ ...canvasBodyViewportLayerStyle, zIndex: experimentalCanvas ? 23 : 34 }}>
+    <div style={{ ...canvasBodyViewportLayerStyle, zIndex: 34 }}>
       {overlayPanes.map(({ pane, style, ref, left, top }) => (
         <div key={pane} style={style}>
           <div ref={ref} style={overlayPaneContentStyle(left, top)}>

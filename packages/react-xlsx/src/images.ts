@@ -3969,7 +3969,8 @@ export function resizeImageRect(
   handle: XlsxImageResizeHandlePosition,
   deltaX: number,
   deltaY: number,
-  minimumSize = 16
+  minimumSize = 16,
+  keepRatio = false
 ) {
   let left = rect.left;
   let top = rect.top;
@@ -3991,6 +3992,23 @@ export function resizeImageRect(
     height += deltaY;
   }
 
+  if (keepRatio) {
+    const horizontal = handle.includes("w") || handle.includes("e");
+    const vertical = handle.includes("n") || handle.includes("s");
+    const scaleX = width / rect.width;
+    const scaleY = height / rect.height;
+    const scale = Math.max(minimumSize / rect.width, minimumSize / rect.height,
+      !horizontal ? scaleY : !vertical ? scaleX
+        : Math.abs(scaleX - 1) >= Math.abs(scaleY - 1) ? scaleX : scaleY);
+    width = rect.width * scale;
+    height = rect.height * scale;
+    left = handle.includes("w") ? rect.left + rect.width - width
+      : horizontal ? rect.left : rect.left + (rect.width - width) / 2;
+    top = handle.includes("n") ? rect.top + rect.height - height
+      : vertical ? rect.top : rect.top + (rect.height - height) / 2;
+    return { height, left, top, width };
+  }
+
   if (width < minimumSize) {
     if (handle.includes("w")) {
       left -= minimumSize - width;
@@ -4005,4 +4023,39 @@ export function resizeImageRect(
   }
 
   return { height, left, top, width };
+}
+
+export function snapImageRect(rect: XlsxImageRect, columns: number[], rows: number[], threshold: number): XlsxImageRect {
+  const snap = (start: number, size: number, edges: number[]) => {
+    let adjustment = threshold + 1;
+    for (const edge of edges) {
+      for (const offset of [edge - start, edge - start - size]) {
+        if (Math.abs(offset) < Math.abs(adjustment)) adjustment = offset;
+      }
+    }
+    return Math.abs(adjustment) <= threshold ? start + adjustment : start;
+  };
+  return { ...rect, left: snap(rect.left, rect.width, columns), top: snap(rect.top, rect.height, rows) };
+}
+
+export function removeWorkbookImage(assets: WorkbookImageAssets, imageId: string) {
+  const origin = assets.imageOriginsById.get(imageId);
+  if (!origin) return false;
+  const xml = readArchiveText(assets.archive, origin.drawingPath);
+  const document = xml ? parseXml(xml) : null;
+  if (!document) return false;
+  const anchor = createImageAnchorNodes(document)[origin.anchorIndex];
+  if (!anchor) return false;
+  let picture = anchor;
+  for (const index of origin.picturePath) {
+    const child = Array.from(picture.childNodes).filter(isElementNode)[index];
+    if (!child) return false;
+    picture = child;
+  }
+  if (picture.localName !== "pic") return false;
+  if (picture.parentElement === anchor) anchor.remove();
+  else picture.remove();
+  assets.archive[origin.drawingPath] = strToU8(serializeXml(document));
+  assets.dirtyArchivePaths.add(origin.drawingPath);
+  return true;
 }

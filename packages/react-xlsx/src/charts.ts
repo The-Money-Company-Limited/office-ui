@@ -4447,3 +4447,17 @@ export function updateWorkbookChartDefinition(
   imageAssets.dirtyArchivePaths.add(normalizeArchivePath(origin.chartPath));
   return true;
 }
+
+export function removeWorkbookChart(imageAssets: WorkbookImageAssets, chartAssets: WorkbookChartAssets, chartId: string) {
+  const origin = chartAssets.chartOriginsById.get(chartId);
+  if (!origin) return false;
+  const xml = readArchiveText(imageAssets.archive, origin.drawingPath);
+  const document = xml ? parseXml(xml) : null;
+  if (!document) return false;
+  const anchor = getChartAnchorNodes(document)[origin.anchorIndex];
+  if (!anchor) return false;
+  anchor.remove();
+  imageAssets.archive[origin.drawingPath] = strToU8(serializeXml(document));
+  imageAssets.dirtyArchivePaths.add(origin.drawingPath);
+  return true;
+}

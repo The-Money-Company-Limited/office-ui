@@ -1278,6 +1278,7 @@ export interface XlsxViewerController {
   sortTable: (tableName: string, columnIndex: number, direction: XlsxTableSortDirection) => void;
   setChartSeriesFormula: (chartId: string, seriesIndex: number, formula: string) => boolean;
   selectImage: (id: string | null) => void;
+  deleteSelectedDrawing: () => void;
   setChartRect: (id: string, rect: XlsxImageRect, layout?: XlsxDrawingLayout) => void;
   setImageRect: (id: string, rect: XlsxImageRect, layout?: XlsxDrawingLayout) => void;
   getRowsBatchAsync?: (workbookSheetIndex: number, startRow: number, rowCount: number) => Promise<unknown[] | null>;
