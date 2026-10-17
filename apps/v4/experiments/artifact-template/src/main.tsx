@@ -149,7 +149,7 @@ function App() {
           ) : artifact?.kind === "slides" ? (
             <SlidesEditor
               src={documentProps.src}
-              fileName={documentProps.fileName}
+              title={artifact.title}
               isDark={isDark}
               onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
             />

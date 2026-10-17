@@ -14,7 +14,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 0 12px;
   background: var(--glass-fill);
   border-bottom: 1px solid var(--surface-rim);
   box-shadow:
@@ -22,59 +22,30 @@
     0 0 0 0.5px var(--surface-outline),
     var(--surface-shadow);
   backdrop-filter: var(--surface-blur);
+  -webkit-backdrop-filter: var(--surface-blur);
 }
 .slides-header {
   min-height: 48px;
+  overflow-x: auto;
 }
-.slides-header strong {
-  font-size: 14px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.slides-filename {
-  flex: 1;
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
-.slides-file-icon {
-  color: var(--primary);
-  padding: 2px 6px;
-  border-radius: 6px;
-  background: var(--accent);
-}
-.slides-header button,
-.slides-ribbon button,
-.slides-exit {
-  cursor: pointer;
-  white-space: nowrap;
-  border-radius: var(--radius-control);
-  padding: 6px 10px;
-  font-size: 12px;
+.slides-header button:not(.slides-present) {
   background: var(--raised-fill);
   box-shadow: var(--raised-shadow);
 }
-.slides-header button:hover,
-.slides-ribbon button:hover {
+.slides-header button:not(.slides-present):hover {
   background: var(--raised-fill-hover);
 }
-.slides-header button:disabled,
-.slides-ribbon button:disabled {
-  opacity: 0.45;
-  cursor: default;
+.slides-header button:not(.slides-present):active {
+  background: var(--raised-fill-pressed);
+  box-shadow: var(--raised-shadow-pressed);
 }
 .artifact-slides button:focus-visible {
   outline: 2px solid var(--ring);
-  outline-offset: 3px;
+  outline-offset: 2px;
 }
 .slides-ribbon {
-  min-height: 44px;
-  font-size: 11px;
-  color: var(--muted-foreground);
-  flex-wrap: wrap;
-}
-.slides-memory {
-  margin-left: auto;
+  min-height: 48px;
+  gap: 4px;
 }
 .slides-strip {
   position: fixed;
@@ -301,21 +272,13 @@
   right: 10px;
   color: white;
   background: #222b;
+  cursor: pointer;
+  border-radius: var(--radius-control);
+  padding: 6px 10px;
+  font-size: 12px;
   opacity: 0;
 }
 .slides-exit:hover,
 .slides-exit:focus-visible {
   opacity: 1;
-}
-@media (max-width: 700px) {
-  .slides-filename,
-  .slides-ribbon > span:first-of-type {
-    display: none;
-  }
-  .slides-header {
-    flex-wrap: wrap;
-  }
-  .slides-header strong {
-    flex: 1;
-  }
 }

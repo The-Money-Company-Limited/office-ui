@@ -3,12 +3,12 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { createServer } from "node:http"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import JSZip from "jszip"
 
 const root = process.cwd()
 const { chromium } = await import(
   pathToFileURL(path.join(root, ".cod1460/node_modules/playwright/index.mjs"))
 )
-const { default: JSZip } = await import("../node_modules/jszip/lib/index.js")
 const bundle =
   process.env.SLIDES_BUNDLE || "apps/v4/experiments/artifact-template/dist"
 const output = "apps/v4/components/extend/slides/tests/results"
@@ -132,6 +132,241 @@ async function near(actual, expected, message) {
     `${message}: ${actual} ≈ ${expected}`
   )
 }
+
+for (const action of ["drag", "resize", "nudge", "nested drag"]) {
+  await run(`polish flow ${action}`, async (page) => {
+    await page
+      .context()
+      .addCookies([{ name: "rotated", value: "1", url: base }])
+    if (action === "nested drag") {
+      await page.route("**/deck/slides/welcome.html", async (route) => {
+        const response = await route.fetch()
+        const html = (await response.text())
+          .replace(
+            '<h1 id="welcome-title"',
+            '<div style="display: flex; flex-direction: column; gap: 50px;">' +
+              '<h1 id="welcome-title"'
+          )
+          .replace(
+            '</p>\n  <div style="position:',
+            '</p></div>\n  <div style="position:'
+          )
+        await route.fulfill({ response, body: html })
+      })
+    }
+    await open(page)
+    const title = page.locator("#welcome-title")
+    const beforeHTML = await page
+      .locator("#welcome")
+      .evaluate((el) => el.outerHTML)
+    const boxes = () =>
+      page.locator("#welcome").evaluate((canvas) => {
+        const origin = canvas.getBoundingClientRect()
+        return [...canvas.querySelectorAll("p, p span")]
+          .sort((a, b) => a.id.localeCompare(b.id))
+          .map((el) => {
+            const rect = el.getBoundingClientRect()
+            return [
+              rect.x - origin.x,
+              rect.y - origin.y,
+              rect.width,
+              rect.height,
+            ]
+          })
+      })
+    const before = await boxes()
+    await title.click()
+    assert.equal(
+      await page.locator("#welcome").evaluate((el) => el.outerHTML),
+      beforeHTML,
+      "selecting does not pin flow"
+    )
+    const start = await title.boundingBox()
+    if (action === "resize") {
+      await drag(page, page.locator('[data-resize="se"]').first(), 60, 25)
+    } else if (action === "nudge") {
+      await page.keyboard.press("Shift+ArrowRight")
+    } else {
+      await drag(page, title, 70, 40)
+    }
+    const changed = await title.boundingBox()
+    assert.ok(
+      action === "resize"
+        ? changed.width > start.width + 30
+        : changed.x > start.x + 3
+    )
+    const after = await boxes()
+    for (let i = 0; i < before.length; i++) {
+      for (let j = 0; j < 4; j++) {
+        assert.ok(
+          Math.abs(after[i][j] - before[i][j]) < 0.5,
+          `sibling ${i} coordinate ${j} stays at its original box: ${after[i][j]} ≈ ${before[i][j]}`
+        )
+      }
+    }
+    const editedHTML = await page
+      .locator("#welcome")
+      .evaluate((el) => el.outerHTML)
+    await page.getByRole("button", { name: "Undo", exact: true }).click()
+    assert.equal(
+      await page.locator("#welcome").evaluate((el) => el.outerHTML),
+      beforeHTML,
+      "one undo restores all flow siblings"
+    )
+    assert.equal(
+      await page
+        .getByRole("button", { name: "Undo", exact: true })
+        .isDisabled(),
+      true
+    )
+    await page.getByRole("button", { name: "Redo", exact: true }).click()
+    assert.equal(
+      await page.locator("#welcome").evaluate((el) => el.outerHTML),
+      editedHTML
+    )
+  })
+}
+
+await run("polish header and download menu", async (page) => {
+  await open(page)
+  const header = page.locator(".slides-header")
+  assert.equal(
+    await header.locator("strong").innerText(),
+    "Cool Computers · A shared canvas"
+  )
+  assert.equal((await header.innerText()).includes("deck.json"), false)
+  assert.equal(
+    await header.locator("svg").count(),
+    3,
+    "file, theme and download icons"
+  )
+  assert.equal(await header.getByRole("button").count(), 3)
+  assert.equal(
+    await page.getByText("Click to select", { exact: false }).count(),
+    0
+  )
+  assert.equal(
+    await page.getByText("Edits stay in this tab.", { exact: false }).count(),
+    0
+  )
+  for (const name of ["Undo", "Redo"]) {
+    const button = page.getByRole("button", { name, exact: true })
+    assert.equal(await button.isDisabled(), true)
+    assert.equal(await button.innerText(), "")
+    assert.equal(await button.locator("svg").count(), 1)
+  }
+  const download = page.getByRole("button", { name: "Download", exact: true })
+  assert.equal(await download.innerText(), "")
+  await download.focus()
+  await page.keyboard.press("Enter")
+  await page.getByRole("menuitem", { name: "Deck as .zip" }).waitFor()
+  assert.equal(
+    await page.getByRole("menuitem", { name: "PowerPoint .pptx" }).count(),
+    1
+  )
+  await page.keyboard.press("Escape")
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute("aria-label") === "Download"
+  )
+  await page.getByRole("menuitem").first().waitFor({ state: "hidden" })
+  assert.equal(await page.getByRole("menuitem").count(), 0)
+  await page.screenshot({ path: `${output}/header.png` })
+})
+
+async function assertReturnedSlide(page, id, number) {
+  await page.locator(".slides-toolbar").waitFor()
+  await page
+    .waitForFunction(
+      ({ id, number }) => {
+        const top = document.getElementById(id)?.getBoundingClientRect().top
+        return (
+          top >= 100 &&
+          top < window.innerHeight / 3 &&
+          document
+            .querySelector(`[aria-label="Slide ${number}"]`)
+            ?.getAttribute("aria-current") === "page"
+        )
+      },
+      { id, number }
+    )
+    .catch(async (error) => {
+      console.log(
+        await page.evaluate(
+          (id) => ({
+            id,
+            top: document.getElementById(id)?.getBoundingClientRect().top,
+            active: document
+              .querySelector('[aria-current="page"]')
+              ?.getAttribute("aria-label"),
+            scroll: window.scrollY,
+            height: window.innerHeight,
+            hash: window.location.hash,
+          }),
+          id
+        )
+      )
+      throw error
+    })
+  assert.equal(new URL(page.url()).hash, `#${id}`)
+  assert.equal(await page.locator(".slides-stage").count(), 4)
+}
+
+await run("polish native fullscreen exit", async (page) => {
+  await open(page)
+  await page.getByRole("button", { name: "Present", exact: true }).click()
+  await page.waitForFunction(() => Boolean(document.fullscreenElement))
+  await page.keyboard.press("ArrowRight")
+  await page.keyboard.press("Space")
+  await page.locator("#delivery").waitFor()
+  // Chrome handles native Escape itself before dispatching a DOM key event.
+  await page.evaluate(() => document.exitFullscreen())
+  await assertReturnedSlide(page, "delivery", 3)
+})
+
+await run("polish fallback presentation scroll and Escape", async (page) => {
+  await page.addInitScript(() => {
+    Element.prototype.requestFullscreen = () =>
+      Promise.reject(new Error("Unavailable"))
+  })
+  await open(page)
+  await page.evaluate(() => {
+    const background = document.createElement("div")
+    background.style.height = "4000px"
+    document.body.append(background)
+  })
+  await page.getByRole("button", { name: "Present", exact: true }).click()
+  await page.locator(".slides-presenting").waitFor()
+  const scroll = await page.evaluate(() => window.scrollY)
+  await page.mouse.move(800, 500)
+  await page.mouse.wheel(0, 700)
+  await page.waitForTimeout(250)
+  assert.equal(
+    await page.evaluate(() => window.scrollY),
+    scroll,
+    "wheel cannot scroll the page behind presentation"
+  )
+  for (const [key, id] of [
+    ["ArrowRight", "workflow"],
+    ["ArrowDown", "delivery"],
+    ["ArrowUp", "workflow"],
+    ["Space", "delivery"],
+    ["PageDown", "adoption"],
+    ["PageUp", "delivery"],
+  ]) {
+    await page.keyboard.press(key)
+    await page.locator(`#${id}`).waitFor()
+    assert.equal(await page.evaluate(() => window.scrollY), scroll)
+  }
+  await page.keyboard.press("Escape")
+  await assertReturnedSlide(page, "delivery", 3)
+  const restoredScroll = await page.evaluate(() => window.scrollY)
+  await page.mouse.wheel(0, 400)
+  await page.waitForTimeout(250)
+  assert.ok(
+    (await page.evaluate(() => window.scrollY)) > restoredScroll,
+    "page scroll restored after presentation"
+  )
+})
 
 await run("sanitizer and deck contract", async (page) => {
   const warnings = []
@@ -324,8 +559,7 @@ await run("window anchors theme and presentation", async (page) => {
   await page.locator("#adoption").waitFor()
   await page.screenshot({ path: `${output}/presenting.png` })
   await page.keyboard.press("Escape")
-  await page.locator(".slides-toolbar").waitFor()
-  assert.equal(await page.locator(".slides-stage").count(), 4)
+  await assertReturnedSlide(page, "adoption", 4)
 })
 
 await run("zip and editable PowerPoint export", async (page) => {
@@ -335,7 +569,8 @@ await run("zip and editable PowerPoint export", async (page) => {
   await page.keyboard.insertText("Exported canvas")
   await page.keyboard.press("Escape")
   let pending = page.waitForEvent("download")
-  await page.getByRole("button", { name: "Download .zip" }).click()
+  await page.getByRole("button", { name: "Download", exact: true }).click()
+  await page.getByRole("menuitem", { name: "Deck as .zip" }).click()
   let download = await pending
   await download.saveAs(`${output}/deck.zip`)
   const zip = await JSZip.loadAsync(await readFile(`${output}/deck.zip`))
@@ -360,7 +595,8 @@ await run("zip and editable PowerPoint export", async (page) => {
     "Exported canvas"
   )
   pending = page.waitForEvent("download", { timeout: 45000 })
-  await page.getByRole("button", { name: "Export .pptx" }).click()
+  await page.getByRole("button", { name: "Download", exact: true }).click()
+  await page.getByRole("menuitem", { name: "PowerPoint .pptx" }).click()
   download = await pending
   await download.saveAs(`${output}/deck.pptx`)
   const pptx = await JSZip.loadAsync(await readFile(`${output}/deck.pptx`))

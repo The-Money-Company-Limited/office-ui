@@ -109,7 +109,46 @@ export function copyTypography(
   }
 }
 
+export function pinFlowSiblings(
+  element: HTMLElement | SVGElement,
+  canvas: HTMLElement,
+  scale: number
+) {
+  if (getComputedStyle(element).position === "absolute") return
+  const parents: Element[] = []
+  for (
+    let parent = element.parentElement;
+    parent;
+    parent = parent.parentElement
+  ) {
+    parents.unshift(parent)
+    if (parent === canvas) break
+  }
+  for (const parent of parents) {
+    // Measure and capture styles before removing anything from this flow.
+    const pins = [...parent.children]
+      .filter(
+        (child): child is HTMLElement | SVGElement =>
+          (child instanceof HTMLElement || child instanceof SVGElement) &&
+          getComputedStyle(child).display !== "none" &&
+          getComputedStyle(child).position !== "absolute"
+      )
+      .map((child) =>
+        preparePin(child, canvas, elementBox(child, canvas, scale))
+      )
+    for (const pin of pins) pin()
+  }
+}
+
 export function pinElement(
+  element: HTMLElement | SVGElement,
+  canvas: HTMLElement,
+  box: Box
+) {
+  preparePin(element, canvas, box)()
+}
+
+function preparePin(
   element: HTMLElement | SVGElement,
   canvas: HTMLElement,
   box: Box
@@ -135,26 +174,29 @@ export function pinElement(
       : parseFloat(getComputedStyle(element).height)
   copyTypography(element, element)
 
-  canvas.insertBefore(element, canvas.querySelector(":scope > aside"))
-  Object.assign(element.style, {
-    position: "absolute",
-    margin: "0px",
-    transform:
-      matrix.a === 1 && matrix.b === 0 && matrix.c === 0 && matrix.d === 1
-        ? "none"
-        : `matrix(${matrix.a}, ${matrix.b}, ${matrix.c}, ${matrix.d}, 0, 0)`,
-    transformOrigin: "0px 0px",
-    width: `${width}px`,
-    height: `${height}px`,
-    right: "auto",
-    bottom: "auto",
-    boxSizing: "border-box",
-    minWidth: "0px",
-    minHeight: "0px",
-    maxWidth: "none",
-    maxHeight: "none",
-  })
-  applyBox(element, box)
+  return () => {
+    if (element.parentElement !== canvas)
+      canvas.insertBefore(element, canvas.querySelector(":scope > aside"))
+    Object.assign(element.style, {
+      position: "absolute",
+      margin: "0px",
+      transform:
+        matrix.a === 1 && matrix.b === 0 && matrix.c === 0 && matrix.d === 1
+          ? "none"
+          : `matrix(${matrix.a}, ${matrix.b}, ${matrix.c}, ${matrix.d}, 0, 0)`,
+      transformOrigin: "0px 0px",
+      width: `${width}px`,
+      height: `${height}px`,
+      right: "auto",
+      bottom: "auto",
+      boxSizing: "border-box",
+      minWidth: "0px",
+      minHeight: "0px",
+      maxWidth: "none",
+      maxHeight: "none",
+    })
+    applyBox(element, box)
+  }
 }
 
 export function applyBox(element: HTMLElement | SVGElement, box: Box) {

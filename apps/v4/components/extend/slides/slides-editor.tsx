@@ -1,5 +1,15 @@
 import * as React from "react"
 
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Separator } from "@/components/ui/separator"
+import { IconPlaceholder } from "@/components/icon-placeholder"
+
 import { SlideCanvas } from "./slide-canvas"
 import { loadDeck, SLIDE_HEIGHT, SLIDE_WIDTH, type Deck } from "./validate.js"
 
@@ -9,12 +19,12 @@ type History = { past: Deck[]; current: Deck; future: Deck[] }
 
 export function SlidesEditor({
   src,
-  fileName = "deck.json",
+  title,
   isDark,
   onIsDarkChange,
 }: {
   src: string
-  fileName?: string
+  title: string
   isDark: boolean
   onIsDarkChange: (dark: boolean) => void
 }) {
@@ -26,17 +36,40 @@ export function SlidesEditor({
   const [busy, setBusy] = React.useState(false)
   const surface = React.useRef<HTMLDivElement>(null)
   const presentation = React.useRef(false)
+  const returnSlide = React.useRef<string | null>(null)
   const deck = history?.current
 
-  const exitPresentation = React.useCallback(() => {
+  const exitPresentation = React.useCallback(async () => {
+    if (!presentation.current) return
     presentation.current = false
+    if (document.fullscreenElement) await document.exitFullscreen()
+    returnSlide.current = deck?.manifest.order[active] || null
     setPresenting(false)
-    if (document.fullscreenElement) void document.exitFullscreen()
-    requestAnimationFrame(() => {
-      if (deck)
-        document.getElementById(deck.manifest.order[active])?.scrollIntoView()
-    })
   }, [active, deck])
+
+  React.useLayoutEffect(() => {
+    if (!presenting) {
+      const id = returnSlide.current
+      if (id) {
+        returnSlide.current = null
+        window.history.replaceState(null, "", `#${id}`)
+        document
+          .getElementById(id)
+          ?.scrollIntoView({ behavior: "instant", block: "start" })
+      }
+      return
+    }
+    const root = document.documentElement
+    const body = document.body
+    const rootOverflow = root.style.overflow
+    const bodyOverflow = body.style.overflow
+    root.style.overflow = "hidden"
+    body.style.overflow = "hidden"
+    return () => {
+      root.style.overflow = rootOverflow
+      body.style.overflow = bodyOverflow
+    }
+  }, [presenting])
 
   React.useEffect(() => {
     const controller = new AbortController()
@@ -119,22 +152,19 @@ export function SlidesEditor({
 
   React.useEffect(() => {
     function fullscreenChange() {
-      if (!document.fullscreenElement) {
-        presentation.current = false
-        setPresenting(false)
-      }
+      if (!document.fullscreenElement) void exitPresentation()
     }
     document.addEventListener("fullscreenchange", fullscreenChange)
     return () =>
       document.removeEventListener("fullscreenchange", fullscreenChange)
-  }, [])
+  }, [exitPresentation])
 
   React.useEffect(() => {
     if (!presenting || !deck) return
     function keyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault()
-        exitPresentation()
+        void exitPresentation()
       } else if (
         ["ArrowRight", "ArrowDown", " ", "PageDown"].includes(event.key)
       ) {
@@ -253,63 +283,131 @@ export function SlidesEditor({
       {!presenting && (
         <header className="slides-toolbar">
           <div className="slides-header">
-            <span className="slides-file-icon" aria-hidden="true">
-              ▤
-            </span>
-            <strong title={fileName}>{deck?.manifest.title || fileName}</strong>
-            <span className="slides-filename">{fileName}</span>
-            <button
-              type="button"
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                <IconPlaceholder
+                  lucide="FileText"
+                  tabler="IconFileText"
+                  hugeicons="File01Icon"
+                  phosphor="FileDocIcon"
+                  remixicon="RiFileTextLine"
+                  className="size-4"
+                />
+              </span>
+              <strong
+                className="truncate text-sm font-semibold"
+                title={deck?.manifest.title || title}
+              >
+                {deck?.manifest.title || title}
+              </strong>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon-sm"
               onClick={() => onIsDarkChange(!isDark)}
               aria-label={
                 isDark ? "Use light appearance" : "Use dark appearance"
               }
+              title={isDark ? "Use light appearance" : "Use dark appearance"}
             >
-              {isDark ? "☀" : "☾"}
-            </button>
-            <button
-              type="button"
-              disabled={!deck || busy}
-              onClick={() => void download("zip")}
-            >
-              Download .zip
-            </button>
-            <button
-              type="button"
-              disabled={!deck || busy}
-              onClick={() => void download("pptx")}
-            >
-              {busy ? "Exporting…" : "Export .pptx"}
-            </button>
-            <button
-              type="button"
+              {isDark ? (
+                <IconPlaceholder
+                  lucide="Sun"
+                  tabler="IconSun"
+                  hugeicons="Sun03Icon"
+                  phosphor="SunIcon"
+                  remixicon="RiSunLine"
+                  className="size-4"
+                />
+              ) : (
+                <IconPlaceholder
+                  lucide="Moon"
+                  tabler="IconMoon"
+                  hugeicons="Moon02Icon"
+                  phosphor="MoonIcon"
+                  remixicon="RiMoonLine"
+                  className="size-4"
+                />
+              )}
+            </Button>
+            <Separator
+              orientation="vertical"
+              className="mx-1 h-4 self-center"
+            />
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                disabled={!deck || busy}
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Download"
+                    title="Download"
+                  />
+                }
+              >
+                <IconPlaceholder
+                  lucide="Download"
+                  tabler="IconDownload"
+                  hugeicons="Download01Icon"
+                  phosphor="DownloadSimpleIcon"
+                  remixicon="RiDownload2Line"
+                  className="size-4"
+                />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => void download("zip")}>
+                  Deck as .zip
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void download("pptx")}>
+                  PowerPoint .pptx
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              className="slides-present"
+              size="sm"
               disabled={!deck}
               onClick={() => void present()}
             >
               Present
-            </button>
+            </Button>
           </div>
           <div className="slides-ribbon">
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Undo"
+              title="Undo"
               disabled={!history?.past.length}
               onClick={undo}
             >
-              Undo
-            </button>
-            <button
-              type="button"
+              <IconPlaceholder
+                lucide="Undo2"
+                tabler="IconArrowBackUp"
+                hugeicons="Undo02Icon"
+                phosphor="ArrowUUpLeftIcon"
+                remixicon="RiArrowGoBackLine"
+                className="size-4"
+              />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Redo"
+              title="Redo"
               disabled={!history?.future.length}
               onClick={redo}
             >
-              Redo
-            </button>
-            <span>
-              Click to select · Double-click to edit · Drag handles to resize
-            </span>
-            <span className="slides-memory" role="status">
-              Edits stay in this tab. Download to keep them.
-            </span>
+              <IconPlaceholder
+                lucide="Redo2"
+                tabler="IconArrowForwardUp"
+                hugeicons="Redo02Icon"
+                phosphor="ArrowUUpRightIcon"
+                remixicon="RiArrowGoForwardLine"
+                className="size-4"
+              />
+            </Button>
           </div>
         </header>
       )}

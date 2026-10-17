@@ -5,6 +5,7 @@ import {
   copyTypography,
   elementBox,
   pinElement,
+  pinFlowSiblings,
   resizeBox,
   snapBox,
   type Box,
@@ -142,6 +143,7 @@ export function SlideCanvas({
     if (!drag.moved && Math.hypot(dx, dy) < 3 / scale) return
     if (!drag.moved) {
       host.current?.setPointerCapture(event.pointerId)
+      pinFlowSiblings(drag.element, canvas(), scale)
       pinElement(drag.element, canvas(), drag.box)
     }
     drag.moved = true
@@ -228,6 +230,7 @@ export function SlideCanvas({
       event.preventDefault()
       const current = elementBox(element, canvas(), scale)
       const amount = event.shiftKey ? 10 : 1
+      pinFlowSiblings(element, canvas(), scale)
       pinElement(element, canvas(), {
         ...current,
         x:
