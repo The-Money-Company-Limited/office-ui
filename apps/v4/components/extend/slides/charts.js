@@ -99,6 +99,36 @@ export function readChart(figure) {
       .map((name) => CHART_PALETTE[name] || CHART_PALETTE.blue),
   }
 }
+export function niceScale(min, max) {
+  if (min === max) {
+    min = Math.min(0, min)
+    max = Math.max(1, max)
+  }
+  const roughStep = (max - min) / 4
+  const magnitude = 10 ** Math.floor(Math.log10(roughStep))
+  const step =
+    [1, 2, 2.5, 5, 10].find((value) => value >= roughStep / magnitude) *
+    magnitude
+  const start = Math.floor(min / step),
+    end = Math.ceil(max / step)
+  const ticks = Array.from({ length: end - start + 1 }, (_, i) =>
+    Number(((start + i) * step).toPrecision(12))
+  )
+  return { min: ticks[0], max: ticks.at(-1), step, ticks }
+}
+export function chartValueScale(chart) {
+  const values = chart.series.flatMap((series) => series.values)
+  const positive = chart.categories.map((_, i) =>
+    chart.series.reduce((sum, series) => sum + Math.max(0, series.values[i]), 0)
+  )
+  const negative = chart.categories.map((_, i) =>
+    chart.series.reduce((sum, series) => sum + Math.min(0, series.values[i]), 0)
+  )
+  return niceScale(
+    Math.min(0, ...(chart.stacked ? negative : values)),
+    Math.max(0, ...(chart.stacked ? positive : values))
+  )
+}
 export function writeChartRows(figure, rows) {
   const table = figure.ownerDocument.createElement("table")
   for (const [index, values] of rows.entries()) {
@@ -219,21 +249,8 @@ export function renderCharts(root, interactive = false) {
         angle = next
       })
     } else {
-      const totals = chart.categories.map((_, i) =>
-        chart.series.reduce(
-          (sum, series) => sum + Math.max(0, series.values[i]),
-          0
-        )
-      )
-      const negatives = chart.categories.map((_, i) =>
-        chart.series.reduce(
-          (sum, series) => sum + Math.min(0, series.values[i]),
-          0
-        )
-      )
-      const values = chart.series.flatMap((series) => series.values)
-      const min = Math.min(0, ...(chart.stacked ? negatives : values)),
-        max = Math.max(0, ...(chart.stacked ? totals : values)) || 1
+      const axis = chartValueScale(chart)
+      const { min, max } = axis
       const bar = chart.type === "bar"
       const valuePosition = (value) =>
         bar
@@ -241,16 +258,17 @@ export function renderCharts(root, interactive = false) {
           : bottom - ((value - min) / (max - min)) * height
       const count = chart.categories.length
       const step = (bar ? height : width) / count
-      const xs = chart.categories.map(Number),
-        xmin = Math.min(...xs),
-        xmax = Math.max(...xs)
+      const xs = chart.categories.map(Number)
+      const xAxis =
+        chart.type === "scatter"
+          ? niceScale(Math.min(...xs), Math.max(...xs))
+          : null
       const categoryPosition = (i) =>
         chart.type === "scatter"
-          ? left + ((xs[i] - xmin) / (xmax - xmin || 1)) * width
+          ? left + ((xs[i] - xAxis.min) / (xAxis.max - xAxis.min)) * width
           : (bar ? top : left) + step * (i + 0.5)
-      for (let i = 0; i <= 4; i++) {
-        const value = min + ((max - min) * i) / 4,
-          pos = valuePosition(value)
+      for (const value of axis.ticks) {
+        const pos = valuePosition(value)
         if (chart.gridlines)
           add("line", {
             x1: bar ? pos : left,
@@ -268,15 +286,26 @@ export function renderCharts(root, interactive = false) {
           17
         )
       }
-      chart.categories.forEach((name, i) =>
-        label(
-          bar ? left - 12 : categoryPosition(i),
-          bar ? categoryPosition(i) + 6 : bottom + 28,
-          name,
-          bar ? "end" : "middle",
-          18
+      if (xAxis)
+        xAxis.ticks.forEach((value) =>
+          label(
+            left + ((value - xAxis.min) / (xAxis.max - xAxis.min)) * width,
+            bottom + 28,
+            String(value),
+            "middle",
+            18
+          )
         )
-      )
+      else
+        chart.categories.forEach((name, i) =>
+          label(
+            bar ? left - 12 : categoryPosition(i),
+            bar ? categoryPosition(i) + 6 : bottom + 28,
+            name,
+            bar ? "end" : "middle",
+            18
+          )
+        )
       const positive = Array(count).fill(0),
         negative = Array(count).fill(0)
       chart.series.forEach((series, s) => {

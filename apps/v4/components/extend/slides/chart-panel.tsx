@@ -1,5 +1,15 @@
 import * as React from "react"
 
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
+
 import {
   CHART_PALETTE,
   CHART_TYPES,
@@ -20,6 +30,7 @@ const ICONS = [
 
 export function ChartPanel({
   figure,
+  docked,
   tab,
   onTab,
   onCommit,
@@ -28,6 +39,7 @@ export function ChartPanel({
   onRedo,
   style,
 }: {
+  docked: boolean
   figure: Element
   tab: "Type" | "Data" | "Style"
   onTab: (tab: "Type" | "Data" | "Style") => void
@@ -59,6 +71,7 @@ export function ChartPanel({
   return (
     <div
       className="slides-chart-panel"
+      data-docked={docked || undefined}
       role="dialog"
       aria-label="Chart controls"
       style={style}
@@ -75,7 +88,7 @@ export function ChartPanel({
           if (event.shiftKey) onRedo()
           else onUndo()
         }
-        if (event.key === "Escape") {
+        if (event.key === "Escape" && !event.defaultPrevented) {
           event.preventDefault()
           onClose()
         }
@@ -135,20 +148,18 @@ export function ChartPanel({
       )}
       {tab === "Data" && (
         <>
-          <p className="slides-chart-help">
-            Paste spreadsheet cells into the grid. The first row names series
-            {chart.type === "scatter"
-              ? "; the first column contains numeric X values."
-              : "; the first column names categories."}
-          </p>
           <div className="slides-chart-grid">
             <table aria-label="Chart data">
               <tbody>
                 {chart.rows.map((row, r) => (
                   <tr key={r}>
                     {row.map((value, c) => (
-                      <td key={c}>
+                      <td
+                        key={c}
+                        className={r === 0 ? "slides-chart-series" : undefined}
+                      >
                         <input
+                          autoFocus={r === 0 && c === 0}
                           aria-label={`Row ${r + 1} column ${c + 1}`}
                           value={value}
                           onChange={(event) => {
@@ -189,6 +200,22 @@ export function ChartPanel({
                             rows(next)
                           }}
                         />
+                        {r === 0 && c > 0 && chart.series.length > 1 && (
+                          <button
+                            type="button"
+                            className="slides-chart-remove-series"
+                            aria-label={`Remove series ${c}`}
+                            onClick={() =>
+                              rows(
+                                readChart(figure).rows.map((row) =>
+                                  row.filter((_, i) => i !== c)
+                                )
+                              )
+                            }
+                          >
+                            ×
+                          </button>
+                        )}
                       </td>
                     ))}
                     {r > 0 && (
@@ -209,28 +236,6 @@ export function ChartPanel({
                     )}
                   </tr>
                 ))}
-                <tr>
-                  {chart.rows[0]?.map((_, c) => (
-                    <td key={c}>
-                      {c > 0 && (
-                        <button
-                          type="button"
-                          aria-label={`Remove series ${c}`}
-                          disabled={chart.series.length <= 1}
-                          onClick={() =>
-                            rows(
-                              readChart(figure).rows.map((row) =>
-                                row.filter((_, i) => i !== c)
-                              )
-                            )
-                          }
-                        >
-                          Remove
-                        </button>
-                      )}
-                    </td>
-                  ))}
-                </tr>
               </tbody>
             </table>
           </div>
@@ -276,7 +281,7 @@ export function ChartPanel({
           ].map(([name, label, value]) => (
             <label key={name}>
               {label}
-              <input
+              <Input
                 value={value}
                 maxLength={200}
                 onChange={(event) => attribute(name, event.target.value, false)}
@@ -284,30 +289,18 @@ export function ChartPanel({
               />
             </label>
           ))}
-          <label>
-            Legend
-            <select
-              aria-label="Legend"
-              value={chart.legend}
-              onChange={(event) => attribute("legend", event.target.value)}
-            >
-              {["none", "top", "bottom", "left", "right"].map((position) => (
-                <option key={position}>{position}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Number format
-            <select
-              aria-label="Number format"
-              value={chart.format}
-              onChange={(event) => attribute("format", event.target.value)}
-            >
-              {["number", "percent", "currency"].map((format) => (
-                <option key={format}>{format}</option>
-              ))}
-            </select>
-          </label>
+          <ChartSelect
+            label="Legend"
+            value={chart.legend}
+            options={["none", "top", "bottom", "left", "right"]}
+            onChange={(value) => attribute("legend", value)}
+          />
+          <ChartSelect
+            label="Number format"
+            value={chart.format}
+            options={["number", "percent", "currency"]}
+            onChange={(value) => attribute("format", value)}
+          />
           {[
             ["labels", "Data labels", chart.labels],
             ...(!round ? [["gridlines", "Gridlines", chart.gridlines]] : []),
@@ -316,11 +309,10 @@ export function ChartPanel({
               : []),
           ].map(([name, label, checked]) => (
             <label className="slides-chart-check" key={String(name)}>
-              <input
-                type="checkbox"
+              <Switch
                 checked={Boolean(checked)}
-                onChange={(event) =>
-                  attribute(String(name), String(event.target.checked))
+                onCheckedChange={(checked) =>
+                  attribute(String(name), String(checked))
                 }
               />
               {label}
@@ -330,33 +322,30 @@ export function ChartPanel({
             ? chart.categories
             : chart.series.map((series) => series.name)
           ).map((name, i) => (
-            <label key={i}>
-              {name} color
-              <select
-                aria-label={`${name} color`}
-                value={Object.keys(CHART_PALETTE).find(
+            <ChartSelect
+              key={i}
+              label={`${name} color`}
+              value={
+                Object.keys(CHART_PALETTE).find(
                   (key) =>
                     CHART_PALETTE[key] === chart.colors[i % chart.colors.length]
-                )}
-                onChange={(event) => {
-                  const colors = Array.from(
-                    { length: Math.max(i + 1, chart.colors.length) },
-                    (_, index) =>
-                      Object.keys(CHART_PALETTE).find(
-                        (key) =>
-                          CHART_PALETTE[key] ===
-                          chart.colors[index % chart.colors.length]
-                      )!
-                  )
-                  colors[i] = event.target.value
-                  attribute("colors", colors.join(","))
-                }}
-              >
-                {Object.keys(CHART_PALETTE).map((color) => (
-                  <option key={color}>{color}</option>
-                ))}
-              </select>
-            </label>
+                )!
+              }
+              options={Object.keys(CHART_PALETTE)}
+              onChange={(value) => {
+                const colors = Array.from(
+                  { length: Math.max(i + 1, chart.colors.length) },
+                  (_, index) =>
+                    Object.keys(CHART_PALETTE).find(
+                      (key) =>
+                        CHART_PALETTE[key] ===
+                        chart.colors[index % chart.colors.length]
+                    )!
+                )
+                colors[i] = value
+                attribute("colors", colors.join(","))
+              }}
+            />
           ))}
         </div>
       )}
@@ -365,6 +354,55 @@ export function ChartPanel({
           {errors.join(" ")}
         </p>
       )}
+    </div>
+  )
+}
+
+function ChartSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: string
+  options: string[]
+  onChange: (value: string) => void
+}) {
+  const [open, setOpen] = React.useState(false)
+  const caption = (value: string) => value[0].toUpperCase() + value.slice(1)
+  return (
+    <div
+      className="slides-chart-field"
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && open) {
+          event.stopPropagation()
+          event.preventDefault()
+          setOpen(false)
+        }
+      }}
+    >
+      <span>{label}</span>
+      <Select
+        open={open}
+        onOpenChange={setOpen}
+        value={value}
+        onValueChange={(value) => {
+          if (value) onChange(value)
+        }}
+        modal={false}
+      >
+        <SelectTrigger size="sm" aria-label={label}>
+          <SelectValue>{caption(value)}</SelectValue>
+        </SelectTrigger>
+        <SelectContent className="z-40" alignItemWithTrigger={false}>
+          {options.map((option) => (
+            <SelectItem key={option} value={option}>
+              {caption(option)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   )
 }

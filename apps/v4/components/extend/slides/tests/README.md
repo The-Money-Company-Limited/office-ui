@@ -160,8 +160,8 @@ control, the existing checker, `pnpm artifact-template:build`, staging and all
 slides browser cases. Browser cases cover live value edits, type/series/legend
 changes, undo, TSV paste, invalid draft cancellation, keyboard entry, both themes,
 ZIP reload, and native chart XML/workbooks for all seven types. It then builds
-HEAD's unchanged editor in an isolated fixture and requires both new chart
-browser cases to fail, and checks the exported PPTX archive.
+the reviewer's committed editor (`0edc7d6`) in an isolated fixture and requires
+all six chart-review cases to fail, and checks the exported PPTX archive.
 
 Results and screenshots are under `tests/results/`: `chart-units.json`,
 `chart-checker/report.json`, `chart-checker.log`, `chart-artifact-build.log`,
@@ -176,3 +176,47 @@ editor. The sample checker reported 4 slides, 0 errors, 0 warnings. PPTX XML
 assertions passed for all seven types (including charts inside a rasterized
 container), and the PPTX archive passed `unzip -t`. Light/dark screenshots were
 visually inspected. Desktop PowerPoint itself was not opened.
+
+### Chart review regressions
+
+The same verification command now covers 19 browser cases. The six review cases
+check panel/selection separation at 500, 900, 1440 and 2560px, sidebar canvas
+resizing, a left-side attachment and controls after a drag, SVG/PPTX nice ticks,
+paste without a hint,
+series-header removal with keyboard focus and undo, app Style controls with
+nested Escape handling in both themes, and thumbnail rendering before any edit.
+The original 13 cases still cover edits, undo, paste and all seven native chart
+export types. Nice-scale units cover decimal, zero, negative and stacked ranges,
+with behavior-removal controls.
+
+Review screenshots use `chart-placement-*.png`, `chart-review-style-*.png` and
+`chart-thumbnail-load.png`; the axis export is `chart-nice-scale.pptx`. The
+committed negative control is pinned so it remains useful after these fixes are
+committed. This verifies archive/XML output, not desktop PowerPoint rendering.
+
+The final drag-release and Data focus adjustments were checked by running the placement case
+against the preceding bundle (expected failure: controls never open), then
+rebuilding and rerunning the full release browser suite. The existing editing
+case also caught a delayed-focus race (the value was inserted into the header);
+Data now focuses on mount, with no animation-frame callback. Exact follow-up
+commands from `~/Desktop/Code/office-remote`:
+
+```sh
+./r run office-ui 'cd apps/v4 && node node_modules/eslint/bin/eslint.js components/extend/slides/*.js components/extend/slides/*.ts components/extend/slides/*.tsx components/extend/slides/tests/*.mjs components/extend/slides/tests/*.ts && node node_modules/typescript/bin/tsc --noEmit -p . && pnpm artifact-template:build > components/extend/slides/tests/results/chart-artifact-build.log 2>&1'
+./r run office-ui 'node apps/v4/components/extend/slides/tests/stage.mjs && SLIDES_BUNDLE=apps/v4/components/extend/slides/tests/results/staging/valid sh apps/v4/components/extend/slides/tests/run-browser.sh && cp apps/v4/components/extend/slides/tests/results/results.json apps/v4/components/extend/slides/tests/results/chart-positive.json && unzip -t apps/v4/components/extend/slides/tests/results/editable-chart.pptx'
+```
+
+Final Modal results (2026-10-17): ESLint and whole-app TypeScript passed; full
+`artifact-template:build` passed with the existing Vite warnings. All 19 browser
+cases passed against the final release bundle; the fast chart editing/export
+case then passed three additional runs. All six review cases failed against
+`0edc7d6` at their expected assertions. Unit mutation controls, checker and PPTX
+XML/archive checks passed. The sample has 4 slides, 0 errors and 0 warnings.
+Desktop/narrow and light/dark screenshots were inspected. No desktop PowerPoint
+application was used.
+
+Repeated fast-edit check:
+
+```sh
+./r run office-ui 'for chart_attempt in 1 2 3; do SLIDES_BUNDLE=apps/v4/components/extend/slides/tests/results/staging/valid SLIDES_CASE="charts editing" sh apps/v4/components/extend/slides/tests/run-browser.sh || exit 1; done; cp apps/v4/components/extend/slides/tests/results/chart-positive.json apps/v4/components/extend/slides/tests/results/results.json'
+```

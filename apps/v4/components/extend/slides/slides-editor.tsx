@@ -10,7 +10,9 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { IconPlaceholder } from "@/components/icon-placeholder"
 
+import { chartPanelLayout } from "./chart-layout"
 import { renderCharts } from "./charts.js"
+import type { Box } from "./geometry"
 import { SlideCanvas } from "./slide-canvas"
 import { loadDeck, SLIDE_HEIGHT, SLIDE_WIDTH, type Deck } from "./validate.js"
 
@@ -40,12 +42,23 @@ export function SlidesEditor({
   const returnSlide = React.useRef<string | null>(null)
   const deck = history?.current
 
-  React.useLayoutEffect(() => {
-    for (const thumbnail of surface.current?.querySelectorAll(
-      ".slides-thumbnail-content"
-    ) || [])
-      renderCharts(thumbnail)
-  }, [deck, presenting])
+  const [chartSelection, setChartSelection] = React.useState<{
+    id: string
+    box: Box
+  } | null>(null)
+  const onChartSelection = React.useCallback((id: string, box: Box | null) => {
+    setChartSelection((current) => {
+      if (!box) return current?.id === id ? null : current
+      if (
+        current?.id === id &&
+        Object.keys(box).every(
+          (key) => box[key as keyof Box] === current.box[key as keyof Box]
+        )
+      )
+        return current
+      return { id, box }
+    })
+  }, [])
 
   const exitPresentation = React.useCallback(async () => {
     if (!presentation.current) return
@@ -256,7 +269,7 @@ export function SlidesEditor({
     }
   }
 
-  const scale = Math.max(
+  const naturalScale = Math.max(
     0.05,
     Math.min(
       (size.width - (presenting ? 32 : 208)) / SLIDE_WIDTH,
@@ -265,9 +278,33 @@ export function SlidesEditor({
     )
   )
 
+  const chartLayout =
+    chartSelection && !presenting
+      ? chartPanelLayout(chartSelection.box, naturalScale, size.width)
+      : null
+  const reserve = chartLayout?.sidebar ? chartLayout.width + 24 : 0
+  const stripWidth = chartLayout?.compact ? 0 : 152
+  const scale = reserve
+    ? Math.max(
+        0.05,
+        Math.min(
+          naturalScale,
+          (size.width - stripWidth - 48 - reserve) / SLIDE_WIDTH
+        )
+      )
+    : naturalScale
+
   return (
     <div
       ref={surface}
+      data-chart-sidebar={chartLayout?.sidebar || undefined}
+      data-chart-compact={chartLayout?.compact || undefined}
+      style={
+        {
+          "--slides-chart-reserve": `${reserve}px`,
+          "--slides-strip-width": `${stripWidth}px`,
+        } as React.CSSProperties
+      }
       onKeyDown={(event) => {
         if (
           presenting ||
@@ -447,14 +484,7 @@ export function SlidesEditor({
                   onClick={() => goTo(index)}
                 >
                   <span className="slides-thumbnail-frame">
-                    <span
-                      className="slides-thumbnail-content slides-content"
-                      aria-hidden="true"
-                      inert
-                      dangerouslySetInnerHTML={{
-                        __html: deck.slides[id].replace(/ id="[^"]*"/g, ""),
-                      }}
-                    />
+                    <SlideThumbnailContent html={deck.slides[id]} />
                   </span>
                   <span>{index + 1}</span>
                 </button>
@@ -479,6 +509,12 @@ export function SlidesEditor({
                       onChange={(html) => updateSlide(id, html)}
                       onUndo={undo}
                       onRedo={redo}
+                      chartOpen={chartSelection?.id === id}
+                      chartLayout={
+                        chartSelection?.id === id ? chartLayout : null
+                      }
+                      onChartSelection={onChartSelection}
+                      viewportWidth={size.width}
                     />
                     {!presenting && (
                       <span className="slides-page-label">
@@ -501,5 +537,21 @@ export function SlidesEditor({
         </>
       )}
     </div>
+  )
+}
+
+function SlideThumbnailContent({ html }: { html: string }) {
+  const content = React.useRef<HTMLSpanElement>(null)
+  React.useLayoutEffect(() => {
+    content.current!.innerHTML = html.replace(/ id="[^"]*"/g, "")
+    renderCharts(content.current!)
+  }, [html])
+  return (
+    <span
+      ref={content}
+      className="slides-thumbnail-content slides-content"
+      aria-hidden="true"
+      inert
+    />
   )
 }

@@ -10,7 +10,12 @@ const results = path.join(app, "components/extend/slides/tests/results")
 const fixture = path.join(results, "baseline-source")
 const baseline = path.join(results, "baseline-bundle")
 const charts = process.argv.includes("--charts")
-const revision = charts ? "HEAD" : "acb9dfce7fd6e9d0395364785753efbc763fe3bf"
+const review = process.argv.includes("--chart-review")
+const revision = review
+  ? "0edc7d6ecbd6834db82f5692cf6191e8ff6f45bc"
+  : charts
+    ? "bbedbc4"
+    : "acb9dfce7fd6e9d0395364785753efbc763fe3bf"
 const { default: ts } = await import(
   pathToFileURL(path.join(app, "node_modules/typescript/lib/typescript.js"))
 )
@@ -23,6 +28,7 @@ for (const file of [
   "slides.css",
   "export.ts",
   "validate.js",
+  ...(review ? ["charts.js", "chart-panel.tsx"] : []),
 ]) {
   const source = execFileSync(
     "git",
@@ -74,7 +80,7 @@ await writeFile(
 assert.equal(build.status, 0, "baseline build")
 for (const entry of ["artifact.json", "deck"])
   await cp(
-    path.join(results, charts ? "staging/valid" : "bundle", entry),
+    path.join(results, charts || review ? "staging/valid" : "bundle", entry),
     path.join(baseline, entry),
     { recursive: true }
   )
@@ -85,7 +91,7 @@ const browser = spawnSync(
     env: {
       ...process.env,
       SLIDES_BUNDLE: baseline,
-      SLIDES_CASE: charts ? "charts " : "polish ",
+      SLIDES_CASE: review ? "chart review " : charts ? "charts " : "polish ",
     },
     encoding: "utf8",
   }
@@ -103,7 +109,7 @@ assert.equal(
 const cases = JSON.parse(
   await readFile(path.join(results, "results.json"), "utf8")
 )
-assert.equal(cases.length, charts ? 2 : 7)
+assert.equal(cases.length, review ? 6 : charts ? 2 : 7)
 assert.ok(
   cases.every((test) => !test.pass),
   "every regression fails without the fixes"

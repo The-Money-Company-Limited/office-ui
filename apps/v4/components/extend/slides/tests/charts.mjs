@@ -101,6 +101,53 @@ try {
     results.push(test.name)
     console.log(`PASS ${test.name}; fails with its behavior removed`)
   }
+  async function scales(text) {
+    const actual = await page.evaluate(async (text) => {
+      const { niceScale, chartValueScale } = await import(
+        `data:text/javascript;base64,${btoa(text)}`
+      )
+      return {
+        ticks: [
+          [0, 90],
+          [-90, 0],
+          [-30, 90],
+          [0, 0],
+          [0, 0.009],
+        ].map(([min, max]) => niceScale(min, max).ticks),
+        stacked: chartValueScale({
+          categories: ["A", "B"],
+          series: [{ values: [40, -30] }, { values: [50, -40] }],
+          stacked: true,
+        }),
+      }
+    }, text)
+    assert.deepEqual(actual.ticks, [
+      [0, 25, 50, 75, 100],
+      [-100, -75, -50, -25, 0],
+      [-50, 0, 50, 100],
+      [0, 0.25, 0.5, 0.75, 1],
+      [0, 0.0025, 0.005, 0.0075, 0.01],
+    ])
+    assert.deepEqual(actual.stacked.ticks, [-100, -50, 0, 50, 100])
+  }
+  await scales(source)
+  await assert.rejects(
+    () =>
+      scales(source.replace("value >= roughStep / magnitude", "value >= 10")),
+    { name: "AssertionError" }
+  )
+  await assert.rejects(
+    () =>
+      scales(
+        source
+          .replace("chart.stacked ? negative : values", "values")
+          .replace("chart.stacked ? positive : values", "values")
+      ),
+    { name: "AssertionError" }
+  )
+  console.log(
+    "PASS nice axis scales, decimals, zero, negatives and stacked bounds; fails without each behavior"
+  )
   async function renderer(text) {
     const output = await page.evaluate(async (text) => {
       const charts = await import(`data:text/javascript;base64,${btoa(text)}`)

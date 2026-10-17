@@ -14,7 +14,7 @@ node apps/v4/components/extend/slides/tests/checker.mjs > "$results/chart-checke
 node apps/v4/components/extend/slides/tests/stage.mjs
 SLIDES_BUNDLE="$results/staging/valid" sh apps/v4/components/extend/slides/tests/run-browser.sh
 cp "$results/results.json" "$results/chart-positive.json"
-node apps/v4/components/extend/slides/tests/baseline.mjs --charts
+node apps/v4/components/extend/slides/tests/baseline.mjs --chart-review
 cp "$results/chart-positive.json" "$results/results.json"
 unzip -t "$results/editable-chart.pptx" > "$results/chart-archive.log"
 printf '%s\n' 'PASS chart verification: lint, TypeScript, units, checker, artifact build, staging, browser, negative controls and PPTX archive'

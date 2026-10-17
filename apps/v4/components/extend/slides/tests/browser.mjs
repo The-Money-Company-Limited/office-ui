@@ -672,7 +672,8 @@ await run("charts editing and native export", async (page) => {
   await panel.getByRole("button", { name: "Add series", exact: true }).click()
   assert.equal(await chart.locator("tr").first().locator("th").count(), 3)
   await panel.getByRole("button", { name: "Style", exact: true }).click()
-  await panel.getByLabel("Legend", { exact: true }).selectOption("right")
+  await panel.getByRole("combobox", { name: "Legend", exact: true }).click()
+  await page.getByRole("option", { name: "Right", exact: true }).click()
   assert.equal(await chart.getAttribute("data-legend"), "right")
   await page.getByRole("button", { name: "Undo", exact: true }).click()
   assert.equal(await chart.getAttribute("data-legend"), "none")
@@ -812,6 +813,241 @@ await run("charts seven native PowerPoint types", async (page) => {
       assert.match(xml, /<c:v>3<\/c:v>/)
     }
   }
+})
+async function openChart(page, tab = "Type") {
+  await open(page)
+  await page.getByRole("button", { name: "Slide 4", exact: true }).click()
+  const chart = page.locator("#adoption-chart")
+  await chart.click()
+  const panel = page.getByRole("dialog", { name: "Chart controls" })
+  await panel.waitFor()
+  if (tab !== "Type")
+    await panel.getByRole("button", { name: tab, exact: true }).click()
+  return { chart, panel }
+}
+await run("chart review placement", async (page) => {
+  const { chart, panel } = await openChart(page)
+  for (const width of [1440, 900, 500, 2560]) {
+    await page.setViewportSize({ width, height: 1000 })
+    await chart.scrollIntoViewIfNeeded()
+    await page.waitForFunction(() => {
+      const chart = document
+        .querySelector("#adoption-chart")
+        .getBoundingClientRect()
+      const panel = document
+        .querySelector(".slides-chart-panel")
+        .getBoundingClientRect()
+      return panel.left >= chart.right || panel.right <= chart.left
+    })
+    const rect = await panel.boundingBox()
+    assert.ok(
+      rect.x >= 0 && rect.x + rect.width <= width + 1,
+      "panel fits viewport"
+    )
+    assert.equal(
+      await panel.getAttribute("data-docked"),
+      width < 2000 ? "true" : null
+    )
+    assert.equal(await page.locator(".slides-chart-connector").count(), 1)
+    await page.screenshot({ path: `${output}/chart-placement-${width}.png` })
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const narrowed = await page
+    .locator(".slides-stage")
+    .filter({ has: page.locator("#adoption-chart") })
+    .boundingBox()
+  await panel.getByRole("button", { name: "Close chart controls" }).click()
+  const restored = await page
+    .locator(".slides-stage")
+    .filter({ has: page.locator("#adoption-chart") })
+    .boundingBox()
+  assert.ok(
+    restored.width > narrowed.width,
+    "closing sidebar restores canvas width"
+  )
+  await chart.scrollIntoViewIfNeeded()
+  const beforeDrag = await chart.getAttribute("style")
+  await drag(page, chart, 12, 0)
+  assert.notEqual(
+    await chart.getAttribute("style"),
+    beforeDrag,
+    "chart actually moved"
+  )
+  await panel.waitFor()
+  assert.ok(
+    (await panel.boundingBox()).x >=
+      (await chart.boundingBox()).x + (await chart.boundingBox()).width,
+    "dragging a chart opens its controls after release"
+  )
+  await panel.getByRole("button", { name: "Close chart controls" }).click()
+  await page.route("**/deck/slides/adoption.html", async (route) => {
+    const response = await route.fetch()
+    await route.fulfill({
+      response,
+      body: (await response.text())
+        .replace("left: 150px", "left: 1400px")
+        .replace("width: 1620px", "width: 400px"),
+    })
+  })
+  await page.reload()
+  await chart.click()
+  assert.ok(
+    (await panel.boundingBox()).x < (await chart.boundingBox()).x,
+    "left side used when it has room"
+  )
+})
+await run("chart review nice ticks and export", async (page) => {
+  await page.route("**/deck/slides/adoption.html", async (route) => {
+    const response = await route.fetch()
+    await route.fulfill({
+      response,
+      body: (await response.text()).replace(">64<", ">90<"),
+    })
+  })
+  const { chart, panel } = await openChart(page)
+  const ticks = await chart
+    .locator('svg text[text-anchor="end"]')
+    .allTextContents()
+  assert.deepEqual(ticks, ["0", "25", "50", "75", "100"])
+  await panel.getByRole("button", { name: "line chart", exact: true }).click()
+  await panel.getByRole("button", { name: "Close chart controls" }).click()
+  const pending = page.waitForEvent("download", { timeout: 45000 })
+  await page.getByRole("button", { name: "Download", exact: true }).click()
+  await page.getByRole("menuitem", { name: "PowerPoint .pptx" }).click()
+  await (await pending).saveAs(`${output}/chart-nice-scale.pptx`)
+  const zip = await JSZip.loadAsync(
+    await readFile(`${output}/chart-nice-scale.pptx`)
+  )
+  const xml = await zip
+    .file(
+      Object.keys(zip.files).find((file) =>
+        /^ppt\/charts\/chart\d+.xml$/.test(file)
+      )
+    )
+    .async("string")
+  assert.match(xml, /<c:lineChart>/)
+  assert.match(xml, /<c:v>90<\/c:v>/)
+  assert.match(xml, /<c:min val="0"/)
+  assert.match(xml, /<c:max val="100"/)
+  assert.match(xml, /<c:majorUnit val="25"/)
+})
+await run("chart review quiet data grid", async (page) => {
+  const { chart, panel } = await openChart(page, "Data")
+  assert.equal(await panel.getByText(/Paste spreadsheet cells/).count(), 0)
+  await panel
+    .getByRole("textbox", { name: "Row 2 column 2", exact: true })
+    .evaluate((element) => {
+      const data = new DataTransfer()
+      data.setData("text/plain", "51\n52")
+      element.dispatchEvent(
+        new ClipboardEvent("paste", {
+          clipboardData: data,
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+  assert.equal(
+    await chart.locator("tr").nth(1).locator("td").nth(1).textContent(),
+    "51"
+  )
+  await page.getByRole("button", { name: "Undo", exact: true }).click()
+  assert.equal(
+    await chart.locator("tr").nth(1).locator("td").nth(1).textContent(),
+    "18"
+  )
+})
+await run("chart review series header removal", async (page) => {
+  const { chart, panel } = await openChart(page, "Data")
+  assert.equal(
+    await panel.getByRole("button", { name: "Remove series 1" }).count(),
+    0,
+    "no disabled stray removal"
+  )
+  await panel.getByRole("button", { name: "Add series", exact: true }).click()
+  const header = panel
+    .getByRole("table", { name: "Chart data" })
+    .locator("tr")
+    .first()
+  const remove = header.getByRole("button", {
+    name: "Remove series 2",
+    exact: true,
+  })
+  await remove.focus()
+  assert.equal(
+    await remove.evaluate((element) => getComputedStyle(element).opacity),
+    "1"
+  )
+  assert.equal(await remove.textContent(), "×")
+  await remove.press("Enter")
+  assert.equal(await chart.locator("tr").first().locator("th").count(), 2)
+  await page.getByRole("button", { name: "Undo", exact: true }).click()
+  assert.equal(await chart.locator("tr").first().locator("th").count(), 3)
+})
+await run("chart review app style controls", async (page) => {
+  const { chart, panel } = await openChart(page, "Style")
+  assert.equal(await panel.locator("select").count(), 0)
+  assert.equal(
+    await panel
+      .getByRole("textbox", { name: "Title", exact: true })
+      .getAttribute("data-slot"),
+    "input"
+  )
+  const legend = panel.getByRole("combobox", { name: "Legend", exact: true })
+  assert.equal(await legend.textContent(), "None")
+  await legend.focus()
+  await legend.press("Enter")
+  await page.getByRole("option", { name: "Right", exact: true }).click()
+  assert.equal(await chart.getAttribute("data-legend"), "right")
+  await page.getByRole("listbox").waitFor({ state: "hidden" })
+  await legend.focus()
+  await legend.press("Enter")
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('[aria-label="Legend"]')
+        .getAttribute("aria-expanded") === "true"
+  )
+  await page.keyboard.press("Escape")
+  assert.equal(
+    await panel.count(),
+    1,
+    "Escape closes select before chart panel"
+  )
+  await panel.getByRole("switch", { name: "Gridlines", exact: true }).click()
+  assert.equal(await chart.getAttribute("data-gridlines"), "false")
+  await page.getByRole("button", { name: "Undo", exact: true }).click()
+  assert.notEqual(await chart.getAttribute("data-gridlines"), "false")
+  const format = panel.getByRole("combobox", {
+    name: "Number format",
+    exact: true,
+  })
+  assert.equal(await format.textContent(), "Number")
+  await format.click()
+  await page.getByRole("option", { name: "Percent", exact: true }).click()
+  assert.equal(await chart.getAttribute("data-format"), "percent")
+  await page.getByRole("listbox").waitFor({ state: "hidden" })
+  await page.screenshot({ path: `${output}/chart-review-style-dark.png` })
+  await page.getByRole("button", { name: "Use light appearance" }).click()
+  await page.screenshot({ path: `${output}/chart-review-style-light.png` })
+  await format.focus()
+  await page.keyboard.press("Escape")
+  assert.equal(await panel.count(), 0)
+})
+await run("chart review thumbnail on load", async (page) => {
+  await open(page)
+  const thumbnail = page.getByRole("button", { name: "Slide 4", exact: true })
+  await thumbnail.click()
+  await page.getByRole("button", { name: "Use light appearance" }).click()
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await thumbnail.locator("figure svg").waitFor({ state: "attached" })
+  assert.equal(await thumbnail.locator("figure svg rect").count(), 4)
+  assert.equal(await thumbnail.locator("[id]").count(), 0)
+  assert.equal(
+    await page.getByRole("button", { name: "Undo", exact: true }).isEnabled(),
+    false
+  )
+  await page.screenshot({ path: `${output}/chart-thumbnail-load.png` })
 })
 await browser.close()
 await new Promise((resolve) => server.close(resolve))

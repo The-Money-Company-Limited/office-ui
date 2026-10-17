@@ -95,7 +95,8 @@
   pointer-events: none;
 }
 .slides-pages {
-  margin-left: 152px;
+  margin-left: var(--slides-strip-width, 152px);
+  margin-right: var(--slides-chart-reserve, 0px);
   padding: 28px 24px 100px;
   display: flex;
   flex-direction: column;
@@ -346,13 +347,13 @@
 .slides-chart-panel header {
   justify-content: space-between;
 }
-.slides-chart-panel button {
+.slides-chart-panel button:not([data-slot]) {
   padding: 5px 8px;
   border-radius: 6px;
   cursor: pointer;
   background: var(--raised-fill);
 }
-.slides-chart-panel button:hover {
+.slides-chart-panel button:not([data-slot]):hover {
   background: var(--raised-fill-hover);
 }
 .slides-chart-panel button[aria-pressed="true"] {
@@ -362,8 +363,7 @@
   opacity: 0.4;
   cursor: default;
 }
-.slides-chart-panel input,
-.slides-chart-panel select {
+.slides-chart-grid input {
   min-width: 0;
   width: 100%;
   padding: 5px;
@@ -405,7 +405,8 @@
   display: grid;
   gap: 10px;
 }
-.slides-chart-style label {
+.slides-chart-style label,
+.slides-chart-field {
   display: grid;
   gap: 4px;
 }
@@ -420,4 +421,37 @@
 .slides-chart-help {
   font-size: 12px;
   color: var(--muted-foreground);
+}
+
+.artifact-slides[data-chart-compact] .slides-strip {
+  display: none;
+}
+.slides-chart-panel[data-docked] {
+  max-height: none;
+  border-radius: 0;
+}
+.slides-chart-connector {
+  position: absolute;
+  height: 1px;
+  background: var(--ring);
+  z-index: 19;
+  pointer-events: none;
+}
+.slides-chart-series {
+  position: relative;
+}
+.slides-chart-series input {
+  padding-right: 24px;
+}
+.slides-chart-panel button.slides-chart-remove-series {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0 5px;
+  opacity: 0;
+}
+.slides-chart-series:hover .slides-chart-remove-series,
+.slides-chart-series:focus-within .slides-chart-remove-series {
+  opacity: 1;
 }

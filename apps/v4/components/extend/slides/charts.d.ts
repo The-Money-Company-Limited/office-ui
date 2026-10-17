@@ -29,3 +29,12 @@ export type Chart = {
 export function readChart(figure: Element): Chart
 export function writeChartRows(figure: Element, rows: string[][]): void
 export function renderCharts(root: ParentNode, interactive?: boolean): void
+
+export type ChartScale = {
+  min: number
+  max: number
+  step: number
+  ticks: number[]
+}
+export function niceScale(min: number, max: number): ChartScale
+export function chartValueScale(chart: Chart): ChartScale

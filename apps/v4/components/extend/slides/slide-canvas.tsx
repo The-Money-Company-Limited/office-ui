@@ -1,5 +1,6 @@
 import * as React from "react"
 
+import type { chartPanelLayout } from "./chart-layout"
 import { ChartPanel } from "./chart-panel"
 import { readChart, renderCharts } from "./charts.js"
 import {
@@ -38,6 +39,10 @@ export function SlideCanvas({
   onChange,
   onUndo,
   onRedo,
+  chartOpen,
+  chartLayout,
+  onChartSelection,
+  viewportWidth,
 }: {
   id: string
   html: string
@@ -46,6 +51,10 @@ export function SlideCanvas({
   onChange: (html: string) => void
   onUndo: () => void
   onRedo: () => void
+  chartOpen: boolean
+  chartLayout: ReturnType<typeof chartPanelLayout> | null
+  onChartSelection: (id: string, box: Box | null) => void
+  viewportWidth: number
 }) {
   const host = React.useRef<HTMLDivElement>(null)
   const content = React.useRef<HTMLDivElement>(null)
@@ -56,7 +65,6 @@ export function SlideCanvas({
   const [chartTab, setChartTab] = React.useState<"Type" | "Data" | "Style">(
     "Type"
   )
-  const [chartOpen, setChartOpen] = React.useState(false)
   const [guides, setGuides] = React.useState<Guide[]>([])
 
   React.useLayoutEffect(() => {
@@ -69,17 +77,21 @@ export function SlideCanvas({
       : null
     editing.current = null
     if (!editable) selected.current = null
-    setBox(
-      selected.current
-        ? elementBox(selected.current, container.firstElementChild!, scale)
-        : null
-    )
-  }, [html, editable, scale])
+  }, [html, editable])
+
+  React.useLayoutEffect(() => {
+    const container = content.current!
+    const nextBox = selected.current
+      ? elementBox(selected.current, container.firstElementChild!, scale)
+      : null
+    setBox(nextBox)
+    if (chartOpen) onChartSelection(id, editable ? nextBox : null)
+  }, [html, editable, scale, chartOpen, id, onChartSelection])
 
   function canvas() {
     return content.current!.firstElementChild as HTMLElement
   }
-  function select(element: SlideElement | null) {
+  function select(element: SlideElement | null, openChart = true) {
     const previous = selected.current
     if (
       previous &&
@@ -94,8 +106,13 @@ export function SlideCanvas({
       renderCharts(content.current!, editable)
     }
     selected.current = element
-    setChartOpen(Boolean(element?.matches("figure[data-chart]")))
-    setBox(element ? elementBox(element, canvas(), scale) : null)
+    const nextBox = element ? elementBox(element, canvas(), scale) : null
+    setBox(nextBox)
+    if (openChart || !element?.matches("figure[data-chart]"))
+      onChartSelection(
+        id,
+        element?.matches("figure[data-chart]") ? nextBox : null
+      )
   }
   function commit() {
     if (
@@ -143,7 +160,8 @@ export function SlideCanvas({
       (event.target as Element).closest<HTMLElement>("[data-resize]")?.dataset
         .resize || null
     const element = handle ? selected.current : targetElement(event.target)
-    select(element)
+    // Keep the canvas still until the pointer gesture finishes.
+    select(element, false)
     host.current?.focus({ preventScroll: true })
     if (!element) return
     event.preventDefault()
@@ -209,7 +227,10 @@ export function SlideCanvas({
     if (cancel) {
       content.current!.innerHTML = drag.before
       select(null)
-    } else if (drag.moved) commit()
+    } else {
+      if (drag.moved) commit()
+      select(drag.element)
+    }
   }
   function keyDown(event: React.KeyboardEvent) {
     if (!editable) return
@@ -230,7 +251,6 @@ export function SlideCanvas({
     }
     const element = selected.current
     if (event.key === "Escape") {
-      setChartOpen(false)
       select(null)
       return
     }
@@ -292,12 +312,9 @@ export function SlideCanvas({
     if (element?.matches("figure[data-chart]")) {
       select(element)
       setChartTab("Data")
-      setChartOpen(true)
-      requestAnimationFrame(() =>
-        host.current
-          ?.querySelector<HTMLInputElement>(".slides-chart-panel input")
-          ?.focus()
-      )
+      host.current
+        ?.querySelector<HTMLInputElement>(".slides-chart-grid input")
+        ?.focus()
       return
     }
     if (
@@ -354,39 +371,73 @@ export function SlideCanvas({
     >
       {editable &&
         chartOpen &&
+        chartLayout &&
+        !gesture.current?.moved &&
         box &&
         selected.current?.matches("figure[data-chart]") && (
-          <ChartPanel
-            key={selected.current.id}
-            figure={selected.current}
-            tab={chartTab}
-            onTab={setChartTab}
-            onCommit={commit}
-            onUndo={onUndo}
-            onRedo={onRedo}
-            onClose={() => {
-              if (readChart(selected.current!).errors.length) {
-                const selectedId = selected.current!.id
-                content.current!.innerHTML = html
-                renderCharts(content.current!, true)
-                selected.current = content.current!.querySelector(
-                  `#${selectedId}`
-                )
-              } else commit()
-              setChartOpen(false)
-              host.current?.focus({ preventScroll: true })
-            }}
-            style={{
-              left: Math.max(
-                0,
-                Math.min(
-                  (box.x + box.width) * scale + 12,
-                  SLIDE_WIDTH * scale - 330
-                )
-              ),
-              top: Math.max(0, box.y * scale),
-            }}
-          />
+          <>
+            <div
+              className="slides-chart-connector"
+              style={{
+                top: box.y * scale + 20,
+                left:
+                  chartLayout.side === "left"
+                    ? box.x * scale - 12
+                    : (box.x + box.width) * scale,
+                width: chartLayout.sidebar
+                  ? viewportWidth -
+                    chartLayout.width -
+                    ((chartLayout.compact ? 0 : 152) +
+                      (viewportWidth -
+                        (chartLayout.compact ? 0 : 152) -
+                        chartLayout.width -
+                        24 -
+                        SLIDE_WIDTH * scale) /
+                        2) -
+                    (box.x + box.width) * scale
+                  : 12,
+              }}
+            />
+            <ChartPanel
+              key={selected.current.id}
+              docked={chartLayout.sidebar}
+              figure={selected.current}
+              tab={chartTab}
+              onTab={setChartTab}
+              onCommit={commit}
+              onUndo={onUndo}
+              onRedo={onRedo}
+              onClose={() => {
+                if (readChart(selected.current!).errors.length) {
+                  const selectedId = selected.current!.id
+                  content.current!.innerHTML = html
+                  renderCharts(content.current!, true)
+                  selected.current = content.current!.querySelector(
+                    `#${selectedId}`
+                  )
+                } else commit()
+                onChartSelection(id, null)
+                host.current?.focus({ preventScroll: true })
+              }}
+              style={
+                chartLayout.sidebar
+                  ? {
+                      position: "fixed",
+                      right: 0,
+                      top: 108,
+                      bottom: 0,
+                      width: chartLayout.width,
+                    }
+                  : {
+                      left:
+                        chartLayout.side === "left"
+                          ? box.x * scale - 332
+                          : (box.x + box.width) * scale + 12,
+                      top: Math.max(0, box.y * scale),
+                    }
+              }
+            />
+          </>
         )}
       <div className="slides-scale" style={{ transform: `scale(${scale})` }}>
         <div ref={content} className="slides-content" data-slide-id={id} />

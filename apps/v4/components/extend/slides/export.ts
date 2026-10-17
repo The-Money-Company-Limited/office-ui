@@ -2,7 +2,12 @@ import { toPng } from "html-to-image"
 import JSZip from "jszip"
 import pptxgen from "pptxgenjs"
 
-import { readChart, renderCharts } from "./charts.js"
+import {
+  chartValueScale,
+  niceScale,
+  readChart,
+  renderCharts,
+} from "./charts.js"
 import { SLIDE_HEIGHT, SLIDE_WIDTH, type Deck } from "./validate.js"
 
 function saveBlob(blob: Blob, name: string) {
@@ -236,6 +241,14 @@ export async function exportPowerPoint(deck: Deck) {
             left: "l",
             right: "r",
           } as const
+          const axis = chartValueScale(chart)
+          const xAxis =
+            type === "scatter"
+              ? niceScale(
+                  Math.min(...chart.categories.map(Number)),
+                  Math.max(...chart.categories.map(Number))
+                )
+              : null
           slide.addChart(type, data, {
             ...box,
             chartColors: chart.colors,
@@ -258,6 +271,16 @@ export async function exportPowerPoint(deck: Deck) {
             valAxisTitleColor: foreground,
             catAxisLabelColor: foreground,
             valAxisLabelColor: foreground,
+            valAxisMinVal: axis.min,
+            valAxisMaxVal: axis.max,
+            valAxisMajorUnit: axis.step,
+            ...(xAxis
+              ? {
+                  catAxisMinVal: xAxis.min,
+                  catAxisMaxVal: xAxis.max,
+                  catAxisMajorUnit: xAxis.step,
+                }
+              : {}),
             valAxisLabelFormatCode: format,
             valLabelFormatCode: format,
             catGridLine: { style: "none" },
