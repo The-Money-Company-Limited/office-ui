@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
 import { mkdir, readFile } from "node:fs/promises"
 import { createRequire } from "node:module"
 import path from "node:path"
@@ -13,6 +14,12 @@ let source = await readFile(
   new URL("../src/autosave.ts", import.meta.url),
   "utf8"
 )
+if (process.env.AUTOSAVE_BASELINE)
+  source = execFileSync(
+    "git",
+    ["show", "59895b6:apps/v4/experiments/artifact-template/src/autosave.ts"],
+    { encoding: "utf8" }
+  )
 if (process.env.AUTOSAVE_NEGATIVE)
   source = source.replace(
     'this.page.addEventListener("message", this.message)',
@@ -28,7 +35,7 @@ await build({
 const { Autosave } = await import(pathToFileURL(`${output}/autosave.mjs`))
 
 function setup(t) {
-  t.mock.timers.enable({ apis: ["setTimeout"] })
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] })
   const page = new EventTarget()
   page.document = new EventTarget()
   page.location = { origin: "https://artifact.example" }
@@ -153,7 +160,7 @@ test("offline retries back off, preserve base, and ignore unrelated acknowledgem
   await h.tick(1)
   assert.equal(h.saves().length, 3)
   h.set("during the unacknowledged save")
-  await h.tick(30_000)
+  await h.tick(20 * 60_000)
   assert.equal(h.save.getSnapshot().status, "Offline, will retry")
 })
 
@@ -194,4 +201,152 @@ test("permanent failures retain local edits and do not retry", async (t) => {
   assert.match(h.save.getSnapshot().status, /permission/)
   await h.tick(60_000)
   assert.equal(h.saves().length, 1)
+})
+
+test("timeout retry retains id, base and transferred bytes despite newer edits", async (t) => {
+  const h = setup(t)
+  h.access()
+  h.set("original write")
+  await h.tick(2000)
+  const first = structuredClone(h.saves()[0].data)
+  structuredClone(h.saves()[0].data, { transfer: h.saves()[0].transfer })
+  h.set("newer edit")
+  await h.tick(19 * 60_000)
+  assert.equal(h.save.getSnapshot().status, "Saving…")
+  await h.tick(60_000)
+  assert.equal(h.save.getSnapshot().status, "Offline, will retry")
+  await h.tick(2000)
+  assert.deepEqual(h.saves()[1].data, first)
+  h.reply({ type: "saved", id: first.id, version: "v2" })
+  await h.tick(0)
+  const next = h.saves()[2].data
+  assert.notEqual(next.id, first.id)
+  assert.equal(next.base, "v2")
+  assert.equal(new TextDecoder().decode(next.files[0].bytes), "newer edit")
+})
+
+test("late saved preserves newer edits and duplicate receipts cannot regress the base", async (t) => {
+  const h = setup(t)
+  h.access()
+  h.set("first")
+  await h.tick(2000)
+  const first = h.saves()[0].data
+  await h.tick(20 * 60_000)
+  h.set("second")
+  h.reply({ type: "saved", id: first.id, version: "v2" })
+  await h.tick(0)
+  assert.equal(h.saves().length, 2)
+  const second = h.saves()[1].data
+  assert.equal(second.base, "v2")
+  assert.equal(new TextDecoder().decode(second.files[0].bytes), "second")
+  h.reply({ type: "saved", id: second.id, version: "v3" })
+  h.reply({ type: "saved", id: first.id, version: "v2" })
+  h.set("third")
+  await h.tick(2000)
+  assert.equal(h.saves()[2].data.base, "v3")
+})
+
+test("beforeunload prompts only while dirty, including edits after a late receipt", async (t) => {
+  const h = setup(t)
+  const prompted = () =>
+    !h.page.dispatchEvent(new Event("beforeunload", { cancelable: true }))
+  h.access()
+  assert.equal(prompted(), false)
+  h.set("one")
+  assert.equal(prompted(), true)
+  await h.tick(2000)
+  const first = h.saves()[0].data
+  await h.tick(20 * 60_000)
+  h.set("two")
+  h.reply({ type: "saved", id: first.id, version: "v2" })
+  assert.equal(prompted(), true)
+  await h.tick(0)
+  h.reply({ type: "saved", id: h.saves()[1].data.id, version: "v3" })
+  assert.equal(prompted(), false)
+  h.set("three")
+  h.save.reloadTheirs()
+  assert.equal(prompted(), false)
+})
+
+test("retryAfter is a minimum delay even when editing or hiding", async (t) => {
+  const h = setup(t)
+  h.access()
+  h.set("one")
+  await h.tick(2000)
+  const first = h.saves()[0].data
+  h.reply({
+    type: "save_failed",
+    id: first.id,
+    reason: "offline",
+    retryAfter: 60,
+  })
+  h.set("two")
+  h.page.dispatchEvent(new Event("pagehide"))
+  await h.tick(59_999)
+  assert.equal(h.saves().length, 1)
+  h.page.document.visibilityState = "hidden"
+  h.page.document.dispatchEvent(new Event("visibilitychange"))
+  await h.tick(0)
+  assert.equal(h.saves().length, 1)
+  await h.tick(1)
+  assert.deepEqual(h.saves()[1].data, first)
+})
+
+for (const reason of ["path_not_allowed", "not_document"]) {
+  test(`${reason} has its own message and retains unsaved edits`, async (t) => {
+    const h = setup(t)
+    h.access()
+    h.set("one")
+    await h.tick(2000)
+    h.reply({ type: "save_failed", id: h.saves()[0].data.id, reason })
+    assert.equal(h.save.getSnapshot().canSave, reason === "path_not_allowed")
+    assert.match(
+      h.save.getSnapshot().status,
+      reason === "not_document"
+        ? /This page is no longer a document/
+        : /path outside the document/
+    )
+    assert.equal(
+      h.page.dispatchEvent(new Event("beforeunload", { cancelable: true })),
+      false
+    )
+    await h.tick(60_000)
+    assert.equal(h.saves().length, 1)
+  })
+}
+
+test("not_document access displays the document removal message", (t) => {
+  const h = setup(t)
+  h.reply({
+    type: "access",
+    canSave: false,
+    version: "v1",
+    reason: "not_document",
+  })
+  assert.equal(h.save.getSnapshot().canSave, false)
+  assert.match(h.save.getSnapshot().status, /This page is no longer a document/)
+})
+
+test("a late receipt does not bypass retryAfter for the next edit", async (t) => {
+  const h = setup(t)
+  h.access()
+  h.set("first")
+  await h.tick(2000)
+  const first = h.saves()[0].data
+  h.reply({
+    type: "save_failed",
+    id: first.id,
+    reason: "offline",
+    retryAfter: 60,
+  })
+  h.set("second")
+  h.reply({ type: "saved", id: first.id, version: "v2" })
+  assert.notEqual(h.save.getSnapshot().status, "Saved")
+  await h.tick(0)
+  h.page.dispatchEvent(new Event("pagehide"))
+  await h.tick(59_999)
+  assert.equal(h.saves().length, 1)
+  await h.tick(1)
+  assert.equal(h.saves().length, 2)
+  assert.equal(h.saves()[1].data.base, "v2")
 })

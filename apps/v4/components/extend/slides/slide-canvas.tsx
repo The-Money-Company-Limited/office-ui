@@ -74,7 +74,7 @@ export function SlideCanvas({
     container.innerHTML = html
     renderCharts(container, editable)
     selected.current = selectedId
-      ? container.querySelector(`#${selectedId}`)
+      ? container.querySelector(`#${CSS.escape(selectedId)}`)
       : null
     editing.current = null
     if (!editable) selected.current = null
@@ -102,7 +102,7 @@ export function SlideCanvas({
     ) {
       const source = document.createElement("template")
       source.innerHTML = html
-      const saved = source.content.querySelector(`#${previous.id}`)
+      const saved = source.content.querySelector(`#${CSS.escape(previous.id)}`)
       if (saved) previous.replaceWith(saved)
       renderCharts(content.current!, editable)
     }
@@ -417,7 +417,7 @@ export function SlideCanvas({
                   content.current!.innerHTML = html
                   renderCharts(content.current!, true)
                   selected.current = content.current!.querySelector(
-                    `#${selectedId}`
+                    `#${CSS.escape(selectedId)}`
                   )
                 } else commit()
                 onChartSelection(id, null)

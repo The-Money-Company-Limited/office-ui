@@ -40,7 +40,7 @@ export async function fixtures(folder) {
   )
   xlsx.file(
     "xl/worksheets/sheet1.xml",
-    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:B2"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Autosave original</t></is></c><c r="B1"><v>42</v></c></row></sheetData></worksheet>'
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:B2"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Autosave original</t></is></c><c r="B1"><v>42</v></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>0042</t></is></c></row></sheetData></worksheet>'
   )
   await writeFile(
     `${folder}/sample.xlsx`,

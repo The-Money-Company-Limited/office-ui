@@ -42,6 +42,10 @@ async function ready(page, kind, readOnly = false) {
       .getByText("Autosave original", { exact: false })
       .first()
       .waitFor()
+  if (kind === "xlsx" && !readOnly)
+    await page
+      .getByRole("textbox", { name: "Formula bar", exact: true })
+      .waitFor()
   if (kind === "xlsx")
     await page.locator('[data-cell-ref="A1"], #c-A1').first().waitFor()
   if (kind === "slides") await page.locator("#welcome-title").waitFor()
@@ -155,6 +159,16 @@ async function run(kind, scenario) {
       : `${output}/fixtures/sample.${kind}`,
     release,
   ])
+  if (scenario === "slide-ids") {
+    await writeFile(
+      `${release}/deck/deck.json`,
+      JSON.stringify({ title: "Numeric IDs", order: ["9"] })
+    )
+    await writeFile(
+      `${release}/deck/slides/9.html`,
+      '<section id="9"><h1 id="9-title">Numeric slide ID</h1></section>'
+    )
+  }
   const server = await startHarness(release)
   const url = `http://127.0.0.1:${server.address().port}`
   const control = async (update) =>
@@ -170,22 +184,109 @@ async function run(kind, scenario) {
   })
   const page = await context.newPage()
   page.setDefaultTimeout(negative ? 5000 : 20000)
+  if (["timeout-retry", "late-saved"].includes(scenario)) {
+    await page.addInitScript(() => {
+      const timeout = window.setTimeout.bind(window)
+      window.setTimeout = (fn, ms, ...args) =>
+        timeout(
+          fn,
+          ms === 19 * 60_000 ? 5000 : ms === 20 * 60_000 ? 6000 : ms,
+          ...args
+        )
+    })
+  }
+  await page.addInitScript(() => {
+    window.cellDraws = []
+    const fillText = CanvasRenderingContext2D.prototype.fillText
+    CanvasRenderingContext2D.prototype.fillText = function (text, ...args) {
+      if (
+        ["7319", "0042", "42"].includes(String(text)) &&
+        this.textAlign !== "center"
+      )
+        window.cellDraws.push({ text: String(text), align: this.textAlign })
+      return fillText.call(this, text, ...args)
+    }
+    window.saveMessages = []
+    addEventListener("message", (event) => {
+      if (event.source === window && event.data?.cool === "doc")
+        window.saveMessages.push(event.data)
+    })
+  })
   const errors = []
   page.on("pageerror", (error) => errors.push(error.message))
   const file =
     kind === "slides"
-      ? `${release}/deck/slides/welcome.html`
+      ? `${release}/deck/slides/${scenario === "slide-ids" ? "9" : "welcome"}.html`
       : `${release}/document/sample.${kind}`
   try {
+    if (scenario === "not-document-access")
+      await control({ mode: "not_document" })
     if (scenario === "read-only") await control({ mode: "read_only" })
     await page.goto(url)
-    await ready(page, kind, scenario === "read-only")
+    if (scenario === "slide-ids") await page.locator('[id="9-title"]').waitFor()
+    else if (scenario !== "not-document-access")
+      await ready(page, kind, scenario === "read-only")
     const before = await readFile(file)
     const originalTitle =
-      kind === "slides"
+      kind === "slides" && scenario !== "slide-ids"
         ? await page.locator("#welcome-title").innerText()
         : "Autosave original"
-    if (scenario === "read-only") {
+    if (scenario === "slide-ids") {
+      const title = page.locator('[id="9-title"]')
+      await title.dblclick()
+      await title.fill("Numeric ID edited")
+      await page
+        .getByRole("button", {
+          name: /Use light appearance|Use dark appearance/,
+        })
+        .click()
+      await page
+        .locator("[data-autosave-status]")
+        .filter({ hasText: /^Saved$/ })
+        .waitFor()
+      assert.match(await readFile(file, "utf8"), /Numeric ID edited/)
+      await page.reload()
+      await page
+        .getByText("Numeric ID edited", { exact: true })
+        .first()
+        .waitFor()
+    } else if (scenario === "not-document-access") {
+      await page
+        .getByText("This page is no longer a document", { exact: false })
+        .first()
+        .waitFor()
+      assert.equal((await control()).saves.length, 0)
+    } else if (["path_not_allowed", "not_document"].includes(scenario)) {
+      await control({ mode: scenario, pollFailed: true })
+      await edit(page, kind, "Retained local edit")
+      await page
+        .locator("[data-autosave-status]")
+        .filter({
+          hasText:
+            scenario === "not_document"
+              ? /This page is no longer a document/
+              : /path outside the document/,
+        })
+        .waitFor()
+      assert.deepEqual(await readFile(file), before)
+      assert.equal((await control()).saves.length, 0)
+      if (scenario === "path_not_allowed")
+        assert.equal(
+          await page.getByText("View only", { exact: true }).count(),
+          0
+        )
+    } else if (scenario === "beforeunload") {
+      await control({ mode: "offline", retryAfter: 60 })
+      await edit(page, kind, "Unsaved edit")
+      await page.getByText("Offline, will retry", { exact: true }).waitFor()
+      const prompt = page.waitForEvent("dialog", { timeout: 5000 })
+      const navigation = page.reload().catch(() => {})
+      const dialog = await prompt
+      assert.equal(dialog.type(), "beforeunload")
+      await dialog.dismiss()
+      await navigation
+      await assertEdit(page, kind, "Unsaved edit")
+    } else if (scenario === "read-only") {
       if (kind === "docx") {
         assert.equal(await page.locator('[contenteditable="true"]').count(), 0)
         assert.equal(
@@ -224,8 +325,59 @@ async function run(kind, scenario) {
     } else {
       if (scenario === "conflict") await control({ mode: "conflict" })
       if (scenario === "offline") await control({ mode: "offline" })
-      const text = `Persisted-${kind}-${scenario}`
+      if (scenario === "retry-after")
+        await control({ mode: "offline", retryAfter: 5 })
+      if (scenario === "failed-poll") await control({ pollFailed: true })
+      if (["timeout-retry", "late-saved"].includes(scenario))
+        await control({ receipt: "late" })
+      let text =
+        scenario === "alignment" ? "7319" : `Persisted-${kind}-${scenario}`
       await edit(page, kind, text)
+      if (["timeout-retry", "late-saved"].includes(scenario)) {
+        await page.waitForFunction(() =>
+          window.saveMessages.some((message) => message.type === "save")
+        )
+        if (scenario === "late-saved") {
+          text = `Newer-${kind}`
+          await edit(page, kind, text)
+        }
+        await page.getByText("Offline, will retry", { exact: true }).waitFor()
+        if (scenario === "late-saved") await control({ deliver: true })
+      }
+      if (scenario === "retry-after") {
+        await page.getByText("Offline, will retry", { exact: true }).waitFor()
+        await control({ mode: "online" })
+        await page.evaluate(() => {
+          Object.defineProperty(document, "visibilityState", {
+            configurable: true,
+            value: "hidden",
+          })
+          document.dispatchEvent(new Event("visibilitychange"))
+        })
+        await page.waitForTimeout(2500)
+        assert.equal(
+          await page.evaluate(
+            () =>
+              window.saveMessages.filter((message) => message.type === "save")
+                .length
+          ),
+          1
+        )
+      }
+      if (scenario === "failed-poll") {
+        assert.equal(
+          await page.getByText("View only", { exact: true }).count(),
+          0
+        )
+        assert.equal(
+          await page.evaluate(() =>
+            window.saveMessages.some(
+              (message) => message.type === "access" && !message.canSave
+            )
+          ),
+          false
+        )
+      }
       if (scenario === "conflict") {
         await page
           .getByText("This was changed while you were editing.", {
@@ -266,6 +418,25 @@ async function run(kind, scenario) {
           .filter({ hasText: /^Saved$/ })
           .waitFor()
         assert.ok((await control()).saves.length >= 1)
+        if (scenario === "timeout-retry") {
+          const result = await control()
+          assert.equal(result.saves.length, 1)
+          assert.ok(result.attempts.length >= 2)
+          assert.deepEqual(result.attempts[1].files, result.attempts[0].files)
+          assert.equal(result.attempts[1].id, result.attempts[0].id)
+          assert.equal(result.attempts[1].base, result.attempts[0].base)
+          await control({ deliver: true })
+        }
+        if (scenario === "late-saved") {
+          const result = await control()
+          assert.equal(result.saves.length, 2)
+          assert.notEqual(result.saves[1].id, result.saves[0].id)
+          assert.equal(result.saves[1].base, "2")
+        }
+        if (scenario === "retry-after") {
+          const result = await control()
+          assert.ok(result.attempts[1].time - result.attempts[0].time >= 4900)
+        }
         if (kind === "slides")
           assert.deepEqual((await control()).saves[0].paths.sort(), [
             "deck/deck.json",
@@ -277,8 +448,36 @@ async function run(kind, scenario) {
               .getByRole("button", { name: "Undo", exact: true })
               .isEnabled()
           )
+        if (scenario === "failed-poll") await control({ pollFailed: false })
         await page.reload()
         await assertEdit(page, kind, text)
+        if (scenario === "alignment") {
+          const alignment = async () => {
+            await page.waitForFunction(() =>
+              ["7319", "0042", "42"].every((text) =>
+                window.cellDraws.some((draw) => draw.text === text)
+              )
+            )
+            return page.evaluate(() =>
+              Object.fromEntries(
+                window.cellDraws.map((draw) => [draw.text, draw.align])
+              )
+            )
+          }
+          assert.deepEqual(await alignment(), {
+            7319: "right",
+            42: "right",
+            "0042": "left",
+          })
+          await control({ mode: "read_only" })
+          await page.reload()
+          await ready(page, kind, true)
+          assert.deepEqual(await alignment(), {
+            7319: "right",
+            42: "right",
+            "0042": "left",
+          })
+        }
         if (scenario === "saved" && kind === "pdf") {
           await page
             .getByRole("button", { name: "Mode: View", exact: true })
@@ -364,6 +563,7 @@ async function run(kind, scenario) {
     console.log(`FAIL ${label}: ${error.message.split("\n")[0]}`)
   } finally {
     await context.close()
+    server.closeAllConnections()
     await new Promise((resolve) => server.close(resolve))
   }
 }
@@ -374,8 +574,22 @@ try {
       "conflict",
       "read-only",
       "offline",
+      "timeout-retry",
+      "late-saved",
+      "beforeunload",
+      "retry-after",
+      "failed-poll",
+      "path_not_allowed",
+      "not_document",
+      "not-document-access",
+      "alignment",
+      "slide-ids",
     ])
-      await run(kind, scenario)
+      if (
+        (scenario !== "alignment" || kind === "xlsx") &&
+        (scenario !== "slide-ids" || kind === "slides")
+      )
+        await run(kind, scenario)
 } finally {
   await browser.close()
 }

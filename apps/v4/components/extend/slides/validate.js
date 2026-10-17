@@ -3,7 +3,7 @@ import { chartAttribute } from "./charts.js"
 /** The deck contract lives here; callers supply a DOM (a browser or CLI adapter). */
 export const SLIDE_WIDTH = 1920
 export const SLIDE_HEIGHT = 1080
-const ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,79}$/
+const ID = /^[A-Za-z0-9_-]{1,64}$/
 export function validateManifest(value) {
   if (!value || typeof value !== "object") throw new Error("Invalid deck.json")
   const { title, order, sections } = value
@@ -201,7 +201,7 @@ export function sanitizeSlide(source, slideId, dom, warn = console.warn) {
     else element.removeAttribute("style")
     if (!isRoot) {
       if (
-        !/^[a-zA-Z][a-zA-Z0-9_-]{0,159}$/.test(element.id) ||
+        !/^[A-Za-z0-9_-]{1,160}$/.test(element.id) ||
         seen.has(element.id) ||
         !element.id.startsWith(`${slideId}-`)
       ) {

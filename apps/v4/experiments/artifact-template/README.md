@@ -100,7 +100,13 @@ This experiment leaves RuntimeVM untouched.
 `dev/autosave-harness.mjs <release folder> [port]` serves a staged artifact,
 injects the same-window page contract, and writes saves into that folder.
 `POST /__doc/control` accepts `mode` (`online`, `offline`, `read_only`,
-`signed_out`, `conflict`) or `changed: true`. `GET /__doc/control` lists saves.
+`signed_out`, `conflict`, `path_not_allowed`, `not_document`, `too_large`,
+`error`) or `changed: true`. It also accepts `retryAfter` (seconds),
+`pollFailed`, and `receipt: "late" | "drop" | "normal"`; `deliver: true`
+releases held receipts. `GET /__doc/control` lists writes and attempted request
+IDs, bases, payload hashes and times. The stand-in validates declared paths,
+slide IDs, referenced images and the 25/64 MiB limits, and retains 32 receipts
+for 24 hours (`advance` moves its receipt clock in milliseconds).
 The production bridge still owns authorization, size limits and atomic releases.
 
 Run checks on Modal only, from `office-remote`:
@@ -117,7 +123,14 @@ Run checks on Modal only, from `office-remote`:
 The browser cases use real edits, download conflict copies, verify persisted
 bytes after reload, check clean external reloads, and exercise read-only and
 offline access for all four kinds. Negative controls temporarily build the
-original entry point from `HEAD` and require every browser case to fail, then
+pre-autosave entry point from `59895b6^` and require every browser case to fail, then
 restore the working source and bundle. Contract negative controls disconnect
 the message handler and require every test to fail. Results and screenshots
 stay in the ignored `dev/results/` directory.
+
+Round-2 browser cases also cover timed-out retries, late receipts with newer
+edits, real beforeunload dialogs, retryAfter during visibility changes, failed
+access polls, and separate path/not-document messages. Long bridge/controller
+timeouts are accelerated only by the browser tests. The controller waits 20
+minutes, beyond the script's 19 minutes; a timeout never discards the request.
+Contract negative controls additionally run the new cases against `59895b6`.
