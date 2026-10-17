@@ -1,5 +1,7 @@
 import { Workbook } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
-import { applyCommentThreads, formatCellRef, parseCellRef, type XlsxCommentThread } from "./comments.ts";
+import { formatCellRef, parseCellRef, type XlsxCommentThread } from "./comments.ts";
+import { saveWorkbookBytes } from "./workbook-save.ts";
+import type { WorkbookImageAssets, WorkbookImageSheetOrigin } from "./images.ts";
 
 export type XlsxStructuralEdit =
   | { kind: "rows" | "columns"; sheetIndex: number; index: number; count: number; delete: boolean }
@@ -7,8 +9,22 @@ export type XlsxStructuralEdit =
   | { kind: "move"; sheetIndex: number; to: number }
   | { kind: "deleteSheet"; sheetIndex: number };
 
+export function mapStructuralSheetIndex(index: number, edit: XlsxStructuralEdit): number | null {
+  if (edit.kind === "deleteSheet") return index === edit.sheetIndex ? null : index > edit.sheetIndex ? index - 1 : index;
+  if (edit.kind !== "move") return index;
+  if (index === edit.sheetIndex) return edit.to;
+  if (edit.sheetIndex < edit.to && index > edit.sheetIndex && index <= edit.to) return index - 1;
+  if (edit.sheetIndex > edit.to && index >= edit.to && index < edit.sheetIndex) return index + 1;
+  return index;
+}
+
 /** Mutate a saved snapshot so invalid edits cannot alter the live workbook or its history. */
-export function editWorkbookStructure(bytes: Uint8Array, threads: XlsxCommentThread[] | null, edit: XlsxStructuralEdit) {
+export function editWorkbookStructure(
+  bytes: Uint8Array,
+  threads: XlsxCommentThread[] | null,
+  edit: XlsxStructuralEdit,
+  preservation?: { assets: WorkbookImageAssets | null; sheetOrigins: Array<WorkbookImageSheetOrigin | null> }
+) {
   const workbook = Workbook.fromBytes(bytes);
   try {
     if (!Number.isInteger(edit.sheetIndex) || edit.sheetIndex < 0 || edit.sheetIndex >= workbook.sheetCount) {
@@ -55,9 +71,12 @@ export function editWorkbookStructure(bytes: Uint8Array, threads: XlsxCommentThr
       cell[axis] += edit.delete ? -edit.count : edit.count;
       return [{ ...thread, ref: formatCellRef(cell) }];
     }) ?? null;
-    let nextBytes = workbook.saveXlsxBytes();
-    if (nextThreads) nextBytes = applyCommentThreads(nextBytes, nextThreads);
-    return nextBytes;
+    const origins: Array<WorkbookImageSheetOrigin | null> = Array(workbook.sheetCount).fill(null);
+    preservation?.sheetOrigins.forEach((origin, index) => {
+      const nextIndex = mapStructuralSheetIndex(index, edit);
+      if (nextIndex !== null) origins[nextIndex] = origin;
+    });
+    return saveWorkbookBytes(workbook, preservation?.assets ?? null, origins, nextThreads, true);
   } finally {
     workbook.free();
   }

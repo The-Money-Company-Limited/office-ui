@@ -8,7 +8,7 @@ import type {
   Workbook
 } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
-import { resolveWorkbookColor } from "./colors";
+import { resolveWorkbookColor } from "./colors.ts";
 import type {
   XlsxCellAddress,
   XlsxConditionalDataBarRule,
@@ -3639,10 +3639,88 @@ function appendSheetDrawingReference(
   worksheet.insertBefore(drawingNode, successor ?? null);
 }
 
+function matchingDrawingObject(source: Element, target: XMLDocument): Element | null {
+  const name = getLocalElements(source, "cNvPr")[0]?.getAttribute("name");
+  if (!name) return null;
+  const matches = getLocalElements(target, "cNvPr").filter((node) => node.getAttribute("name") === name);
+  return matches.length === 1 ? matches[0].parentElement?.parentElement ?? null : null;
+}
+
+function drawingRelationshipMap(original: Uint8Array, generated: Uint8Array): Map<string, string> {
+  const source = parseXml(strFromU8(original));
+  const target = parseXml(strFromU8(generated));
+  const result = new Map<string, string>();
+  if (!source || !target || source.documentElement.localName !== "wsDr") return result;
+  for (const properties of getLocalElements(source, "cNvPr")) {
+    const object = properties.parentElement?.parentElement;
+    if (!object) continue;
+    const match = matchingDrawingObject(object, target);
+    if (!match) continue;
+    for (const node of Array.from(object.getElementsByTagNameNS("*", "*"))) {
+      let owner: Element | null = node;
+      while (owner && !["pic", "sp", "graphicFrame", "grpSp", "cxnSp"].includes(owner.localName)) owner = owner.parentElement;
+      if (owner !== object) continue;
+      for (const attribute of Array.from(node.attributes)) {
+        if (attribute.namespaceURI !== REL_NS) continue;
+        const peers = Array.from(object.getElementsByTagNameNS(node.namespaceURI, node.localName));
+        const next = match.getElementsByTagNameNS(node.namespaceURI, node.localName)[peers.indexOf(node)];
+        const nextId = next?.getAttributeNS(REL_NS, attribute.localName);
+        if (nextId) result.set(attribute.value, nextId);
+      }
+    }
+  }
+  return result;
+}
+
+function mergeDrawingStructure(original: Uint8Array, generated: Uint8Array): Uint8Array {
+  const source = parseXml(strFromU8(original));
+  const target = parseXml(strFromU8(generated));
+  if (!source || !target) return original;
+
+  const mergeReferences = (sourceNode: Element, targetNode: Element) => {
+    if (sourceNode.localName === "f") {
+      sourceNode.textContent = targetNode.textContent;
+      return;
+    }
+    const counts = new Map<string, number>();
+    for (const child of Array.from(sourceNode.children)) {
+      const key = `${child.namespaceURI}:${child.localName}`;
+      const index = counts.get(key) ?? 0;
+      counts.set(key, index + 1);
+      const match = Array.from(targetNode.children).filter((node) => node.localName === child.localName && node.namespaceURI === child.namespaceURI)[index];
+      if (match) mergeReferences(child, match);
+    }
+  };
+  mergeReferences(source.documentElement, target.documentElement);
+
+  if (source.documentElement.localName === "wsDr") {
+    const placementNames = new Set(["from", "to", "pos", "ext"]);
+    const sourceAnchors = Array.from(source.documentElement.children);
+    sourceAnchors.forEach((anchor) => {
+      let generatedAnchor = matchingDrawingObject(anchor, target);
+      while (generatedAnchor && generatedAnchor.parentElement !== target.documentElement) generatedAnchor = generatedAnchor.parentElement;
+      if (!generatedAnchor) return;
+      const nextAnchor = source.createElementNS(generatedAnchor.namespaceURI, generatedAnchor.nodeName);
+      for (const attribute of Array.from(anchor.attributes)) nextAnchor.setAttributeNS(attribute.namespaceURI, attribute.name, attribute.value);
+      nextAnchor.removeAttribute("editAs");
+      if (generatedAnchor.hasAttribute("editAs")) nextAnchor.setAttribute("editAs", generatedAnchor.getAttribute("editAs")!);
+      for (const child of Array.from(generatedAnchor.children)) {
+        if (placementNames.has(child.localName)) nextAnchor.appendChild(source.importNode(child, true));
+      }
+      for (const child of Array.from(anchor.childNodes)) {
+        if (!isElementNode(child) || !placementNames.has(child.localName)) nextAnchor.appendChild(child.cloneNode(true));
+      }
+      anchor.replaceWith(nextAnchor);
+    });
+  }
+  return strToU8(serializeXml(source));
+}
+
 export function mergeWorkbookImageAssets(
   savedBytes: Uint8Array,
   sourceAssets: WorkbookImageAssets | null,
-  sheetOrigins: Array<WorkbookImageSheetOrigin | null>
+  sheetOrigins: Array<WorkbookImageSheetOrigin | null>,
+  updateStructure = false
 ) {
   if (!sourceAssets) {
     return cloneBytes(savedBytes);
@@ -3650,6 +3728,7 @@ export function mergeWorkbookImageAssets(
 
   try {
     const archive = unzipSync(savedBytes);
+    const generatedArchive = updateStructure ? { ...archive } : archive;
     const workbookSheets = parseWorkbookSheets(archive);
     const originalContentTypesDocument = parseXml(readArchiveText(sourceAssets.archive, "[Content_Types].xml") ?? "");
     const targetContentTypesDocument = ensureContentTypesDocument(archive);
@@ -3658,14 +3737,16 @@ export function mergeWorkbookImageAssets(
     }
 
     const copiedParts = new Set<string>();
-    const copyDrawingPart = (path: string) => {
+    const copyDrawingPart = (path: string, generatedPath?: string) => {
       const normalizedPath = normalizeArchivePath(path);
       const bytes = sourceAssets.archive[normalizedPath];
       if (!bytes || copiedParts.has(normalizedPath)) {
         return;
       }
       copiedParts.add(normalizedPath);
-      archive[normalizedPath] = cloneBytes(bytes);
+      archive[normalizedPath] = updateStructure && generatedPath && generatedArchive[generatedPath] && normalizedPath.endsWith(".xml")
+        ? cloneBytes(mergeDrawingStructure(bytes, generatedArchive[generatedPath]))
+        : cloneBytes(bytes);
       mergeContentTypeForPath(targetContentTypesDocument, originalContentTypesDocument, normalizedPath);
 
       const relsPath = relsPathForDocument(normalizedPath);
@@ -3675,9 +3756,22 @@ export function mergeWorkbookImageAssets(
       }
       archive[relsPath] = cloneBytes(relsBytes);
       mergeContentTypeForPath(targetContentTypesDocument, originalContentTypesDocument, relsPath);
+      const generatedRelationships = generatedPath
+        ? Array.from(parseRelationships(generatedArchive, relsPathForDocument(generatedPath), generatedPath).values())
+        : [];
+      const drawingRelationships = updateStructure && generatedPath && generatedArchive[generatedPath]
+        ? drawingRelationshipMap(bytes, generatedArchive[generatedPath])
+        : new Map<string, string>();
+      const isDrawingPart = normalizedPath.startsWith("xl/drawings/") && normalizedPath.endsWith(".xml");
+      const relationshipCounts = new Map<string, number>();
       for (const relationship of parseRelationships(sourceAssets.archive, relsPath, normalizedPath).values()) {
+        const index = relationshipCounts.get(relationship.type) ?? 0;
+        relationshipCounts.set(relationship.type, index + 1);
         if (relationship.targetMode !== "External" && !relationship.type.endsWith("/hyperlink")) {
-          copyDrawingPart(relationship.target);
+          const match = isDrawingPart
+            ? generatedRelationships.find((item) => item.id === drawingRelationships.get(relationship.id))
+            : generatedRelationships.filter((item) => item.type === relationship.type)[index];
+          copyDrawingPart(relationship.target, match?.target);
         }
       }
     };
@@ -3704,15 +3798,17 @@ export function mergeWorkbookImageAssets(
         return;
       }
 
+      const generatedDrawings = Array.from(parseRelationships(generatedArchive, relsPath, currentSheet.path).values())
+        .filter((relationship) => relationship.type === DRAWING_REL_TYPE);
       removeDrawingReferences(sheetDocument, relDocument);
 
-      origin.attachments.forEach((attachment) => {
+      origin.attachments.forEach((attachment, attachmentIndex) => {
         const drawingBytes = sourceAssets.archive[attachment.drawingPath];
         if (!drawingBytes) {
           return;
         }
 
-        copyDrawingPart(attachment.drawingPath);
+        copyDrawingPart(attachment.drawingPath, generatedDrawings[attachmentIndex]?.target);
 
         const relationshipId = nextRelationshipId(relDocument);
         const relationshipNode = relDocument.createElementNS(PKG_REL_NS, "Relationship");
@@ -3729,6 +3825,7 @@ export function mergeWorkbookImageAssets(
     });
 
     for (const dirtyPath of sourceAssets.dirtyArchivePaths) {
+      if (copiedParts.has(dirtyPath)) continue;
       const bytes = sourceAssets.archive[dirtyPath];
       if (!bytes) {
         continue;

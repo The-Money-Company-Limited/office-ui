@@ -8850,7 +8850,7 @@ function XlsxGrid({
         INITIAL_WORKER_GRID_COLS
       )
     );
-  }, [activeSheet?.maxUsedCol, activeSheet?.maxUsedRow, activeSheetIndex, isWorkerBacked]);
+  }, [activeSheet?.maxUsedCol, activeSheet?.maxUsedRow, activeTab?.id, isWorkerBacked]);
 
   React.useEffect(() => {
     const selectionEndRow = normalizedSelection?.end.row ?? -1;
@@ -8895,11 +8895,7 @@ function XlsxGrid({
   React.useEffect(() => {
     const initialScrollKey = [
       displayFileName,
-      activeSheetIndex,
-      activeSheet?.workbookSheetIndex ?? -1,
-      activeSheet?.name ?? "",
-      activeSheet?.minUsedRow ?? -1,
-      activeSheet?.minUsedCol ?? -1,
+      activeTab?.id ?? "",
       isWorkerBacked ? "worker" : "main"
     ].join("|");
     if (initialScrollKeyRef.current === initialScrollKey) {
@@ -8934,9 +8930,7 @@ function XlsxGrid({
   }, [
     activeSheet?.minUsedCol,
     activeSheet?.minUsedRow,
-    activeSheet?.name,
-    activeSheet?.workbookSheetIndex,
-    activeSheetIndex,
+    activeTab?.id,
     actualColPrefixSums,
     actualRowPrefixSums,
     colVirtualizer,
@@ -16899,7 +16893,7 @@ function XlsxGrid({
     <div style={{ backgroundColor: palette.canvas, display: "flex", flex: 1, minHeight: 0, minWidth: 0 }}>
       {renderScroller
         ? renderScroller({ children: scrollerContent, viewportProps: scrollerViewportProps })
-        : <div key={activeTabIndex} {...scrollerViewportProps}>{scrollerContent}</div>}
+        : <div key={activeTab?.id} {...scrollerViewportProps}>{scrollerContent}</div>}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { editWorkbookStructure, type XlsxStructuralEdit } from "./structural-edits";
+import { editWorkbookStructure, mapStructuralSheetIndex, type XlsxStructuralEdit } from "./structural-edits";
 import { Workbook } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import * as React from "react";
 import { coerceUserEnteredValue } from "./user-entry";
@@ -13,7 +13,7 @@ import type {
   FormControlKindInput as DukeFormControlKindInput,
   ImageDrawing as DukeImageDrawing
 } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
-import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
+import { saveWorkbookBytes } from "./workbook-save";
 import {
   applyChartSeriesFormula,
   buildChartSeriesFormula,
@@ -27,7 +27,6 @@ import { resolveWorkbookColor, resolveWorkbookFillStyle } from "./colors";
 import {
   collectWorkbookFormControls,
   dukeDrawingAnchorToXlsxAnchor,
-  mergeWorkbookImageAssets,
   parseWorkbookImageAssets,
   pxToSheetColumnWidth,
   rectToImageAnchor,
@@ -50,7 +49,6 @@ import {
 } from "./images";
 import {
   addCommentThread,
-  applyCommentThreads,
   closeSuggestion,
   DEFAULT_REVIEWER,
   listSuggestions,
@@ -154,6 +152,7 @@ type SnapshotHistoryEntry = {
   activeSheetIndex: number;
   bytes: Uint8Array;
   selection: XlsxCellRange | null;
+  tabs: XlsxWorkbookTab[];
 };
 
 type CellMutationState = {
@@ -1308,23 +1307,6 @@ function cloneBytes(bytes: Uint8Array): Uint8Array {
   return nextBytes;
 }
 
-function sanitizeSavedWorkbookBytes(bytes: Uint8Array): Uint8Array {
-  try {
-    const archive = unzipSync(bytes);
-    const stylesEntry = archive["xl/styles.xml"];
-    if (stylesEntry) {
-      const stylesXml = strFromU8(stylesEntry)
-        .replace(/&amp;quot;/g, "&quot;")
-        .replace(/&amp;apos;/g, "&apos;");
-      archive["xl/styles.xml"] = strToU8(stylesXml);
-    }
-
-    return zipSync(archive, { level: 6 });
-  } catch {
-    return cloneBytes(bytes);
-  }
-}
-
 function pushHistoryEntry(stack: HistoryEntry[], entry: HistoryEntry) {
   stack.push(entry);
   if (stack.length > HISTORY_LIMIT) {
@@ -2020,7 +2002,21 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     setShapesByWorkbookSheetIndex(assets?.shapesByWorkbookSheetIndex ?? []);
   }, [setCommentThreads]);
 
-  const setChartAssets = React.useCallback((assets: WorkbookChartAssets | null) => {
+  const nextTabIdRef = React.useRef(0);
+  const setChartAssets = React.useCallback((
+    assets: WorkbookChartAssets | null,
+    previousTabs = chartAssetsRef.current?.tabs ?? []
+  ) => {
+    if (assets) {
+      assets.tabs = assets.tabs.map((tab) => {
+        const previous = previousTabs.find((candidate) => candidate.kind === tab.kind && (
+          tab.kind === "sheet"
+            ? candidate.workbookSheetIndex === tab.workbookSheetIndex
+            : candidate.chartsheetIndex === tab.chartsheetIndex
+        ));
+        return { ...tab, id: previous?.id ?? `tab-${nextTabIdRef.current++}` };
+      });
+    }
     chartAssetsRef.current = assets;
     setChartsByWorkbookSheetIndex(assets?.chartsByWorkbookSheetIndex ?? []);
     setChartsheets(assets?.chartsheets ?? []);
@@ -3464,9 +3460,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   const canRedo = !readOnly && redoStackRef.current.length > 0;
 
   const createSavedWorkbookBytes = React.useCallback((targetWorkbook: Workbook) => {
-    const sanitizedBytes = sanitizeSavedWorkbookBytes(targetWorkbook.saveXlsxBytes());
-    const mergedBytes = mergeWorkbookImageAssets(sanitizedBytes, imageAssetsRef.current, sheetOriginsRef.current);
-    return commentThreadsRef.current ? applyCommentThreads(mergedBytes, commentThreadsRef.current) : mergedBytes;
+    return saveWorkbookBytes(targetWorkbook, imageAssetsRef.current, sheetOriginsRef.current, commentThreadsRef.current);
   }, []);
 
   const createHistoryEntry = React.useCallback((): SnapshotHistoryEntry | null => {
@@ -3479,9 +3473,10 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       activeCell,
       activeSheetIndex,
       bytes: createSavedWorkbookBytes(workbook),
-      selection
+      selection,
+      tabs
     };
-  }, [activeCell, activeSheetIndex, createSavedWorkbookBytes, selection, workbook]);
+  }, [activeCell, activeSheetIndex, createSavedWorkbookBytes, selection, tabs, workbook]);
 
   const captureCellMutationState = React.useCallback((cell: XlsxCellAddress): CellMutationState | null => {
     const worksheet = getActiveWorksheet();
@@ -3496,9 +3491,11 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     };
   }, [getActiveWorksheet]);
 
-  const restoreHistoryEntry = React.useCallback(async (entry: SnapshotHistoryEntry) => {
-    const wasmModule = await getSheetsWasmModule();
-    const nextWorkbook = wasmModule.Workbook.fromBytes(cloneBytes(entry.bytes));
+  const installWorkbookSnapshot = React.useCallback((
+    nextWorkbook: Workbook,
+    entry: SnapshotHistoryEntry,
+    edit?: XlsxStructuralEdit
+  ) => {
     const nextImageAssets = loadWorkbookImageAssets(entry.bytes, nextWorkbook);
     const nextSheets = buildSheetList(
       nextWorkbook,
@@ -3509,25 +3506,50 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       nextImageAssets.tableStyleByName,
       showHiddenSheets
     );
-    const nextSheetIndex = Math.max(0, Math.min(entry.activeSheetIndex, Math.max(0, nextSheets.length - 1)));
-
+    const previousSheetIndex = entry.tabs.find((tab) => tab.kind === "sheet" && tab.sheetIndex === entry.activeSheetIndex)?.workbookSheetIndex;
+    const nextWorkbookSheetIndex = previousSheetIndex === undefined ? null
+      : edit ? mapStructuralSheetIndex(previousSheetIndex, edit) : previousSheetIndex;
+    const mappedSheetIndex = nextSheets.findIndex((sheet) => sheet.workbookSheetIndex === nextWorkbookSheetIndex);
+    const nextSheetIndex = mappedSheetIndex >= 0 ? mappedSheetIndex
+      : Math.max(0, Math.min(entry.activeSheetIndex, nextSheets.length - 1));
+    const previousTabs = edit ? entry.tabs.flatMap((tab) => {
+      if (tab.workbookSheetIndex === undefined) return [tab];
+      const workbookSheetIndex = mapStructuralSheetIndex(tab.workbookSheetIndex, edit);
+      return workbookSheetIndex === null ? [] : [{ ...tab, workbookSheetIndex }];
+    }) : entry.tabs;
+    const nextChartAssets = loadWorkbookChartAssets(nextWorkbook, nextImageAssets, buildVisibleSheetIndexMap(nextSheets), showHiddenSheets);
+    setChartAssets(nextChartAssets, previousTabs);
+    const nextTabIndex = Math.max(0, nextChartAssets.tabs.findIndex((tab) => tab.kind === "sheet" && tab.sheetIndex === nextSheetIndex));
+    const nextTab = nextChartAssets.tabs[nextTabIndex];
+    const nextActiveCell = (mappedSheetIndex >= 0 ? entry.activeCell : null)
+      ?? nextSheets[nextSheetIndex]?.initialActiveCell ?? { row: 0, col: 0 };
+    const nextSelection = (mappedSheetIndex >= 0 ? entry.selection : null)
+      ?? { start: nextActiveCell, end: nextActiveCell };
+    const nextAnchor = normalizeRange(nextSelection).start;
+    selectionTabRef.current = nextTab?.id ?? null;
+    selectionAnchorRef.current = nextAnchor;
+    if (nextTab) {
+      selectionsByTabRef.current.set(nextTab.id, { activeCell: nextActiveCell, selection: nextSelection, anchor: nextAnchor });
+    }
     setError(null);
     setIsLoading(false);
     setImageAssets(nextImageAssets);
     setWorkbook(nextWorkbook);
     setSheets(nextSheets);
-    const nextChartAssets = loadWorkbookChartAssets(nextWorkbook, nextImageAssets, buildVisibleSheetIndexMap(nextSheets), showHiddenSheets);
-    setChartAssets(nextChartAssets);
     setActiveSheetIndexState(nextSheetIndex);
-    const nextTabIndex = nextChartAssets.tabs.findIndex((tab) => tab.kind === "sheet" && tab.sheetIndex === nextSheetIndex);
-    if (nextTabIndex >= 0) {
-      setActiveTabIndexState(nextTabIndex);
-    }
-    setActiveCell(entry.activeCell);
-    setSelection(entry.selection);
-    selectionAnchorRef.current = entry.selection ? normalizeRange(entry.selection).start : entry.activeCell;
+    setActiveTabIndexState(nextTabIndex);
+    setActiveCell(nextActiveCell);
+    setSelection(nextSelection);
+    setSelectedChartId(null);
+    setSelectedChartElement(null);
+    setSelectedImageId(null);
     setRevision((current) => current + 1);
-  }, [setChartAssets, setImageAssets]);
+  }, [setChartAssets, setImageAssets, showHiddenSheets]);
+
+  const restoreHistoryEntry = React.useCallback(async (entry: SnapshotHistoryEntry) => {
+    const wasmModule = await getSheetsWasmModule();
+    installWorkbookSnapshot(wasmModule.Workbook.fromBytes(cloneBytes(entry.bytes)), entry);
+  }, [installWorkbookSnapshot]);
 
   const applyCellEditHistoryEntry = React.useCallback((
     entry: CellEditHistoryEntry,
@@ -3605,32 +3627,18 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     if (readOnly || !workbook) return;
     const before = createHistoryEntry();
     if (!before) return;
-    const bytes = editWorkbookStructure(before.bytes, commentThreadsRef.current, edit);
+    const bytes = editWorkbookStructure(before.bytes, commentThreadsRef.current, edit, {
+      assets: imageAssetsRef.current,
+      sheetOrigins: sheetOriginsRef.current
+    });
     const nextWorkbook = Workbook.fromBytes(bytes);
     maybeRecalculateWorkbook(nextWorkbook);
-    const assets = loadWorkbookImageAssets(bytes, nextWorkbook);
-    const currentName = activeSheet?.name;
-    const nextName = edit.kind === "rename" && activeSheet?.workbookSheetIndex === edit.sheetIndex ? edit.name : currentName;
-    const nextSheets = buildSheetList(nextWorkbook, assets.sheetStatesByWorkbookSheetIndex, assets.themePalette, assets.styleById, assets.namedCellStyleByName, assets.tableStyleByName, showHiddenSheets);
-    const nextIndex = Math.max(0, nextSheets.findIndex((sheet) => sheet.name === nextName));
-    const charts = loadWorkbookChartAssets(nextWorkbook, assets, buildVisibleSheetIndexMap(nextSheets), showHiddenSheets);
     cancelCut();
-    selectionsByTabRef.current.clear();
-    selectionTabRef.current = null;
+    installWorkbookSnapshot(nextWorkbook, { ...before, bytes }, edit);
     pushHistoryEntry(undoStackRef.current, before);
     redoStackRef.current = [];
     setHistoryRevision((current) => current + 1);
-    setImageAssets(assets);
-    setWorkbook(nextWorkbook);
-    setSheets(nextSheets);
-    setChartAssets(charts);
-    setActiveSheetIndexState(nextIndex);
-    setActiveTabIndexState(Math.max(0, charts.tabs.findIndex((tab) => tab.kind === "sheet" && tab.sheetIndex === nextIndex)));
-    setActiveCell(null);
-    setSelection(null);
-    selectionAnchorRef.current = null;
-    setRevision((current) => current + 1);
-  }, [activeSheet, cancelCut, createHistoryEntry, maybeRecalculateWorkbook, readOnly, setChartAssets, setImageAssets, showHiddenSheets, workbook]);
+  }, [cancelCut, createHistoryEntry, installWorkbookSnapshot, maybeRecalculateWorkbook, readOnly, workbook]);
 
   const insertRows = React.useCallback((index: number, count = 1) => {
     if (activeSheet) editStructure({ kind: "rows", sheetIndex: activeSheet.workbookSheetIndex, index, count, delete: false });
@@ -4910,7 +4918,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   }, [activeSheetIndex, deleteSheet, workbook]);
 
   const defineNamedRange = React.useCallback((name: string, range?: XlsxCellRange | null) => {
-    if (readOnly || !workbook) {
+    if (readOnly || !workbook || !activeSheet) {
       return;
     }
 
@@ -4925,9 +4933,9 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     }
 
     recordHistoryBeforeMutation();
-    workbook.defineName(trimmed, rangeToA1(targetRange));
+    workbook.defineName(trimmed, `'${activeSheet.name.replace(/'/g, "''")}'!${rangeToA1(targetRange)}`);
     setRevision((current) => current + 1);
-  }, [readOnly, recordHistoryBeforeMutation, selection, workbook]);
+  }, [activeSheet, readOnly, recordHistoryBeforeMutation, selection, workbook]);
 
   const getCutClipboardData = React.useCallback(() => {
     if (readOnly || !workbook || !activeSheet) return null;
