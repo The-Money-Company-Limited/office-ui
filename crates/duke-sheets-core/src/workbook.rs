@@ -829,6 +829,10 @@ impl Workbook {
             return Err(Error::SheetOutOfBounds(index, self.worksheets.len()));
         }
 
+        let name = self.worksheets[index].name().to_owned();
+        self.rewrite_references(&crate::structural::ReferenceEdit::DeleteSheet { sheet: &name });
+        self.remap_name_scopes(|i| if i == index { None } else { Some(if i > index { i - 1 } else { i }) });
+        if self.active_sheet > index { self.active_sheet -= 1; }
         let worksheet = self.worksheets.remove(index);
 
         // Update sheet_order: remove the entry and decrement indices above it
@@ -865,8 +869,25 @@ impl Workbook {
             return Err(Error::SheetOutOfBounds(to, self.worksheets.len()));
         }
 
+        self.remap_name_scopes(|i| Some(if i == from { to }
+            else if from < to && i > from && i <= to { i - 1 }
+            else if from > to && i >= to && i < from { i + 1 }
+            else { i }));
         let worksheet = self.worksheets.remove(from);
         self.worksheets.insert(to, worksheet);
+
+        // Move the worksheet tabs as well as the underlying worksheet objects.
+        let mut tabs: Vec<_> = self.sheet_order.iter().filter_map(|slot| match slot {
+            SheetSlot::Worksheet(index) => Some(*index), _ => None,
+        }).collect();
+        if let (Some(source), Some(target)) = (tabs.iter().position(|i| *i == from), tabs.iter().position(|i| *i == to)) {
+            let moved = tabs.remove(source);
+            tabs.insert(target, moved);
+            let mut tabs = tabs.into_iter();
+            for slot in &mut self.sheet_order {
+                if let SheetSlot::Worksheet(index) = slot { *index = tabs.next().unwrap(); }
+            }
+        }
 
         // Update sheet_order indices to reflect the move
         if !self.sheet_order.is_empty() {
@@ -905,6 +926,8 @@ impl Workbook {
         // Validate the new name (excluding current sheet from duplicate check)
         self.validate_sheet_name_excluding(new_name, Some(index))?;
 
+        let old_name = self.worksheets[index].name().to_owned();
+        self.rewrite_references(&crate::structural::ReferenceEdit::Rename { old: &old_name, new: new_name });
         self.worksheets[index].set_name(new_name);
         self.structural_generation += 1;
         Ok(())
@@ -1080,13 +1103,16 @@ impl Workbook {
         if name.is_empty() {
             return Err(Error::InvalidSheetName("Sheet name cannot be empty".into()));
         }
-        if name.len() > MAX_SHEET_NAME_LEN {
+        if name.chars().count() > MAX_SHEET_NAME_LEN {
             return Err(Error::InvalidSheetName(format!(
                 "Sheet name too long (max {} characters)",
                 MAX_SHEET_NAME_LEN
             )));
         }
 
+        if name.starts_with('\'') || name.ends_with('\'') || name.chars().any(char::is_control) {
+            return Err(Error::InvalidSheetName("Invalid characters in sheet name".into()));
+        }
         // Check for invalid characters
         const INVALID_CHARS: &[char] = &[':', '\\', '/', '?', '*', '[', ']'];
         for c in INVALID_CHARS {
@@ -1420,11 +1446,10 @@ mod tests {
         // Move worksheet from index 0 to index 2
         wb.move_worksheet(0, 2).unwrap();
         // After move: worksheets = [Sheet2(0), Sheet3(1), Sheet1(2)]
-        // sheet_order indices should be remapped:
-        // Old 0→new 2, old 1→new 0, old 2→new 1
-        assert_eq!(wb.sheet_order()[0], SheetSlot::Worksheet(2)); // was 0, moved to 2
-        assert_eq!(wb.sheet_order()[1], SheetSlot::Worksheet(0)); // was 1, shifted to 0
-        assert_eq!(wb.sheet_order()[2], SheetSlot::Worksheet(1)); // was 2, shifted to 1
+        // The visible tab order follows the reordered worksheets.
+        assert_eq!(wb.sheet_order()[0], SheetSlot::Worksheet(0));
+        assert_eq!(wb.sheet_order()[1], SheetSlot::Worksheet(1));
+        assert_eq!(wb.sheet_order()[2], SheetSlot::Worksheet(2));
     }
 
     #[test]
@@ -1803,3 +1828,5 @@ mod tests {
         );
     }
 }
+
+mod structural;

@@ -825,3 +825,5 @@ mod tests {
         assert_eq!(cells[2].0, 1); // row 1
     }
 }
+
+mod structural;

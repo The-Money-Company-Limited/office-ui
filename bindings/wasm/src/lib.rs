@@ -1404,6 +1404,36 @@ impl Workbook {
         Ok(())
     }
 
+    #[wasm_bindgen(js_name = insertRows)]
+    pub fn insert_rows(&self, sheet: usize, index: u32, count: u32) -> Result<(), JsError> {
+        self.inner.borrow_mut().insert_rows(sheet, index, count).map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = deleteRows)]
+    pub fn delete_rows(&self, sheet: usize, index: u32, count: u32) -> Result<(), JsError> {
+        self.inner.borrow_mut().delete_rows(sheet, index, count).map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = insertColumns)]
+    pub fn insert_columns(&self, sheet: usize, index: u16, count: u16) -> Result<(), JsError> {
+        self.inner.borrow_mut().insert_columns(sheet, index, count).map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = deleteColumns)]
+    pub fn delete_columns(&self, sheet: usize, index: u16, count: u16) -> Result<(), JsError> {
+        self.inner.borrow_mut().delete_columns(sheet, index, count).map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = renameSheet)]
+    pub fn rename_worksheet(&self, sheet: usize, name: &str) -> Result<(), JsError> {
+        self.inner.borrow_mut().rename_worksheet(sheet, name).map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = moveSheet)]
+    pub fn move_worksheet(&self, sheet: usize, to: usize) -> Result<(), JsError> {
+        self.inner.borrow_mut().move_worksheet(sheet, to).map_err(to_js_error)
+    }
+
     #[wasm_bindgen(js_name = removeSheet)]
     pub fn remove_sheet(&self, index: usize) -> Result<(), JsError> {
         let mut wb = self.inner.borrow_mut();

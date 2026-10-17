@@ -3229,3 +3229,5 @@ mod tests {
         assert_eq!(ws.conditional_format_count(), 0);
     }
 }
+
+pub(crate) mod structural;
