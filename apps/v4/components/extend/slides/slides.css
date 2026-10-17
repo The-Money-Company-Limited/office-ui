@@ -131,6 +131,14 @@
   height: 1080px;
   transform-origin: top left;
 }
+/* Keep the canvas independent of the application's global CSS reset. */
+.slides-content,
+.slides-content * {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: 0 solid;
+}
 .slides-content {
   color: #172033;
   font-family: Arial, sans-serif;
@@ -165,12 +173,27 @@
   font-weight: 700;
 }
 .slides-content table {
+  text-indent: 0;
+  border-color: inherit;
   border-collapse: collapse;
+}
+.slides-content a {
+  color: inherit;
+  text-decoration: inherit;
+}
+.slides-content hr {
+  height: 0;
+  color: inherit;
+  border-top-width: 1px;
+}
+.slides-content img {
+  height: auto;
 }
 .slides-content img,
 .slides-content svg {
   display: block;
   max-width: none;
+  vertical-align: middle;
 }
 .slides-content aside {
   display: none !important;

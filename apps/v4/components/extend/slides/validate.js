@@ -48,7 +48,7 @@ const CSS_PROPERTIES = new Set(
   (
     "width height min-width min-height max-width max-height margin margin-top margin-right margin-bottom margin-left " +
     "padding padding-top padding-right padding-bottom padding-left gap row-gap column-gap " +
-    "color background background-color font-family font-size font-weight font-style line-height letter-spacing text-align text-decoration text-transform white-space word-break overflow-wrap " +
+    "color background background-color font-family font-size font-weight font-style line-height letter-spacing text-align text-decoration text-transform white-space white-space-collapse text-wrap-mode word-break overflow-wrap " +
     "display flex flex-direction flex-wrap flex-grow flex-shrink flex-basis align-items align-self align-content justify-content justify-items justify-self order " +
     "grid-template-columns grid-template-rows grid-column grid-row grid-auto-flow grid-auto-columns grid-auto-rows " +
     "position top right bottom left z-index border border-top border-right border-bottom border-left border-width border-style border-color border-radius " +
@@ -86,13 +86,19 @@ export function sanitizeSlide(source, slideId, dom, warn = console.warn) {
     throw new Error(`Slide ${slideId}: expected one <section id="${slideId}">`)
   const drop = (element, detail) =>
     warn(
-      `Slide ${slideId}: <${element.localName}${element.id ? ` id="${element.id}"` : ""}> dropped ${detail}`
+      `Slide ${slideId}: <${element.localName || "text"}${element.id ? ` id="${element.id}"` : ""}> dropped ${detail}`,
+      {
+        element: element.id || element.localName || "text",
+        text: (element.textContent || element.getAttribute?.("alt") || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 80),
+        detail,
+      }
     )
   for (const node of [...template.content.childNodes]) {
     if (node !== root && (node.nodeType !== 3 || node.textContent?.trim())) {
-      warn(
-        `Slide ${slideId}: <${node.nodeType === 1 ? node.localName : "text"}> dropped outside section`
-      )
+      drop(node, "outside section")
     }
   }
   if (root.id !== slideId) drop(root, "mismatched section ID")
@@ -142,6 +148,7 @@ export function sanitizeSlide(source, slideId, dom, warn = console.warn) {
     }
     const style = element.style
     const originalStyle = element.getAttribute("style") || ""
+    const declaredProperties = new Set()
     for (const declaration of originalStyle.split(";")) {
       const separator = declaration.indexOf(":")
       if (separator < 0) continue
@@ -150,6 +157,7 @@ export function sanitizeSlide(source, slideId, dom, warn = console.warn) {
         .replace(/\/\*.*?\*\//g, "")
         .trim()
         .toLowerCase()
+      declaredProperties.add(property)
       const probe = dom.createElement("div").style
       probe.cssText = declaration
       if (!probe.getPropertyValue(property))
@@ -157,6 +165,15 @@ export function sanitizeSlide(source, slideId, dom, warn = console.warn) {
     }
     for (const property of [...style]) {
       const value = style.getPropertyValue(property)
+      // Chromium expands an ordinary border into unsupported border-image resets.
+      if (
+        property.startsWith("border-image-") &&
+        declaredProperties.has("border") &&
+        ![...declaredProperties].some((name) => name.startsWith("border-image"))
+      ) {
+        style.removeProperty(property)
+        continue
+      }
       if (
         !(
           CSS_PROPERTIES.has(property) ||

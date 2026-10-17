@@ -17,6 +17,9 @@ export function sanitizeSlide(
   source: string,
   slideId: string,
   dom: Document,
-  warn?: (message: string) => void
+  warn?: (
+    message: string,
+    diagnostic: { element: string; text: string; detail: string }
+  ) => void
 ): string
 export function loadDeck(src: string, signal: AbortSignal): Promise<Deck>

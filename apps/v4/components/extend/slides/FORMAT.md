@@ -26,8 +26,8 @@ allow `thead tbody tfoot tr th td`. SVG additionally allows
 No scripts, stylesheets, custom elements, frames, embedded HTML or SVG animation.
 Unsupported elements are dropped with their subtree. Extra top-level content is
 dropped; a missing section is an error. `validate.js` is the single validator
-used by loading, editing and staging. It has no React dependency; a future CLI
-can supply a standards-compatible `Document` to `sanitizeSlide`.
+used by loading, editing, staging and checking. The checker renders the sanitized
+HTML in Chromium with the artifact's shared `slides.css`.
 
 Attributes: `id`, `title`, `style`; `a[href]` permits HTTPS, HTTP and mailto;
 `img[src,alt]` permits embedded base64 PNG/JPEG/GIF/WebP only. Embed images to
@@ -56,7 +56,7 @@ Inline CSS properties:
   border-spacing table-layout list-style-type box-sizing`.
 
 CSSOM-expanded longhands for border sides/corners, background, text decoration,
-grid row/column start/end and overflow x/y are also accepted.
+white-space, grid row/column start/end and overflow x/y are also accepted.
 
 Use px lengths, CSS colors, unitless numbers and grid `fr` tracks. Percent and
 font/viewport/physical length units, CSS variables, URLs, escapes and `!important`
@@ -89,14 +89,18 @@ PowerPoint typography/layout is an approximation; complex effects are rendered
 at slide resolution. Present uses fullscreen when available, otherwise a
 viewport presentation; arrows, space and PageDown/PageUp navigate, Escape exits.
 
-Dependencies are pinned in this directory's `package.json`/`package-lock.json`
-to keep all new dependency files within the permitted slides path. Install with
-`npm ci --prefix apps/v4/components/extend/slides --ignore-scripts` before the
-app build. No external CDN or network request is needed to export.
+Export dependencies resolve from the app's `package.json`. No external CDN or
+network request is needed to export.
+
+## Check your slides
+
+Keep `slides-check.mjs`, `validate.js` and `slides.css` together; once on the deck's computer, run `npm install --no-save playwright && npx playwright install --with-deps chromium` beside the checker.
+Run `node slides-check.mjs <deck-dir>`; add `--json` for per-element findings and fix hints, or `--png <dir>` for 1920×1080 screenshots.
+Exit 1 means fix the errors and rerun; outside-slide and 128px margin findings are warnings only (exit 0). Margin checks use border boxes with 1px tolerance, report only the outermost offending text-bearing group, and skip decoration. Use the same installed fonts as the artifact.
 
 See [tests/README.md](./tests/README.md) for the exact Modal build and browser
 verification commands, including the negative control.
 
-Phase 2: agent self-check CLI, save integration (COD-1462), live data and a PPTX
+Phase 2 remaining: save integration (COD-1462), live data and a PPTX
 to HTML import pipeline. The existing read-only PPTX artifact viewer remains
 available for legacy files.

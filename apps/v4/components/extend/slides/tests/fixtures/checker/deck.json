@@ -1,0 +1,4 @@
+{
+  "title": "Checker defects",
+  "order": ["markup", "overflow", "clipped", "wrap", "outside", "margin", "overlap", "contrast", "image", "clean"]
+}
