@@ -1130,6 +1130,7 @@ export interface XlsxViewerController {
   charts: XlsxChart[];
   chartsheets: XlsxChartsheet[];
   exportCsv: () => void;
+  getDocumentBuffer: () => ArrayBuffer;
   exportXlsx: () => void;
   error: Error | null;
   file?: ArrayBuffer;

@@ -4054,13 +4054,15 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     }
   }, [displayFileName, file, src]);
 
-  const exportXlsx = React.useCallback(() => {
-    if (!workbook) {
-      return;
-    }
+  const getDocumentBuffer = React.useCallback((): ArrayBuffer => {
+    if (!workbook) throw new Error("The workbook is not ready.");
+    return new Uint8Array(createSavedWorkbookBytes(workbook)).buffer;
+  }, [createSavedWorkbookBytes, workbook]);
 
-    downloadBytes(createSavedWorkbookBytes(workbook), `${fileStem(displayFileName)}.xlsx`, XLSX_MIME_TYPE);
-  }, [createSavedWorkbookBytes, displayFileName, workbook]);
+  const exportXlsx = React.useCallback(() => {
+    if (!workbook) return;
+    downloadBytes(new Uint8Array(getDocumentBuffer()), `${fileStem(displayFileName)}.xlsx`, XLSX_MIME_TYPE);
+  }, [displayFileName, getDocumentBuffer, workbook]);
 
   const exportCsv = React.useCallback(() => {
     if (!workbook) {
@@ -5313,6 +5315,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       displayFileName,
       download,
       exportCsv,
+      getDocumentBuffer,
       exportXlsx,
       error,
       fillSelection,
@@ -5459,6 +5462,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       download,
       error,
       exportCsv,
+      getDocumentBuffer,
       exportXlsx,
       file,
       fillSelection,
