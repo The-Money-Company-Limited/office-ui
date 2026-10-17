@@ -57,7 +57,7 @@ try {
           await input.click();
         } else {
           await cell(2, 2).dblclick();
-          input = page.locator(".react-xlsx-viewer input").first();
+          input = page.locator(".react-xlsx-viewer textarea[data-xlsx-editor]").first();
         }
         await input.pressSequentially("=SU");
         await page.getByRole("option", { name: "SUM", exact: true }).click();
@@ -98,7 +98,7 @@ try {
         await page.waitForFunction(() => window.controller.activeCell?.row === 2 && window.controller.activeCell?.col === 2);
         if (bar) await input.click();
         else await cell(2, 2).dblclick();
-        const editor = bar ? input : page.locator(".react-xlsx-viewer input").first();
+        const editor = bar ? input : page.locator(".react-xlsx-viewer textarea[data-xlsx-editor]").first();
         assert.equal(await editor.inputValue(), "=SUM(A1:B1)");
         await editor.fill("=");
         await cell(0, 0).click();

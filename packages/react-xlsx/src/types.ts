@@ -1150,6 +1150,8 @@ export interface XlsxViewerController {
   getSheetShapes: (sheetIndex?: number) => XlsxShape[];
   getClipboardData: () => XlsxClipboardData | null;
   getCellDisplayValue: (cell?: XlsxCellAddress | null) => string;
+  /** Raw editable content, including a leading equals sign for formulas and apostrophe for forced text. */
+  getCellInputValue: (cell?: XlsxCellAddress | null) => string;
   getCellFormula: (cell?: XlsxCellAddress | null) => string;
   getCellSnapshotAsync?: (workbookSheetIndex: number, row: number, col: number) => Promise<{
     displayValue: string;
@@ -1332,6 +1334,8 @@ export interface XlsxViewerEditing {
   formControls: XlsxFormControl[];
   getClipboardData: () => XlsxClipboardData | null;
   getCellDisplayValue: (cell?: XlsxCellAddress | null) => string;
+  /** Raw editable content, including a leading equals sign for formulas and apostrophe for forced text. */
+  getCellInputValue: (cell?: XlsxCellAddress | null) => string;
   getCellFormula: (cell?: XlsxCellAddress | null) => string;
   getFormControlItems: (controlIndex: number, sheetIndex?: number) => string[];
   getSheetFormControls: (sheetIndex?: number) => XlsxFormControl[];

@@ -7,7 +7,7 @@ import {
   resolveFormulaAssist,
   type FormulaAssist
 } from "./formula-assist";
-import { FormulaEditingContext, type FormulaEditorSession } from "./FormulaEditing";
+import { FormulaEditingContext, type FormulaTextElement, type FormulaEditorSession } from "./FormulaEditing";
 import type { FormulaFunction } from "./formula-functions";
 import type { ViewerPalette } from "./viewer-palette";
 
@@ -18,9 +18,9 @@ export interface XlsxFormulaAssistState {
   highlightedIndex: number;
   choose: (fn: FormulaFunction) => void;
   /** Handles pointing and suggestions; true means the editor skips grid navigation. */
-  handleKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => boolean;
+  handleKeyDown: (event: React.KeyboardEvent<FormulaTextElement>) => boolean;
   /** Keeps the caret current; spread onto the input. */
-  onSelect: (event: React.SyntheticEvent<HTMLInputElement>) => void;
+  onSelect: (event: React.SyntheticEvent<FormulaTextElement>) => void;
 }
 
 /**
@@ -30,7 +30,7 @@ export interface XlsxFormulaAssistState {
 export function useXlsxFormulaAssist(
   value: string,
   onChange: (value: string) => void,
-  inputRef: React.RefObject<HTMLInputElement | null>
+  inputRef: React.RefObject<FormulaTextElement | null>
 ): XlsxFormulaAssistState {
   const editing = React.useContext(FormulaEditingContext);
   const session = React.useRef<FormulaEditorSession | null>(null);
@@ -71,7 +71,8 @@ export function useXlsxFormulaAssist(
     [assist, inputRef, onChange, value]
   );
 
-  const syncInput = React.useCallback((input: HTMLInputElement) => {
+  const syncInput = React.useCallback((input: FormulaTextElement) => {
+    if (document.activeElement !== input) return;
     setCaret(input.selectionStart);
     if (!editing) return;
     const current = session.current ?? {
@@ -99,7 +100,7 @@ export function useXlsxFormulaAssist(
     editing.refresh();
   }, [editing?.editor, editing?.refresh]);
 
-  const onSelect = React.useCallback((event: React.SyntheticEvent<HTMLInputElement>) => {
+  const onSelect = React.useCallback((event: React.SyntheticEvent<FormulaTextElement>) => {
     syncInput(event.currentTarget);
   }, [syncInput]);
 
@@ -113,7 +114,7 @@ export function useXlsxFormulaAssist(
   }, [inputRef, syncInput, value, onBlur]);
 
   const handleKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLInputElement>) => {
+    (event: React.KeyboardEvent<FormulaTextElement>) => {
       onSelect(event);
       if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return true;
       if (/^Arrow(Up|Down|Left|Right)$/.test(event.key) && !event.altKey && !event.ctrlKey && !event.metaKey) {

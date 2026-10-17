@@ -1,10 +1,12 @@
 import * as React from "react";
+import { useFormulaCaret } from "./FormulaEditing";
 import { formulaReferences } from "./formula-assist";
 
 /** A native input keeps text selection, IME and accessibility; its mirror colours references. */
 export const XlsxFormulaInput = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(
-  function XlsxFormulaInput({ value, style, className, onScroll, onPointerDown, ...props }, forwardedRef) {
+  function XlsxFormulaInput({ value, style, className, onScroll, onPointerDown, onSelect, onFocus, ...props }, forwardedRef) {
     const inputRef = React.useRef<HTMLInputElement | null>(null);
+    const caret = useFormulaCaret(inputRef, value);
     const [mirrorStyle, setMirrorStyle] = React.useState<React.CSSProperties>({});
     const [scrollLeft, setScrollLeft] = React.useState(0);
     const text = String(value ?? "");
@@ -38,6 +40,9 @@ export const XlsxFormulaInput = React.forwardRef<HTMLInputElement, React.InputHT
       <span style={{ position: "relative", display: "block", flex: "1 1 auto", minWidth: 0, width: "100%", height: style?.height, color: style?.color }}>
         <input
           {...props}
+          data-xlsx-editor=""
+          onFocus={(event) => { caret.onFocus(); onFocus?.(event); }}
+          onSelect={(event) => { caret.onSelect(event); onSelect?.(event); }}
           className={className}
           onPointerDown={(event) => { event.stopPropagation(); onPointerDown?.(event); }}
           ref={(input) => {

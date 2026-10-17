@@ -1,4 +1,5 @@
 import * as React from "react";
+import { coerceUserEnteredValue } from "./user-entry";
 import type {
   DrawingAnchor as DukeDrawingAnchor,
   DrawingColor as DukeDrawingColor,
@@ -1352,30 +1353,6 @@ function cloneCellStyle(style: unknown): unknown {
   } catch {
     return style;
   }
-}
-
-function coerceUserEnteredValue(value: string): unknown {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-
-  if (trimmed.startsWith("'")) {
-    return trimmed.slice(1);
-  }
-
-  if (/^(true|false)$/i.test(trimmed)) {
-    return trimmed.toLowerCase() === "true";
-  }
-
-  if (/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(trimmed)) {
-    const parsed = Number(trimmed);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-
-  return value;
 }
 
 function applyCellMutationState(
@@ -3255,6 +3232,18 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     return worksheet.getFormulaAt(cell.row, cell.col) ?? "";
   }, [activeSheet, getActiveWorksheet]);
 
+  const getCellInputValue = React.useCallback((cell?: XlsxCellAddress | null) => {
+    const formula = getCellFormula(cell);
+    if (formula) return formula.startsWith("=") ? formula : `=${formula}`;
+    const worksheet = getActiveWorksheet();
+    if (!worksheet || !cell) return getCellDisplayValue(cell);
+    const value = worksheet.getCellAt(cell.row, cell.col);
+    if (value.is_empty) return "";
+    const text = value.toString();
+    if (value.is_text && (typeof coerceUserEnteredValue(text) !== "string" || text.startsWith("=") || text.startsWith("'"))) return `'${text}`;
+    return text;
+  }, [getActiveWorksheet, getCellDisplayValue, getCellFormula]);
+
   const getClipboardData = React.useCallback((): XlsxClipboardData | null => {
     cancelCut();
     const worksheet = getActiveWorksheet();
@@ -4574,7 +4563,14 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     if (entry.length > 1 && entry.startsWith("=")) {
       worksheet.setFormula(cellAddressToA1(cell), entry);
     } else {
-      worksheet.setCell(cellAddressToA1(cell), coerceUserEnteredValue(value));
+      const parsed = coerceUserEnteredValue(value);
+      worksheet.setCell(cellAddressToA1(cell), parsed);
+      if (typeof parsed === "number" && entry.endsWith("%")) {
+        worksheet.setCellStyleAt(cell.row, cell.col, {
+          ...worksheet.getCellStyleAt(cell.row, cell.col),
+          numberFormat: { formatType: "custom", formatString: "0.##########%" }
+        });
+      }
     }
     const after = captureCellMutationState(cell);
     if (!after) {
@@ -4805,12 +4801,13 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     }
 
     recordHistoryBeforeMutation();
-    const baseName = name?.trim() || "Sheet";
-    let candidate = baseName;
-    let counter = 2;
-    while (workbook.sheetIndex(candidate) !== undefined) {
-      candidate = `${baseName} ${counter}`;
+    const baseName = name?.trim();
+    let counter = 1;
+    let candidate = baseName || `Sheet${counter}`;
+    const existingNames = new Set(Array.from({ length: workbook.sheetCount }, (_, index) => workbook.getSheet(index).name.toLowerCase()));
+    while (existingNames.has(candidate.toLowerCase())) {
       counter += 1;
+      candidate = baseName ? `${baseName} ${counter}` : `Sheet${counter}`;
     }
 
     workbook.addSheet(candidate);
@@ -5300,6 +5297,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       file,
       getClipboardData,
       getCellDisplayValue,
+      getCellInputValue,
       getCellFormula,
       getFormControlItems,
       getCellSnapshotAsync: isWorkerBacked ? getCellSnapshotAsync : undefined,
@@ -5436,6 +5434,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       getSheetShapes,
       getClipboardData,
       getCellDisplayValue,
+      getCellInputValue,
       getCellFormula,
       getFormControlItems,
       getCellSnapshotAsync,
