@@ -54,7 +54,7 @@ export default defineConfig({
     },
   ],
   resolve: {
-    // The engine forks are linked from sibling checkouts; one React for all.
+    // The engine workspace packages share one React instance with the app.
     dedupe: ["react", "react-dom"],
     alias: [
       {

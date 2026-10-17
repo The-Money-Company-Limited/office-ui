@@ -1,5 +1,13 @@
 # react-xlsx
 
+> In office-ui, this fork is part of the root pnpm workspace. Install and build
+> from the office-ui root on Modal (`pnpm install`, `pnpm build`). Package builds
+> and unit tests can also run from this directory after the root install.
+> Playground apps and their dev/visual-test flows are not included in the default
+> workspace. See [office-ui development](../../README.md#development) for the
+> single lockfile, wasm rebuilds, and subtree update/push workflow. Standalone
+> playground/publishing instructions below describe upstream usage.
+
 [![release](https://img.shields.io/github/v/release/extend-hq/react-xlsx?label=release)](https://github.com/extend-hq/react-xlsx/releases)
 
 Package: `@extend-ai/react-xlsx`

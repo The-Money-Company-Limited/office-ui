@@ -33,18 +33,33 @@ slide HTML files and `deck/deck.json` together; Download still offers ZIP and PP
 
 ## Engines
 
-The DOCX, XLSX, and PPTX engines are our forks, linked from sibling
-checkouts by `pnpm.overrides` in the root `package.json`:
-`../react-docx/packages/react-viewer`, `../react-xlsx/packages/react-xlsx`,
-and `../react-pptx/packages/react-viewer`. Build a fork before building this
-template; its `dist` is what Vite bundles.
+The DOCX, XLSX, and PPTX forks live in `engines/react-docx`,
+`engines/react-xlsx`, and `engines/react-pptx`. They share the root pnpm 9.15.0
+workspace and lockfile; v4 uses `workspace:*` dependencies. One root install
+and `pnpm build` build the engines in dependency order before the app.
+Their `dist` outputs are what this template bundles.
+
+See the root [development guide](../../../../README.md#development) for Modal
+commands, `git subtree pull`/`git subtree push`, and pnpm configuration decisions.
+Ordinary builds of all three engines reuse checked-in binaries and need no Rust.
+Explicit Rust/wasm rebuilds run on Modal, from the repository root:
+
+```bash
+pnpm --filter @extend-ai/react-docx-wasm build:wasm
+pnpm --filter @extend-ai/react-pptx-wasm build:wasm
+(cd engines/react-xlsx && bash scripts/rebuild-duke-wasm.sh)
+```
+
+Pull PPTX’s `engines/react-pptx/packages/wasm/src/generated/` back from Modal
+and include its wasm, JavaScript, and declarations when updating the Rust parser.
 
 ## Build and stage
 
-From the repository root:
+From the repository root on Modal:
 
 ```sh
 pnpm install
+pnpm build
 pnpm --filter v4 artifact-template:build
 pnpm --filter v4 artifact-template:stage /absolute/path/to/report.xlsx /absolute/path/to/new-release-directory
 ```
@@ -112,12 +127,14 @@ The production bridge still owns authorization, size limits and atomic releases.
 Run checks on Modal only, from `office-remote`:
 
 ```sh
-./r sync office-ui react-docx react-xlsx
-./r run react-docx 'pnpm --filter @extend-ai/react-docx build'
-./r run react-xlsx 'pnpm --filter @extend-ai/react-xlsx build'
-./r run office-ui 'sh apps/v4/experiments/artifact-template/dev/verify.sh'
-./r run office-ui 'sh apps/v4/experiments/artifact-template/dev/browser.sh'
-./r run office-ui 'node apps/v4/experiments/artifact-template/dev/negative.mjs'
+repo=worktrees/office-ui/one-repo
+./r up
+./r sync "$repo"
+./r run "$repo" 'pnpm install && pnpm build'
+./r run "$repo" 'sh apps/v4/experiments/artifact-template/dev/verify.sh'
+./r run "$repo" 'sh apps/v4/experiments/artifact-template/dev/browser.sh'
+./r run "$repo" 'node apps/v4/experiments/artifact-template/dev/negative.mjs'
+./r down
 ```
 
 The browser cases use real edits, download conflict copies, verify persisted

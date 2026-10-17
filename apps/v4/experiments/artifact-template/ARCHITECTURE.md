@@ -249,8 +249,10 @@ and release versions; conflicts offer reload or a local download. See
 
 ## Engines
 
-The editors are three MIT engines forked into the organization, with
-`extend-hq` as `upstream`; changes stay small enough to offer back:
+The editors use three MIT engine forks under `engines/`, imported with full
+history using Git subtrees. One root pnpm workspace installs them and Turbo
+builds them before v4. See the [development guide](../../../../README.md#development)
+for upstream subtree updates and pushing fixes back to the forks:
 
 | Engine | Fork                                                                    | Parse and export                                                               |
 | ------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
@@ -274,10 +276,6 @@ The editors are three MIT engines forked into the organization, with
 
 ## Open questions
 
-- **Publishing the engines.** office-ui links the forks from sibling
-  checkouts (`pnpm.overrides` with `link:`), so a fresh clone cannot install
-  without them. Publishing the forks under our own npm scope, or committing
-  packed tarballs, would make the build standalone.
 - **Comment pins after a re-render.** RuntimeVM's layer re-finds a selector
   only on resize, route change, or a notes message. Switching a DOCX between
   Viewing and Suggesting re-renders paragraphs, and a pin can stay on the

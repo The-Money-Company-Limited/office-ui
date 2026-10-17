@@ -24,10 +24,11 @@
     "README.md"
   ],
   "scripts": {
-    "build:wasm": "wasm-pack build ../../crates/pptx-wasm --target web --out-dir ../../packages/wasm/pkg --release",
-    "build": "pnpm build:wasm && tsup src/index.ts src/eager.ts --format esm --dts --sourcemap --clean --splitting false && cp pkg/pptx_wasm_bg.wasm dist/pptx_wasm_bg.wasm",
+    "build:wasm": "wasm-pack build ../../crates/pptx-wasm --target web --out-dir ../../packages/wasm/pkg --release && mkdir -p src/generated && cp pkg/pptx_wasm.js pkg/pptx_wasm.d.ts pkg/pptx_wasm_bg.wasm.d.ts pkg/pptx_wasm_bg.wasm src/generated/",
+    "build": "pnpm run build:js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --root ../.. packages/wasm/src"
+    "test": "vitest run --root ../.. packages/wasm/src",
+    "build:js": "tsup src/index.ts src/eager.ts --format esm --dts --sourcemap --clean --splitting false && cp src/generated/pptx_wasm_bg.wasm dist/pptx_wasm_bg.wasm"
   },
   "devDependencies": {
     "tsup": "^8.5.0",

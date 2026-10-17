@@ -1,2 +1,6 @@
 packages:
   - "apps/*"
+  - "engines/*"
+  - "engines/react-docx/packages/*"
+  - "engines/react-xlsx/packages/*"
+  - "engines/react-pptx/packages/*"

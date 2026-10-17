@@ -345,7 +345,8 @@ function fontMetricProfileKey(): string {
   const viewportScale =
     typeof window !== "undefined" ? window.visualViewport?.scale ?? 1 : 1;
   const hasDom = typeof document !== "undefined" && Boolean(document.body);
-  return `${ratio}\u0000${viewportScale}\u0000${hasDom}`;
+  // Keep NUL separators out of template literals: SSR minification can emit invalid octal escapes.
+  return [ratio, viewportScale, hasDom].join("\u0000");
 }
 
 function bodyZoomScale(): number {

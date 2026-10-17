@@ -1,4 +1,4 @@
-import initialize, { detect_presentation_format, parse_presentation } from '../pkg/pptx_wasm.js';
+import initialize, { detect_presentation_format, parse_presentation } from './generated/pptx_wasm.js';
 
 export type WasmSource =
   | string

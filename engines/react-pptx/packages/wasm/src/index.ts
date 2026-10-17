@@ -1,4 +1,4 @@
-type WasmModule = typeof import('../pkg/pptx_wasm.js');
+type WasmModule = typeof import('./generated/pptx_wasm.js');
 
 export type WasmSource = string | URL | Request | Response | BufferSource | WebAssembly.Module;
 
@@ -13,7 +13,7 @@ export function setWasmSource(nextSource: WasmSource): void {
 export async function initWasm(nextSource?: WasmSource): Promise<void> {
   if (nextSource !== undefined) setWasmSource(nextSource);
   runtimePromise ??= (async () => {
-    const runtime = await import('../pkg/pptx_wasm.js');
+    const runtime = await import('./generated/pptx_wasm.js');
     await runtime.default(source as Parameters<typeof runtime.default>[0]);
     return runtime;
   })();

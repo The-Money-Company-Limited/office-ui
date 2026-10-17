@@ -20,6 +20,10 @@
   "publishConfig": {
     "access": "restricted"
   },
+  "devDependencies": {
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3"
+  },
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --clean",
     "typecheck": "tsc -p tsconfig.json --noEmit",

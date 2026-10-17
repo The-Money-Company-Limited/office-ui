@@ -18,6 +18,7 @@ output/
 .powerpoint-oracle/references/
 apps/playground/public/*.pptx
 tests/fixtures/generated/
+# Temporary wasm-pack output; src/generated contains the checked-in runtime.
 packages/wasm/pkg/
 *.log
 *.tgz

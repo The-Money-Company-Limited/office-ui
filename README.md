@@ -225,12 +225,110 @@ npx shadcn@latest add @extend/e-signature
 
 ## Development
 
+The app and the three engine forks share one pnpm 9.15.0 workspace and one
+root lockfile. The forks live in `engines/react-docx`, `engines/react-xlsx`,
+and `engines/react-pptx`, imported with full history using Git subtrees.
+`apps/v4` consumes their packages with `workspace:*` dependencies.
+
+From the repository root, on Modal:
+
 ```bash
 pnpm install
-pnpm v4:dev
+pnpm build
 ```
 
-The site runs at `http://localhost:4000`.
+The root build uses Turbo's workspace dependency graph to build the engines
+before v4. Engine root packages provide build/test tooling; their playground
+apps are excluded from the workspace. After building, `pnpm v4:dev` serves
+the site at `http://localhost:4000`. The existing v4 scripts also work,
+including `pnpm --filter v4 build` after the engines have been built.
+
+Builds, tests, and Rust/wasm rebuilds run on Modal, not on the laptop. With the
+helper at `~/Desktop/Code/office-remote/r`, use a repo path relative to
+`~/Desktop/Code` (for this worktree, `worktrees/office-ui/one-repo`):
+
+```bash
+r=~/Desktop/Code/office-remote/r
+repo=worktrees/office-ui/one-repo
+"$r" up
+"$r" sync "$repo"
+"$r" run "$repo" 'pnpm install --frozen-lockfile && pnpm build'
+"$r" run "$repo" 'pnpm --filter v4 build'
+"$r" run "$repo" 'cd engines/react-docx && pnpm exec vitest run'
+"$r" run "$repo" 'cd engines/react-xlsx && pnpm test'
+"$r" run "$repo" 'cd engines/react-pptx && pnpm exec vitest run'
+"$r" down
+```
+
+When intentionally updating dependencies, use `pnpm install --no-frozen-lockfile`
+on Modal and `"$r" pull "$repo" pnpm-lock.yaml` before shutting it down.
+Normal CI installs use the checked-in root lockfile.
+
+DOCX and PPTX ordinary builds use their checked-in wasm and generated JavaScript.
+PPTX keeps its generated runtime in `packages/wasm/src/generated/`; `pkg/` is
+temporary wasm-pack output and stays ignored. XLSX copies its vendored Duke Sheets
+wasm via `scripts/copy-duke-wasm.mjs`. A fresh clone installs and builds without
+Rust. To update these binaries, run the explicit rebuild commands on Modal:
+
+```bash
+pnpm --filter @extend-ai/react-docx-wasm build:wasm
+pnpm --filter @extend-ai/react-pptx-wasm build:wasm
+(cd engines/react-xlsx && bash scripts/rebuild-duke-wasm.sh)
+```
+
+Rebuilds require Rust, the `wasm32-unknown-unknown` target, and `wasm-pack`
+(the remote helper supplies them). Pull the generated files back before shutting
+Modal down. For PPTX, from the laptop using the helper variables above:
+
+```bash
+"$r" run "$repo" 'pnpm --filter @extend-ai/react-pptx-wasm build:wasm'
+"$r" pull "$repo" engines/react-pptx/packages/wasm/src/generated
+```
+
+Include the generated JavaScript, declarations, and `.wasm` binary in the same
+change as the Rust sources. Ordinary installs and builds never invoke wasm-pack.
+
+### Updating engine subtrees
+
+From the office-ui root, pull upstream changes (replace `<name>` with
+`react-docx`, `react-xlsx`, or `react-pptx`):
+
+```bash
+git subtree pull --prefix=engines/<name> https://github.com/extend-hq/<name>.git main
+```
+
+Keep full history: do not add `--squash`. Resolve workspace/configuration
+conflicts by retaining the single root workspace and lockfile, merging new
+pnpm settings into the root, and removing any reintroduced engine lockfiles
+or workspace files. Install/build/test on Modal and bring the root lockfile
+back before committing the update.
+
+If a fix needs to go back to a fork, push its subtree to a dedicated branch
+and open a PR there:
+
+```bash
+git subtree push --prefix=engines/<name> https://github.com/The-Money-Company-Limited/<name>.git <fix-branch>
+```
+
+### Shared pnpm settings
+
+- pnpm is pinned to 9.15.0 (office-ui previously used 9.0.6).
+- Engine packages declare their own `tsup` and TypeScript build tools so Turbo
+  can build them directly without relying on an engine root’s executable path.
+- The app's React type pins stay at 19.2.2; they satisfy the engines' `^19.1`
+  ranges. Engine dependencies use workspace references instead of sibling links.
+- DOCX's `lodash` 4.18.1 and scoped `picomatch` 4.0.4 overrides are retained.
+  Its global Vite 6.4.2 override is scoped to `react-docx-monorepo>vite`,
+  with an explicit DOCX tooling dependency on 6.4.2. This preserves v4's
+  Vite 7.3.2. PPTX now declares its Vite 8 tooling directly because its tests
+  use Vite's native tsconfig-path support; it previously came from the playground.
+- PPTX's `esbuild` 0.28.1 override is retained repo-wide, including packages
+  whose original dependency range selected an older esbuild. Its
+  `onlyBuiltDependencies: [esbuild]` allowlist is also retained at the root.
+- The `@chenglou/pretext@0.0.8` patch stays in the DOCX subtree; the root
+  `patchedDependencies` path includes `engines/react-docx/`.
+- DOCX's install-time `prepare` hook was removed: setting `core.hooksPath`
+  from a subtree would change office-ui's Git hook configuration.
 
 ## Created By
 

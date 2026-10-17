@@ -49,7 +49,9 @@
     "typescript": "^5.8.3",
     "us-atlas": "^3.0.1",
     "vitest": "^4.1.11",
-    "world-atlas": "^2.0.2"
+    "world-atlas": "^2.0.2",
+    "@extend-ai/react-pptx-model": "workspace:*",
+    "@extend-ai/react-pptx-wasm": "workspace:*"
   },
   "publishConfig": {
     "access": "public"

@@ -1,6 +1,15 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalEnv": ["NODE_ENV"],
+  "globalDependencies": [
+    "engines/*/package.json",
+    "engines/*/tsconfig*.json",
+    "engines/*/scripts/**",
+    "engines/*/Cargo.toml",
+    "engines/*/Cargo.lock",
+    "engines/*/crates/**",
+    "engines/react-docx/patches/**"
+  ],
   "pipeline": {
     "build": {
       "dependsOn": ["^build"],

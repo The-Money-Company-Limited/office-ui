@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import initialize, { parse_presentation } from '../pkg/pptx_wasm.js';
+import initialize, { parse_presentation } from './generated/pptx_wasm.js';
 
 interface SerializedImageNode {
   type: 'image';
@@ -16,11 +16,11 @@ interface SerializedImageNode {
 describe('Rust to Wasm presentation model contract', () => {
   it('returns Record-compatible assets and camel-cased image fields', async () => {
     const workspaceRoot = [process.cwd(), resolve(process.cwd(), '../..')].find((directory) =>
-      existsSync(resolve(directory, 'packages/wasm/pkg/pptx_wasm_bg.wasm')),
+      existsSync(resolve(directory, 'packages/wasm/src/generated/pptx_wasm_bg.wasm')),
     );
     if (!workspaceRoot) throw new Error('Could not locate the react-pptx workspace root.');
 
-    const wasm = await readFile(resolve(workspaceRoot, 'packages/wasm/pkg/pptx_wasm_bg.wasm'));
+    const wasm = await readFile(resolve(workspaceRoot, 'packages/wasm/src/generated/pptx_wasm_bg.wasm'));
     await initialize({ module_or_path: wasm });
 
     const fixture = await readFile(

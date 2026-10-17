@@ -61,5 +61,16 @@
     "build": "tsup --config tsup.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3",
+    "@extend-ai/react-docx-doc-model": "workspace:*",
+    "@extend-ai/react-docx-editor-ops": "workspace:*",
+    "@extend-ai/react-docx-layout-core": "workspace:*",
+    "@extend-ai/react-docx-layout-engine": "workspace:*",
+    "@extend-ai/react-docx-ooxml-core": "workspace:*",
+    "@extend-ai/react-docx-serializer": "workspace:*",
+    "@extend-ai/react-docx-wasm": "workspace:*"
   }
 }

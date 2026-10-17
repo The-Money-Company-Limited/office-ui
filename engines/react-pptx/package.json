@@ -14,9 +14,9 @@
   "homepage": "https://github.com/extend-hq/react-pptx#readme",
   "scripts": {
     "build:packages": "pnpm --filter @extend-ai/react-pptx-wasm build && pnpm --filter @extend-ai/react-pptx-model build && pnpm --filter @extend-ai/react-pptx build",
-    "build": "pnpm build:packages && pnpm --filter @extend-ai/react-pptx-playground build",
+    "build": "pnpm build:packages",
     "dev": "pnpm build:packages && pnpm --filter @extend-ai/react-pptx-playground dev",
-    "typecheck": "pnpm -r --filter './packages/*' typecheck && pnpm --filter @extend-ai/react-pptx-playground typecheck",
+    "typecheck": "pnpm -r --filter './packages/*' run typecheck",
     "test": "pnpm test:unit && pnpm test:oracle && pnpm test:rust",
     "test:unit": "vitest run",
     "test:oracle": "node --test tests/fidelity/*.test.mjs",
@@ -46,11 +46,7 @@
     "pptxgenjs": "^3.12.0",
     "prettier": "^3.5.3",
     "typescript": "^5.8.3",
-    "vitest": "^4.1.11"
-  },
-  "pnpm": {
-    "overrides": {
-      "esbuild": "0.28.1"
-    }
+    "vitest": "^4.1.11",
+    "vite": "^8.1.4"
   }
 }
