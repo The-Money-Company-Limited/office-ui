@@ -1,14 +1,18 @@
 import {
   copyFile,
   cp,
+  lstat,
   mkdir,
   readdir,
+  readFile,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+
+import { validateManifest } from "../../components/extend/slides/validate.js"
 
 const root = path.dirname(fileURLToPath(import.meta.url))
 const dist = path.join(root, "dist")
@@ -17,28 +21,58 @@ const output = process.argv[3] ? path.resolve(process.argv[3]) : dist
 
 if (!source || process.argv.length > 4) {
   throw new Error(
-    "Usage: pnpm --filter v4 artifact-template:stage /path/to/file.docx|xlsx|pptx|pdf [new-output-directory]"
+    "Usage: pnpm --filter v4 artifact-template:stage /path/to/file.docx|xlsx|pptx|pdf|deck-folder [new-output-directory]"
   )
 }
 
-const kind = path.extname(source).slice(1).toLowerCase()
-if (!["docx", "xlsx", "pptx", "pdf"].includes(kind)) {
-  throw new Error("Only DOCX, XLSX, PPTX and PDF files are supported")
+const info = await lstat(source)
+const kind = info.isDirectory()
+  ? "slides"
+  : path.extname(source).slice(1).toLowerCase()
+if (!["docx", "xlsx", "pptx", "pdf", "slides"].includes(kind)) {
+  throw new Error(
+    "Only deck folders and DOCX, XLSX, PPTX and PDF files are supported"
+  )
 }
 
 const name = path.basename(source)
 if (
-  !/^[a-zA-Z0-9][a-zA-Z0-9._-]*\.(docx|xlsx|pptx|pdf)$/.test(name) ||
-  !name.endsWith(`.${kind}`)
+  kind !== "slides" &&
+  (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*\.(docx|xlsx|pptx|pdf)$/.test(name) ||
+    !name.endsWith(`.${kind}`))
 ) {
   throw new Error(
     "Use an ASCII file name containing only letters, numbers, dots, underscores and dashes"
   )
 }
 
-const info = await stat(source)
-if (!info.isFile() || info.size > 25 * 1024 * 1024) {
+if (kind !== "slides" && (!info.isFile() || info.size > 25 * 1024 * 1024)) {
   throw new Error("The source must be a regular file no larger than 25 MiB")
+}
+
+let deckFiles = []
+let title = name
+if (kind === "slides") {
+  const manifest = validateManifest(
+    JSON.parse(await readFile(path.join(source, "deck.json"), "utf8"))
+  )
+  title = manifest.title
+  deckFiles = ["deck.json", ...manifest.order.map((id) => `slides/${id}.html`)]
+  if (!(await lstat(path.join(source, "slides"))).isDirectory())
+    throw new Error("slides must be a regular directory")
+  for (const file of deckFiles) {
+    const info = await lstat(path.join(source, file))
+    if (!info.isFile() || info.size > 25 * 1024 * 1024)
+      throw new Error(`Invalid deck file: ${file}`)
+  }
+}
+
+if (
+  kind === "slides" &&
+  (path.resolve(source) === path.join(output, "deck") ||
+    path.resolve(source).startsWith(path.join(output, "deck") + path.sep))
+) {
+  throw new Error("Source deck must be outside the output deck directory")
 }
 
 await stat(path.join(dist, "index.html"))
@@ -61,11 +95,23 @@ try {
 
   const documentDir = path.join(output, "document")
   await rm(documentDir, { recursive: true, force: true })
-  await mkdir(documentDir)
-  await copyFile(source, path.join(documentDir, name))
+  const deckDir = path.join(output, "deck")
+  await rm(deckDir, { recursive: true, force: true })
+  if (kind === "slides") {
+    await mkdir(path.join(deckDir, "slides"), { recursive: true })
+    for (const file of deckFiles)
+      await copyFile(path.join(source, file), path.join(deckDir, file))
+  } else {
+    await mkdir(documentDir)
+    await copyFile(source, path.join(documentDir, name))
+  }
   await writeFile(
     path.join(output, "artifact.json"),
-    JSON.stringify({ kind, title: name, file: `document/${name}` }) + "\n"
+    JSON.stringify({
+      kind,
+      title,
+      file: kind === "slides" ? "deck/deck.json" : `document/${name}`,
+    }) + "\n"
   )
   await writeFile(path.join(output, "cool.json"), '{"spa":false}\n')
 

@@ -1,0 +1,5 @@
+{
+  "title": "Cool Computers · A shared canvas",
+  "order": ["welcome", "workflow", "delivery", "adoption"],
+  "sections": [{ "title": "HTML slides", "slides": ["welcome", "workflow"] }, { "title": "Delivery", "slides": ["delivery", "adoption"] }]
+}

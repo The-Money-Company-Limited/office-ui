@@ -15,6 +15,11 @@ const PptxViewer = React.lazy(() =>
     default: module.PptxViewerPreview,
   }))
 )
+const SlidesEditor = React.lazy(() =>
+  import("@/components/extend/slides/slides-editor").then((module) => ({
+    default: module.SlidesEditor,
+  }))
+)
 const PdfEditor = React.lazy(() =>
   import("@/components/extend/pdf-editor").then((module) => ({
     default: module.PDFEditor,
@@ -22,7 +27,7 @@ const PdfEditor = React.lazy(() =>
 )
 
 type Artifact = {
-  kind: "docx" | "xlsx" | "pptx" | "pdf"
+  kind: "docx" | "xlsx" | "pptx" | "pdf" | "slides"
   title: string
   file: string
 }
@@ -31,16 +36,19 @@ function parseArtifact(value: unknown): Artifact {
   if (!value || typeof value !== "object")
     throw new Error("Invalid artifact.json")
   const artifact = value as Record<string, unknown>
-  if (!["docx", "xlsx", "pptx", "pdf"].includes(String(artifact.kind)))
+  if (
+    !["docx", "xlsx", "pptx", "pdf", "slides"].includes(String(artifact.kind))
+  )
     throw new Error("Unsupported artifact type")
   if (typeof artifact.title !== "string" || !artifact.title.trim())
     throw new Error("Missing artifact title")
   if (
     typeof artifact.file !== "string" ||
-    !/^document\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.(docx|xlsx|pptx|pdf)$/.test(
-      artifact.file
-    ) ||
-    !artifact.file.endsWith(`.${artifact.kind}`)
+    (artifact.kind === "slides"
+      ? artifact.file !== "deck/deck.json"
+      : !/^document\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.(docx|xlsx|pptx|pdf)$/.test(
+          artifact.file
+        ) || !artifact.file.endsWith(`.${artifact.kind}`))
   )
     throw new Error("Invalid artifact file path")
   return artifact as Artifact
@@ -135,6 +143,13 @@ function App() {
               cellAnchorIdPrefix=""
               scrollsWindow
               syncSheetToUrl
+              isDark={isDark}
+              onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
+            />
+          ) : artifact?.kind === "slides" ? (
+            <SlidesEditor
+              src={documentProps.src}
+              fileName={documentProps.fileName}
               isDark={isDark}
               onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
             />
