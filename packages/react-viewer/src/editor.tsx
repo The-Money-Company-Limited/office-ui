@@ -4508,6 +4508,7 @@ export interface DocxEditorController {
   suggestionRefusalNonce: number;
   importDocxFile: (file: File) => Promise<void>;
   newDocument: () => void;
+  getDocumentBuffer: () => Promise<ArrayBuffer>;
   exportDocx: () => void;
   undo: () => void;
   redo: () => void;
@@ -31304,7 +31305,7 @@ export function useDocxEditor(
     setStatus("Created new document");
   }, [advanceDocumentLoadNonce, unloadEmbeddedFonts]);
 
-  const exportDocx = React.useCallback(async (): Promise<void> => {
+  const getDocumentBuffer = React.useCallback(async (): Promise<ArrayBuffer> => {
     const sourceModel = modelRef.current;
     const transformedModel = pendingExportModelTransformerRef.current
       ? pendingExportModelTransformerRef.current(sourceModel)
@@ -31314,7 +31315,11 @@ export function useDocxEditor(
     }
 
     const output = await serializeDocx(transformedModel, basePackage);
-    const blob = new Blob([output], {
+    return new Uint8Array(output).buffer;
+  }, [basePackage]);
+
+  const exportDocx = React.useCallback(async (): Promise<void> => {
+    const blob = new Blob([await getDocumentBuffer()], {
       type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     });
 
@@ -31333,7 +31338,7 @@ export function useDocxEditor(
     }, 1000);
 
     setStatus("Exported DOCX");
-  }, [basePackage, fileName]);
+  }, [fileName, getDocumentBuffer]);
 
   const undo = React.useCallback((): void => {
     textCommitBurstRef.current = undefined;
@@ -35500,6 +35505,7 @@ export function useDocxEditor(
     suggestionRefusalNonce,
     importDocxFile,
     newDocument,
+    getDocumentBuffer,
     exportDocx,
     undo,
     redo,
