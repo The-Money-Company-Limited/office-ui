@@ -1,0 +1,65 @@
+{
+  "name": "@extend-ai/react-docx",
+  "version": "0.11.0",
+  "description": "React components/hooks for DOCX viewing",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/extend-hq/react-docx.git",
+    "directory": "packages/react-viewer"
+  },
+  "bugs": {
+    "url": "https://github.com/extend-hq/react-docx/issues"
+  },
+  "homepage": "https://github.com/extend-hq/react-docx#readme",
+  "keywords": [
+    "docx",
+    "react",
+    "viewer",
+    "editor",
+    "ooxml"
+  ],
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./agent": {
+      "types": "./dist/agent.d.ts",
+      "import": "./dist/agent.js",
+      "require": "./dist/agent.cjs"
+    },
+    "./docx_wasm_bg.wasm": "./dist/docx_wasm_bg.wasm",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "react-docx-agent": "./agent-cli.mjs"
+  },
+  "files": [
+    "dist",
+    "agent-cli.mjs"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "dependencies": {
+    "@chenglou/pretext": "^0.0.8",
+    "@tanstack/react-virtual": "^3.14.14",
+    "fast-png": "^8.0.0",
+    "utif": "^3.1.0"
+  },
+  "scripts": {
+    "build": "tsup --config tsup.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  }
+}

@@ -1,0 +1,445 @@
+import { describe, expect, it } from "vitest";
+import type { DocModel, NumberingDefinitionSet, TableNode } from "@extend-ai/react-docx-doc-model";
+import {
+  buildParagraphNumberingLabels,
+  buildDocumentPageNodeSegments,
+  estimateTableRowHeightsPx,
+  paragraphLineCountWithinWidth
+} from "../../packages/react-viewer/src/editor";
+
+describe("paragraph indent wrapping", () => {
+  it("invalidates table height estimates when numbering indentation changes", () => {
+    const table: TableNode = {
+      type: "table",
+      style: { layout: "fixed", widthTwips: 3600, columnWidthsTwips: [3600] },
+      rows: [{ type: "table-row", cells: [{ type: "table-cell", nodes: [{
+        type: "paragraph",
+        sourceXml: '<w:p><w:pPr><w:numPr><w:numId w:val="1"/></w:numPr></w:pPr></w:p>',
+        style: { numbering: { numId: 1, ilvl: 0 } },
+        children: [{ type: "text", text: "One two three four five six seven eight. ".repeat(8) }],
+      }] }] }],
+    };
+    const numbering = (leftTwips: number): NumberingDefinitionSet => ({
+      abstracts: [{ abstractNumId: 0, levels: [{
+        ilvl: 0, format: "decimal", text: "%1.", indent: { leftTwips },
+      }] }],
+      instances: [{ numId: 1, abstractNumId: 0 }],
+    });
+    const wide = estimateTableRowHeightsPx(table, 240, numbering(0))[0];
+    const narrow = estimateTableRowHeightsPx(table, 240, numbering(1800))[0];
+    expect(narrow).toBeGreaterThan(wide);
+    expect(estimateTableRowHeightsPx(table, 240, numbering(0))[0]).toBe(wide);
+  });
+
+  it("reserves a positive indent on the first line without narrowing later lines", () => {
+    const paragraph = {
+      type: "paragraph" as const,
+      style: { indent: { firstLineTwips: 720 } },
+      children: [{ type: "text" as const, text: "aaa bbb ccc ddd eee fff" }],
+    };
+    expect(paragraphLineCountWithinWidth(paragraph, 120)).toBe(2);
+    expect(paragraphLineCountWithinWidth({
+      ...paragraph,
+      style: { indent: { leftTwips: 720 } },
+    }, 120)).toBe(3);
+  });
+
+  it("treats hanging indents as a first-line-only width change during pagination", () => {
+    const model: DocModel = {
+      nodes: [
+        {
+          type: "paragraph",
+          style: {
+            indent: {
+              leftTwips: 720,
+              hangingTwips: 720
+            }
+          },
+          children: [
+            {
+              type: "text",
+              text: "AAA BBB CCC"
+            }
+          ]
+        }
+      ],
+      metadata: {
+        sourceParts: 1,
+        warnings: [],
+        headerSections: [],
+        footerSections: [],
+        paragraphStyles: []
+      }
+    };
+
+    const pages = buildDocumentPageNodeSegments(
+      model,
+      24,
+      120,
+      undefined,
+      [
+        {
+          startNodeIndex: 0,
+          pageContentWidthPx: 120,
+          pageContentHeightPx: 24
+        }
+      ]
+    );
+
+    expect(pages).toEqual([[{ nodeIndex: 0 }]]);
+  });
+
+  it("reserves numbering marker width when wrapping list paragraphs during pagination", () => {
+    const numberingDefinitions: NumberingDefinitionSet = {
+      abstracts: [
+        {
+          abstractNumId: 0,
+          levels: [
+            {
+              ilvl: 0,
+              format: "decimal",
+              text: "%1.",
+              suffix: "space",
+              indent: {
+                leftTwips: 720,
+                hangingTwips: 360
+              }
+            }
+          ]
+        }
+      ],
+      instances: [
+        {
+          numId: 1,
+          abstractNumId: 0
+        }
+      ]
+    };
+    const plainParagraph: DocModel["nodes"][number] = {
+      type: "paragraph",
+      style: {
+        indent: {
+          leftTwips: 720,
+          hangingTwips: 360
+        }
+      },
+      children: [
+        {
+          type: "text",
+          text: "AAAA BBBB CCCC DDDD"
+        }
+      ]
+    };
+    const numberedParagraph: DocModel["nodes"][number] = {
+      type: "paragraph",
+      style: {
+        numbering: {
+          numId: 1,
+          ilvl: 0
+        }
+      },
+      children: [
+        {
+          type: "text",
+          text: "AAAA BBBB CCCC DDDD"
+        }
+      ]
+    };
+
+    expect(paragraphLineCountWithinWidth(plainParagraph, 120, numberingDefinitions)).toBe(3);
+    expect(paragraphLineCountWithinWidth(numberedParagraph, 120, numberingDefinitions)).toBe(4);
+  });
+
+  it("uses actual numbering label width for multi-digit list markers during pagination", () => {
+    const createModel = (start: number): DocModel => ({
+      nodes: [
+        {
+          type: "paragraph",
+          style: {
+            numbering: {
+              numId: 1,
+              ilvl: 0
+            }
+          },
+          children: [
+            {
+              type: "text",
+              text: "aaa bbb ccc ddd"
+            }
+          ]
+        }
+      ],
+      metadata: {
+        sourceParts: 1,
+        warnings: [],
+        headerSections: [],
+        footerSections: [],
+        paragraphStyles: [],
+        numberingDefinitions: {
+          abstracts: [
+            {
+              abstractNumId: 0,
+              levels: [
+                {
+                  ilvl: 0,
+                  format: "decimal",
+                  text: "%1.",
+                  suffix: "space",
+                  indent: {
+                    leftTwips: 720,
+                    hangingTwips: 120
+                  }
+                }
+              ]
+            }
+          ],
+          instances: [
+            {
+              numId: 1,
+              abstractNumId: 0,
+              levelStartOverrides: {
+                "0": start
+              }
+            }
+          ]
+        }
+      }
+    });
+
+    const singleDigitModel = createModel(1);
+    const multiDigitModel = createModel(100);
+    const singleDigitParagraph = singleDigitModel.nodes[0];
+    const multiDigitParagraph = multiDigitModel.nodes[0];
+
+    expect(singleDigitParagraph?.type).toBe("paragraph");
+    expect(multiDigitParagraph?.type).toBe("paragraph");
+    if (singleDigitParagraph?.type !== "paragraph" || multiDigitParagraph?.type !== "paragraph") {
+      return;
+    }
+
+    const singleDigitLabel = buildParagraphNumberingLabels(singleDigitModel).get("p:0");
+    const multiDigitLabel = buildParagraphNumberingLabels(multiDigitModel).get("p:0");
+
+    expect(
+      paragraphLineCountWithinWidth(
+        singleDigitParagraph,
+        120,
+        singleDigitModel.metadata.numberingDefinitions,
+        singleDigitLabel
+      )
+    ).toBe(2);
+    expect(
+      paragraphLineCountWithinWidth(
+        multiDigitParagraph,
+        120,
+        multiDigitModel.metadata.numberingDefinitions,
+        multiDigitLabel
+      )
+    ).toBe(3);
+  });
+
+  it("inherits parent numbering counters across numIds that share an abstract list", () => {
+    const numberingDefinitions: NumberingDefinitionSet = {
+      abstracts: [
+        {
+          abstractNumId: 31,
+          levels: [
+            {
+              ilvl: 0,
+              format: "decimal",
+              text: "%1.",
+            },
+            {
+              ilvl: 1,
+              format: "decimal",
+              text: "%1.%2.",
+            },
+            {
+              ilvl: 2,
+              format: "decimal",
+              text: "%1.%2.%3.",
+            },
+          ],
+        },
+      ],
+      instances: [
+        {
+          numId: 1,
+          abstractNumId: 31,
+          levelStartOverrides: {
+            "0": 2,
+            "1": 3,
+          },
+        },
+        {
+          numId: 45,
+          abstractNumId: 31,
+        },
+      ],
+    };
+    const model: DocModel = {
+      nodes: [
+        {
+          type: "paragraph",
+          style: {
+            numbering: {
+              numId: 1,
+              ilvl: 0,
+            },
+          },
+          children: [{ type: "text", text: "Section" }],
+        },
+        {
+          type: "paragraph",
+          style: {
+            numbering: {
+              numId: 1,
+              ilvl: 1,
+            },
+          },
+          children: [{ type: "text", text: "Subsection" }],
+        },
+        {
+          type: "paragraph",
+          style: {
+            numbering: {
+              numId: 45,
+              ilvl: 2,
+            },
+          },
+          children: [{ type: "text", text: "Formula A" }],
+        },
+        {
+          type: "paragraph",
+          style: {
+            numbering: {
+              numId: 45,
+              ilvl: 2,
+            },
+          },
+          children: [{ type: "text", text: "Formula B" }],
+        },
+      ],
+      metadata: {
+        sourceParts: 1,
+        warnings: [],
+        headerSections: [],
+        footerSections: [],
+        paragraphStyles: [],
+        numberingDefinitions,
+      },
+    };
+
+    const labels = buildParagraphNumberingLabels(model);
+
+    expect(labels.get("p:0")?.text).toBe("2.");
+    expect(labels.get("p:1")?.text).toBe("2.3.");
+    expect(labels.get("p:2")?.text).toBe("2.3.1.");
+    expect(labels.get("p:3")?.text).toBe("2.3.2.");
+  });
+
+  it("uses numbering label width when segmenting pages for numbered paragraphs", () => {
+    const createModel = (start: number): DocModel => ({
+      nodes: [
+        {
+          type: "paragraph",
+          children: [
+            {
+              type: "text",
+              text: "Intro"
+            }
+          ]
+        },
+        {
+          type: "paragraph",
+          style: {
+            numbering: {
+              numId: 1,
+              ilvl: 0
+            }
+          },
+          children: [
+            {
+              type: "text",
+              text: "aaa bbb ccc ddd"
+            }
+          ]
+        }
+      ],
+      metadata: {
+        sourceParts: 1,
+        warnings: [],
+        headerSections: [],
+        footerSections: [],
+        paragraphStyles: [],
+        numberingDefinitions: {
+          abstracts: [
+            {
+              abstractNumId: 0,
+              levels: [
+                {
+                  ilvl: 0,
+                  format: "decimal",
+                  text: "%1.",
+                  suffix: "space",
+                  indent: {
+                    leftTwips: 720,
+                    hangingTwips: 120
+                  }
+                }
+              ]
+            }
+          ],
+          instances: [
+            {
+              numId: 1,
+              abstractNumId: 0,
+              levelStartOverrides: {
+                "0": start
+              }
+            }
+          ]
+        }
+      }
+    });
+
+    const singleDigitPages = buildDocumentPageNodeSegments(
+      createModel(1),
+      44,
+      120,
+      createModel(1).metadata.numberingDefinitions,
+      [
+        {
+          startNodeIndex: 0,
+          pageContentWidthPx: 120,
+          pageContentHeightPx: 44
+        }
+      ],
+      {
+        allowParagraphLineSplitting: false
+      }
+    );
+    const multiDigitPages = buildDocumentPageNodeSegments(
+      createModel(100),
+      44,
+      120,
+      createModel(100).metadata.numberingDefinitions,
+      [
+        {
+          startNodeIndex: 0,
+          pageContentWidthPx: 120,
+          pageContentHeightPx: 44
+        }
+      ],
+      {
+        allowParagraphLineSplitting: false
+      }
+    );
+
+    expect(singleDigitPages).toEqual([[{ nodeIndex: 0 }, { nodeIndex: 1 }]]);
+    expect(multiDigitPages).toEqual([
+      [{ nodeIndex: 0 }],
+      [{ nodeIndex: 1 }]
+    ]);
+  });
+});

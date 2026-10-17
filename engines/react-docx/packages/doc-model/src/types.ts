@@ -1,0 +1,670 @@
+export type ParagraphAlignment = "left" | "center" | "right" | "justify";
+export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
+
+export interface TextRunBorderStyle {
+  type: string;
+  color?: string;
+  sizeEighthPt?: number;
+  spacePt?: number;
+  frame?: boolean;
+  shadow?: boolean;
+}
+
+export type TextLigatures =
+  | "none"
+  | "standard"
+  | "contextual"
+  | "historical"
+  | "discretional"
+  | "standardContextual"
+  | "standardHistorical"
+  | "contextualHistorical"
+  | "standardDiscretional"
+  | "contextualDiscretional"
+  | "historicalDiscretional"
+  | "standardContextualHistorical"
+  | "standardContextualDiscretional"
+  | "standardHistoricalDiscretional"
+  | "contextualHistoricalDiscretional"
+  | "all";
+
+export interface TextStyle {
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+  allCaps?: boolean;
+  smallCaps?: boolean;
+  color?: string;
+  highlight?: string;
+  backgroundColor?: string;
+  fontSizePt?: number;
+  fontSizeCsPt?: number;
+  /** Resolved single-family fallback retained for backwards compatibility. */
+  fontFamily?: string;
+  /** @internal Import-time fallback used to detect fontFamily edits. */
+  sourceFontFamily?: string;
+  /** Explicit OOXML w:rFonts slots. */
+  fontFamilyAscii?: string;
+  fontFamilyHAnsi?: string;
+  fontFamilyEastAsia?: string;
+  fontFamilyCs?: string;
+  fontThemeAscii?: string;
+  fontThemeHAnsi?: string;
+  fontThemeEastAsia?: string;
+  fontThemeCs?: string;
+  /** @internal Concrete families resolved from the document theme per slot. */
+  resolvedFontFamilyAscii?: string;
+  /** @internal Concrete families resolved from the document theme per slot. */
+  resolvedFontFamilyHAnsi?: string;
+  /** @internal Concrete families resolved from the document theme per slot. */
+  resolvedFontFamilyEastAsia?: string;
+  /** @internal Concrete families resolved from the document theme per slot. */
+  resolvedFontFamilyCs?: string;
+  fontHint?: string;
+  /** OOXML w:lang slots and complex-script direction controls. */
+  language?: string;
+  languageEastAsia?: string;
+  languageBidi?: string;
+  rightToLeft?: boolean;
+  complexScript?: boolean;
+  characterSpacingTwips?: number;
+  /** Horizontal character width as an integer percentage; 100 is unscaled. */
+  characterScalePercent?: number;
+  sourceCharacterScale?: string;
+  /** Minimum font size in points at which OOXML kerning is enabled. */
+  kerningMinFontSizePt?: number;
+  ligatures?: TextLigatures;
+  contextualAlternates?: boolean;
+  verticalAlign?: "superscript" | "subscript";
+  runBorder?: TextRunBorderStyle;
+}
+
+export interface TextRunNode {
+  type: "text";
+  text: string;
+  style?: TextStyle;
+  link?: string;
+  noteReference?: {
+    kind: "footnote" | "endnote";
+    id: number;
+  };
+}
+
+export interface ImageRunNode {
+  mathMl?: string;
+  blockId?: string;
+  contentNodes?: DocNode[];
+  semanticKind?: string;
+  type: "image";
+  src?: string;
+  alt?: string;
+  widthPx?: number;
+  heightPx?: number;
+  partName?: string;
+  contentType?: string;
+  data?: Uint8Array;
+  sourceXml?: string;
+  crop?: {
+    leftFraction?: number;
+    topFraction?: number;
+    rightFraction?: number;
+    bottomFraction?: number;
+  };
+  cssFilter?: string;
+  cssOpacity?: number;
+  floating?: {
+    xPx?: number;
+    yPx?: number;
+    horizontalAlign?: "left" | "center" | "right" | "inside" | "outside";
+    verticalAlign?: "top" | "center" | "bottom" | "inside" | "outside";
+    horizontalRelativeTo?: string;
+    verticalRelativeTo?: string;
+    distLPx?: number;
+    distRPx?: number;
+    distTPx?: number;
+    distBPx?: number;
+    wrapType?: "none" | "square" | "tight" | "through" | "topAndBottom";
+    wrapText?: "bothSides" | "left" | "right" | "largest";
+    behindDocument?: boolean;
+    zIndex?: number;
+  };
+  syntheticTextBox?: boolean;
+  textBoxText?: string;
+}
+
+export type FormFieldType = "checkbox" | "text" | "date" | "dropdown";
+
+export type FormFieldSourceKind = "sdt" | "legacy";
+
+export interface FormFieldOption {
+  displayText: string;
+  value?: string;
+}
+
+export interface FormFieldTextWidgetSettings {
+  inputType?:
+    | "regular"
+    | "number"
+    | "date"
+    | "currentDate"
+    | "currentTime"
+    | "calculated"
+    | (string & {});
+  defaultText?: string;
+  maxLength?: number;
+  textFormat?: string;
+}
+
+export interface FormFieldCheckboxWidgetSettings {
+  defaultChecked?: boolean;
+  sizeMode?: "auto" | "exact";
+  sizePt?: number;
+}
+
+export interface FormFieldDropdownWidgetSettings {
+  defaultValue?: string;
+}
+
+export interface FormFieldWidgetSettings {
+  name?: string;
+  enabled?: boolean;
+  calcOnExit?: boolean;
+  text?: FormFieldTextWidgetSettings;
+  checkbox?: FormFieldCheckboxWidgetSettings;
+  dropdown?: FormFieldDropdownWidgetSettings;
+}
+
+export interface FormFieldRunNode {
+  type: "form-field";
+  fieldType: FormFieldType;
+  sourceKind?: FormFieldSourceKind;
+  id?: number;
+  tag?: string;
+  title?: string;
+  placeholder?: string;
+  checked?: boolean;
+  value?: string;
+  options?: FormFieldOption[];
+  widget?: FormFieldWidgetSettings;
+  checkedSymbol?: string;
+  uncheckedSymbol?: string;
+  style?: TextStyle;
+  link?: string;
+  sourceXml?: string;
+}
+
+export type ParagraphChildNode = TextRunNode | ImageRunNode | FormFieldRunNode;
+
+export interface ParagraphNumbering {
+  numId: number;
+  ilvl: number;
+}
+
+export interface ParagraphSpacing {
+  beforeTwips?: number;
+  afterTwips?: number;
+  beforeAutoSpacing?: boolean;
+  afterAutoSpacing?: boolean;
+  lineTwips?: number;
+  lineRule?: "auto" | "exact" | "atLeast";
+}
+
+export interface ParagraphIndent {
+  leftTwips?: number;
+  rightTwips?: number;
+  firstLineTwips?: number;
+  hangingTwips?: number;
+}
+
+export interface ParagraphBorderStyle {
+  type: string;
+  color?: string;
+  sizeEighthPt?: number;
+  spacePt?: number;
+  frame?: boolean;
+  shadow?: boolean;
+}
+
+export interface ParagraphBorderSet {
+  top?: ParagraphBorderStyle;
+  right?: ParagraphBorderStyle;
+  bottom?: ParagraphBorderStyle;
+  left?: ParagraphBorderStyle;
+  between?: ParagraphBorderStyle;
+  bar?: ParagraphBorderStyle;
+}
+
+export interface ParagraphTabStop {
+  alignment?: "clear" | "left" | "center" | "right" | "decimal" | "bar";
+  leader?: "none" | "dot" | "hyphen" | "underscore" | "middleDot";
+  positionTwips?: number;
+}
+
+export type ParagraphTextAlignment = "auto" | "top" | "center" | "baseline" | "bottom";
+
+export interface ParagraphStyle {
+  /** @internal Imported effective automatic before-spacing. */
+  sourceBeforeAutoSpacing?: boolean;
+  /** @internal Imported effective automatic after-spacing. */
+  sourceAfterAutoSpacing?: boolean;
+  align?: ParagraphAlignment;
+  snapToGrid?: boolean;
+  /** @internal Imported effective document-grid snapping. */
+  sourceSnapToGrid?: boolean;
+  /** @internal Whether the imported paragraph had a direct grid property. */
+  sourceHasSnapToGrid?: boolean;
+  /** @internal Inherited grid setting exposed when a direct override is cleared. */
+  sourceInheritedSnapToGrid?: boolean;
+  /** @internal Table-style grid setting before paragraph-style overrides. */
+  sourceTableSnapToGrid?: boolean;
+  textAlignment?: ParagraphTextAlignment;
+  /** @internal Imported effective vertical character alignment. */
+  sourceTextAlignment?: ParagraphTextAlignment;
+  /** @internal Whether the imported paragraph had a direct alignment property. */
+  sourceHasTextAlignment?: boolean;
+  /** @internal Inherited alignment exposed when a direct override is cleared. */
+  sourceInheritedTextAlignment?: ParagraphTextAlignment;
+  /** @internal Table-style alignment before paragraph-style overrides. */
+  sourceTableTextAlignment?: ParagraphTextAlignment;
+  headingLevel?: HeadingLevel;
+  styleId?: string;
+  styleName?: string;
+  numbering?: ParagraphNumbering;
+  spacing?: ParagraphSpacing;
+  indent?: ParagraphIndent;
+  backgroundColor?: string;
+  borders?: ParagraphBorderSet;
+  tabStops?: ParagraphTabStop[];
+  contextualSpacing?: boolean;
+  keepNext?: boolean;
+  keepLines?: boolean;
+  widowControl?: boolean;
+  pageBreakBefore?: boolean;
+  dropCap?: {
+    type: "drop" | "margin";
+    lines?: number;
+    wrap?: string;
+    horizontalAnchor?: string;
+    verticalAnchor?: string;
+    xTwips?: number;
+    yTwips?: number;
+    horizontalSpaceTwips?: number;
+    verticalSpaceTwips?: number;
+  };
+}
+
+/** @internal Imported mark layers before paragraph-style inheritance. */
+export interface ParagraphMarkFormattingSource {
+  defaultStyle?: TextStyle;
+  characterStyle?: TextStyle;
+  directStyle?: TextStyle;
+}
+
+export interface ParagraphNode {
+  type: "paragraph";
+  /** Stable identity for measurement caches; survives edits via cloneParagraph. */
+  blockId?: string;
+  children: ParagraphChildNode[];
+  style?: ParagraphStyle;
+  /** Effective formatting of the paragraph-ending mark. */
+  paragraphMarkStyle?: TextStyle;
+  /** @internal Imported mark formatting used to detect changes. */
+  sourceParagraphMarkStyle?: TextStyle;
+  /** @internal Presence distinguishes imported mark layers from fresh marks. */
+  sourceParagraphMarkFormatting?: ParagraphMarkFormattingSource;
+  /** @internal Original paragraph mark properties retained during regeneration. */
+  sourceParagraphMarkPropertiesXml?: string;
+  paragraphMarkDeleted?: boolean;
+  /**
+   * Word's `w14:paraId` (8 hex digits, upper case): parsed at import, kept
+   * through edits and written back on export, so a paragraph's anchor id
+   * survives a rebuilt `sourceXml`.
+   */
+  paraId?: string;
+  sourceXml?: string;
+  /** @internal Validated provenance for a surgical plain-text sourceXml patch. */
+  sourceTextPatch?: {
+    runs: Array<{
+      style?: TextStyle;
+      link?: string;
+      noteReference?: TextRunNode["noteReference"];
+    }>;
+  };
+  /** @internal Immutable import-time run metadata used by surgical editors. */
+  sourceRunProvenance?: {
+    runs: Array<{
+      style?: TextStyle;
+      link?: string;
+      noteReference?: TextRunNode["noteReference"];
+    }>;
+  };
+}
+
+export interface TableBoxSpacing {
+  topTwips?: number;
+  rightTwips?: number;
+  bottomTwips?: number;
+  leftTwips?: number;
+}
+
+export interface TableBorderStyle {
+  type: string;
+  color?: string;
+  sizeEighthPt?: number;
+}
+
+export interface TableBorderSet {
+  top?: TableBorderStyle;
+  right?: TableBorderStyle;
+  bottom?: TableBorderStyle;
+  left?: TableBorderStyle;
+  insideH?: TableBorderStyle;
+  insideV?: TableBorderStyle;
+  tl2br?: TableBorderStyle;
+  tr2bl?: TableBorderStyle;
+}
+
+/** dxa values are twips; pct values are ordinary percentages. */
+export type TablePreferredWidth =
+  | { type: "dxa"; value: number }
+  | { type: "pct"; value: number }
+  | { type: "auto" }
+  | { type: "nil" };
+
+/** @internal Imported baseline for edits through either width API. */
+export interface TableWidthSource {
+  preferredWidth?: TablePreferredWidth;
+  widthTwips?: number;
+  inheritedPreferredWidth?: TablePreferredWidth;
+}
+
+export type TableAlignment = "left" | "center" | "right";
+
+export interface TableCellStyle {
+  backgroundColor?: string;
+  gridSpan?: number;
+  rowSpan?: number;
+  vMergeContinuation?: boolean;
+  widthTwips?: number;
+  preferredWidth?: TablePreferredWidth;
+  /** @internal */
+  sourceWidth?: TableWidthSource;
+  marginTwips?: TableBoxSpacing;
+  verticalAlign?: "top" | "center" | "bottom";
+  textDirection?: "lrTb" | "tbRl" | "btLr" | "lrTbV" | "tbRlV" | "tbLrV";
+  /** @internal */
+  sourceTextDirection?: TableCellStyle["textDirection"];
+  /** Protects the preferred cell width during automatic table layout. */
+  noWrap?: boolean;
+  /** @internal */
+  sourceNoWrap?: boolean;
+  borders?: TableBorderSet;
+}
+
+export type TableCellContentNode = ParagraphNode | TableNode;
+
+export interface TableCellNode {
+  type: "table-cell";
+  nodes: TableCellContentNode[];
+  style?: TableCellStyle;
+}
+
+/** @internal Imported baseline for row geometry edits and clears. */
+export interface TableRowGeometrySource {
+  gridBefore?: number;
+  gridAfter?: number;
+  widthBefore?: TablePreferredWidth;
+  widthAfter?: TablePreferredWidth;
+}
+
+export interface TableRowStyle {
+  gridBefore?: number;
+  gridAfter?: number;
+  widthBefore?: TablePreferredWidth;
+  widthAfter?: TablePreferredWidth;
+  /** @internal */
+  sourceRowGeometry?: TableRowGeometrySource;
+  backgroundColor?: string;
+  heightTwips?: number;
+  heightRule?: "auto" | "atLeast" | "exact";
+  cantSplit?: boolean;
+  isHeader?: boolean;
+}
+
+export interface TableRowNode {
+  type: "table-row";
+  cells: TableCellNode[];
+  style?: TableRowStyle;
+}
+
+export interface TableStyle {
+  styleId?: string;
+  /** @internal Imported table-style identity used to detect edits and clears. */
+  sourceStyleId?: string;
+  widthTwips?: number;
+  preferredWidth?: TablePreferredWidth;
+  /** @internal */
+  sourceWidth?: TableWidthSource;
+  alignment?: TableAlignment;
+  /** @internal Imported effective alignment before editing. */
+  sourceAlignment?: TableAlignment;
+  /** @internal Inherited alignment exposed when a direct override is cleared. */
+  sourceInheritedAlignment?: TableAlignment;
+  bidiVisual?: boolean;
+  /** @internal Imported effective table direction before editing. */
+  sourceBidiVisual?: boolean;
+  /** @internal Inherited direction exposed when a direct override is cleared. */
+  sourceInheritedBidiVisual?: boolean;
+  indentTwips?: number;
+  layout?: "fixed" | "autofit";
+  cellSpacingTwips?: number;
+  cellMarginTwips?: TableBoxSpacing;
+  columnWidthsTwips?: number[];
+  borders?: TableBorderSet;
+  floating?: {
+    xTwips?: number;
+    yTwips?: number;
+    leftFromTextTwips?: number;
+    rightFromTextTwips?: number;
+    topFromTextTwips?: number;
+    bottomFromTextTwips?: number;
+    horizontalAnchor?: string;
+    verticalAnchor?: string;
+    horizontalAlign?: "left" | "center" | "right" | "inside" | "outside";
+    verticalAlign?: "top" | "center" | "bottom" | "inside" | "outside";
+  };
+}
+
+export interface TableNode {
+  type: "table";
+  /** Stable identity for measurement caches; survives edits via cloneTable. */
+  blockId?: string;
+  rows: TableRowNode[];
+  style?: TableStyle;
+  sourceXml?: string;
+  /** @internal Validated text-only descendant replacements for sourceXml. */
+  sourceTextPatches?: Array<{
+    sourceParagraphXml: string;
+    paragraph: ParagraphNode;
+  }>;
+}
+
+export type DocNode = ParagraphNode | TableNode;
+
+export interface HeaderSection {
+  partName: string;
+  referenceType?: string;
+  nodes: DocNode[];
+}
+
+export interface FooterSection {
+  partName: string;
+  referenceType?: string;
+  nodes: DocNode[];
+}
+
+export interface DocumentSection {
+  startNodeIndex: number;
+  sectionPropertiesXml?: string;
+  headerSections: HeaderSection[];
+  footerSections: FooterSection[];
+}
+
+export interface ParagraphStyleDefinition {
+  id: string;
+  name: string;
+  basedOnId?: string;
+  nextStyleId?: string;
+  align?: ParagraphAlignment;
+  snapToGrid?: boolean;
+  /** @internal Whether the style chain owns grid snapping before document defaults. */
+  sourceHasSnapToGrid?: boolean;
+  textAlignment?: ParagraphTextAlignment;
+  /** @internal Whether the style chain owns alignment before document defaults. */
+  sourceHasTextAlignment?: boolean;
+  headingLevel?: HeadingLevel;
+  numbering?: ParagraphNumbering;
+  spacing?: ParagraphSpacing;
+  indent?: ParagraphIndent;
+  backgroundColor?: string;
+  borders?: ParagraphBorderSet;
+  tabStops?: ParagraphTabStop[];
+  contextualSpacing?: boolean;
+  keepNext?: boolean;
+  keepLines?: boolean;
+  widowControl?: boolean;
+  pageBreakBefore?: boolean;
+  runStyle?: TextStyle;
+  uiPriority?: number;
+  isDefault?: boolean;
+  isPrimary?: boolean;
+}
+
+export interface NumberingLevelDefinition {
+  ilvl: number;
+  start?: number;
+  format?: string;
+  text?: string;
+  suffix?: "tab" | "space" | "nothing";
+  /**
+   * `w:lvlRestart`: one-based level whose use restarts this level; 0 means the
+   * level never restarts. Absent means the OOXML default (restart when any
+   * shallower level is used).
+   */
+  lvlRestart?: number;
+  /**
+   * `w:isLgl`: legal numbering — every placeholder in this level's text
+   * renders as decimal regardless of the referenced levels' formats.
+   */
+  isLgl?: boolean;
+  indent?: ParagraphIndent;
+  runStyle?: TextStyle;
+  bulletFontFamily?: string;
+  bulletColor?: string;
+  pictureBulletId?: number;
+  pictureBullet?: NumberingPictureBulletDefinition;
+}
+
+export interface NumberingAbstractDefinition {
+  abstractNumId: number;
+  levels: NumberingLevelDefinition[];
+}
+
+export interface NumberingInstanceDefinition {
+  numId: number;
+  abstractNumId: number;
+  levelStartOverrides?: Record<string, number>;
+  levelOverrides?: NumberingLevelDefinition[];
+}
+
+export interface NumberingDefinitionSet {
+  abstracts: NumberingAbstractDefinition[];
+  instances: NumberingInstanceDefinition[];
+}
+
+export interface NumberingPictureBulletDefinition {
+  numPicBulletId: number;
+  src?: string;
+  widthPx?: number;
+  heightPx?: number;
+  partName?: string;
+  contentType?: string;
+}
+
+export interface DocumentNoteDefinition {
+  id: number;
+  text: string;
+  nodes?: DocNode[];
+}
+
+export interface DocumentCommentDefinition {
+  nodes?: DocNode[];
+  id: number;
+  author?: string;
+  initials?: string;
+  date?: string;
+  text: string;
+  /** Comment id this comment replies to (from commentsExtended threading). */
+  parentId?: number;
+  /** True when the comment thread is marked done in commentsExtended. */
+  resolved?: boolean;
+  /** @internal Original `w:comment` block retained for lossless serialization. */
+  sourceXml?: string;
+  /** @internal Final comment paragraph id used by `commentsExtended.xml`. */
+  extendedParagraphId?: string;
+  /** @internal Resolution state read from `commentsExtended.xml`. */
+  sourceResolved?: boolean;
+  /** @internal True when `resolved` differs from the imported state. */
+  resolutionDirty?: boolean;
+  /** @internal True for a comment created in the editor rather than imported. */
+  isNew?: boolean;
+}
+
+export interface DocumentCompatibilitySettings {
+  adjustLineHeightInTable?: boolean | null;
+  noLeading?: boolean;
+  suppressTopSpacingWP?: boolean;
+  truncateFontHeightsLikeWP6?: boolean;
+  noExtraLineSpacing?: boolean;
+  spaceForUL?: boolean;
+  suppressBottomSpacing?: boolean;
+
+  compatibilityMode?: number;
+  enableOpenTypeFeatures?: boolean;
+  suppressSpacingBeforeAfterPageBreak?: boolean;
+  usePrinterMetrics?: boolean;
+  useFixedHtmlParagraphSpacing?: boolean;
+  doNotBreakWrappedTables?: boolean;
+  doNotBreakConstrainedForcedTable?: boolean;
+  evenAndOddHeaders?: boolean;
+}
+
+export interface DocModel {
+  nodes: DocNode[];
+  metadata: {
+    documentId?: string;
+    sourcePartNames?: Record<string, string>;
+    sourceParts: number;
+    warnings: string[];
+    documentPageCount?: number;
+    documentOpenTag?: string;
+    documentBackgroundColor?: string;
+    sectionPropertiesXml?: string;
+    sections?: DocumentSection[];
+    headerSections: HeaderSection[];
+    footerSections: FooterSection[];
+    paragraphStyles: ParagraphStyleDefinition[];
+    defaultParagraphStyleId?: string;
+    defaultTabStopTwips?: number;
+    /** @internal Imported settings are authoritative when their values are cleared. */
+    documentSettingsImported?: boolean;
+    /** @internal Import consumed the line-spacing compatibility fields. */
+    lineSpacingCompatibilityImported?: boolean;
+    numberingDefinitions?: NumberingDefinitionSet;
+    compatibility?: DocumentCompatibilitySettings;
+    footnotes?: DocumentNoteDefinition[];
+    endnotes?: DocumentNoteDefinition[];
+    comments?: DocumentCommentDefinition[];
+  };
+}

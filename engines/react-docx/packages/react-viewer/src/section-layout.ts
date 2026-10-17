@@ -1,0 +1,335 @@
+import type { DocModel } from "@extend-ai/react-docx-doc-model";
+
+export interface DocumentLayoutMetrics {
+  pageWidthPx: number;
+  pageHeightPx: number;
+  marginsPx: {
+    top: number;
+    right: number;
+    bottom: number;
+    left: number;
+  };
+  headerDistancePx: number;
+  footerDistancePx: number;
+  docGridLinePitchPx?: number;
+}
+
+export interface DocumentPageBorderEdge {
+  cssBorder?: string;
+  offsetPx?: number;
+  shadow?: boolean;
+}
+
+export interface DocumentPageBorders {
+  top?: DocumentPageBorderEdge;
+  right?: DocumentPageBorderEdge;
+  bottom?: DocumentPageBorderEdge;
+  left?: DocumentPageBorderEdge;
+}
+
+export const DEFAULT_DOC_PAGE_WIDTH = 900;
+export const DEFAULT_DOC_PAGE_HEIGHT = 1200;
+export const DEFAULT_DOC_PAGE_MARGIN = 56;
+export const TWIPS_PER_PIXEL = 15;
+
+export const DEFAULT_DOCUMENT_LAYOUT: DocumentLayoutMetrics = {
+  pageWidthPx: DEFAULT_DOC_PAGE_WIDTH,
+  pageHeightPx: DEFAULT_DOC_PAGE_HEIGHT,
+  marginsPx: {
+    top: DEFAULT_DOC_PAGE_MARGIN,
+    right: DEFAULT_DOC_PAGE_MARGIN,
+    bottom: DEFAULT_DOC_PAGE_MARGIN,
+    left: DEFAULT_DOC_PAGE_MARGIN
+  },
+  headerDistancePx: DEFAULT_DOC_PAGE_MARGIN,
+  footerDistancePx: DEFAULT_DOC_PAGE_MARGIN,
+  docGridLinePitchPx: undefined
+};
+
+const IMPORTED_DOCUMENT_LAYOUT: DocumentLayoutMetrics = {
+  pageWidthPx: 816,
+  pageHeightPx: 1056,
+  marginsPx: { top: 96, right: 96, bottom: 96, left: 96 },
+  headerDistancePx: 48,
+  footerDistancePx: 48,
+  docGridLinePitchPx: undefined
+};
+
+export function resolveDocumentLayoutFallback(model: DocModel): DocumentLayoutMetrics {
+  const { metadata } = model;
+  return metadata.documentOpenTag &&
+    (metadata.sectionPropertiesXml ||
+      !metadata.sections?.some((section) => section.sectionPropertiesXml))
+    ? IMPORTED_DOCUMENT_LAYOUT
+    : DEFAULT_DOCUMENT_LAYOUT;
+}
+
+export function pageMarginPaddingStyle(
+  marginsPx: DocumentLayoutMetrics["marginsPx"]
+): {
+  paddingTop: number;
+  paddingRight: number;
+  paddingBottom: number;
+  paddingLeft: number;
+} {
+  return {
+    paddingTop: marginsPx.top,
+    paddingRight: marginsPx.right,
+    paddingBottom: marginsPx.bottom,
+    paddingLeft: marginsPx.left,
+  };
+}
+
+export function twipsToPixels(twips?: number): number | undefined {
+  if (!Number.isFinite(twips)) {
+    return undefined;
+  }
+
+  return Math.max(0, Math.round((twips as number) / TWIPS_PER_PIXEL));
+}
+
+function sectionTwipsToPixels(twips?: number): number | undefined {
+  return Number.isFinite(twips)
+    ? Math.max(0, (twips as number) / TWIPS_PER_PIXEL)
+    : undefined;
+}
+
+function readTwipsAttribute(tagXml: string | undefined, attribute: string): number | undefined {
+  if (!tagXml) {
+    return undefined;
+  }
+
+  const match = tagXml.match(new RegExp(`${attribute}="(\\d+(?:\\.\\d+)?)"`, "i"));
+  if (!match?.[1]) {
+    return undefined;
+  }
+
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function readStringAttribute(
+  tagXml: string | undefined,
+  attribute: string
+): string | undefined {
+  if (!tagXml) {
+    return undefined;
+  }
+
+  return tagXml.match(new RegExp(`${attribute}="([^"]+)"`, "i"))?.[1];
+}
+
+function resolvePageSizeForOrientation(params: {
+  widthPx: number;
+  heightPx: number;
+  orientation?: string;
+}): { widthPx: number; heightPx: number } {
+  const normalizedOrientation = params.orientation?.trim().toLowerCase();
+  const widthPx = Math.max(1, params.widthPx);
+  const heightPx = Math.max(1, params.heightPx);
+
+  if (normalizedOrientation === "landscape" && widthPx < heightPx) {
+    return { widthPx: heightPx, heightPx: widthPx };
+  }
+
+  if (normalizedOrientation === "portrait" && widthPx > heightPx) {
+    return { widthPx: heightPx, heightPx: widthPx };
+  }
+
+  return { widthPx, heightPx };
+}
+
+function normalizeHexColor(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+  if (!normalized || normalized.toLowerCase() === "auto") {
+    return undefined;
+  }
+
+  if (/^[0-9a-fA-F]{6}$/.test(normalized)) {
+    return `#${normalized}`;
+  }
+
+  if (/^#[0-9a-fA-F]{6}$/.test(normalized)) {
+    return normalized;
+  }
+
+  return undefined;
+}
+
+function borderTypeToCssStyle(rawType?: string): string | undefined {
+  const value = rawType?.trim().toLowerCase();
+  if (!value || value === "none" || value === "nil") {
+    return undefined;
+  }
+
+  if (value === "double") {
+    return "double";
+  }
+
+  if (
+    value === "dashed" ||
+    value === "dashsmallgap" ||
+    value === "dotdash" ||
+    value === "dotdotdash"
+  ) {
+    return "dashed";
+  }
+
+  if (value === "dotted") {
+    return "dotted";
+  }
+
+  return "solid";
+}
+
+function pointsToPixels(points?: number): number | undefined {
+  if (!Number.isFinite(points)) {
+    return undefined;
+  }
+
+  return Math.max(0, Math.round((points as number) * (96 / 72)));
+}
+
+function parseSectionPageBorderEdge(
+  sectionPropertiesXml: string | undefined,
+  edge: "top" | "right" | "bottom" | "left"
+): DocumentPageBorderEdge | undefined {
+  if (!sectionPropertiesXml) {
+    return undefined;
+  }
+
+  const bordersXml = sectionPropertiesXml.match(
+    /<w:pgBorders\b[\s\S]*?<\/w:pgBorders>/i
+  )?.[0];
+  if (!bordersXml) {
+    return undefined;
+  }
+
+  const edgeTag = bordersXml.match(new RegExp(`<w:${edge}\\b[^>]*/?>`, "i"))?.[0];
+  if (!edgeTag) {
+    return undefined;
+  }
+
+  const cssStyle = borderTypeToCssStyle(readStringAttribute(edgeTag, "w:val"));
+  if (!cssStyle) {
+    return undefined;
+  }
+
+  const sizeEighthPt = Number(readStringAttribute(edgeTag, "w:sz"));
+  const widthPx =
+    Number.isFinite(sizeEighthPt) && sizeEighthPt > 0
+      ? Math.max(0.5, Number((sizeEighthPt / 6).toFixed(2)))
+      : 1;
+  const color =
+    normalizeHexColor(readStringAttribute(edgeTag, "w:color")) ?? "#000000";
+  const offsetPoints = Number(readStringAttribute(edgeTag, "w:space"));
+
+  return {
+    cssBorder: `${widthPx}px ${cssStyle} ${color}`,
+    offsetPx: pointsToPixels(offsetPoints) ?? 0,
+    shadow:
+      readStringAttribute(edgeTag, "w:shadow")?.trim().toLowerCase() === "1" ||
+      readStringAttribute(edgeTag, "w:shadow")?.trim().toLowerCase() === "true",
+  };
+}
+
+export function parseSectionPageBorders(
+  sectionPropertiesXml?: string
+): DocumentPageBorders | undefined {
+  if (!sectionPropertiesXml || !/<w:pgBorders\b/i.test(sectionPropertiesXml)) {
+    return undefined;
+  }
+
+  const borders: DocumentPageBorders = {
+    top: parseSectionPageBorderEdge(sectionPropertiesXml, "top"),
+    right: parseSectionPageBorderEdge(sectionPropertiesXml, "right"),
+    bottom: parseSectionPageBorderEdge(sectionPropertiesXml, "bottom"),
+    left: parseSectionPageBorderEdge(sectionPropertiesXml, "left"),
+  };
+
+  return borders.top || borders.right || borders.bottom || borders.left
+    ? borders
+    : undefined;
+}
+
+export function parseSectionLayout(
+  sectionPropertiesXml?: string,
+  missingSectionLayout: DocumentLayoutMetrics = DEFAULT_DOCUMENT_LAYOUT
+): DocumentLayoutMetrics {
+  if (!sectionPropertiesXml) {
+    return missingSectionLayout;
+  }
+
+  const pageSizeTag = sectionPropertiesXml.match(/<w:pgSz\b[^>]*>/i)?.[0];
+  const pageMarginTag = sectionPropertiesXml.match(/<w:pgMar\b[^>]*>/i)?.[0];
+  const docGridTag = sectionPropertiesXml.match(/<w:docGrid\b[^>]*\/?>/i)?.[0];
+
+  const pageWidthTwips = readTwipsAttribute(pageSizeTag, "w:w");
+  const pageHeightTwips = readTwipsAttribute(pageSizeTag, "w:h");
+  const rawPageWidthPx =
+    sectionTwipsToPixels(pageWidthTwips) ?? missingSectionLayout.pageWidthPx;
+  const rawPageHeightPx =
+    sectionTwipsToPixels(pageHeightTwips) ?? missingSectionLayout.pageHeightPx;
+  // Explicit dimensions define layout coordinates independently of print
+  // orientation. Only infer orientation for an incomplete page size.
+  const pageSize = resolvePageSizeForOrientation({
+    widthPx: rawPageWidthPx,
+    heightPx: rawPageHeightPx,
+    orientation:
+      pageWidthTwips !== undefined && pageHeightTwips !== undefined
+        ? undefined
+        : readStringAttribute(pageSizeTag, "w:orient"),
+  });
+  const topMarginPx =
+    sectionTwipsToPixels(readTwipsAttribute(pageMarginTag, "w:top")) ?? DEFAULT_DOCUMENT_LAYOUT.marginsPx.top;
+  const rightMarginPx =
+    sectionTwipsToPixels(readTwipsAttribute(pageMarginTag, "w:right")) ?? DEFAULT_DOCUMENT_LAYOUT.marginsPx.right;
+  const bottomMarginPx =
+    sectionTwipsToPixels(readTwipsAttribute(pageMarginTag, "w:bottom")) ?? DEFAULT_DOCUMENT_LAYOUT.marginsPx.bottom;
+  const leftMarginPx =
+    sectionTwipsToPixels(readTwipsAttribute(pageMarginTag, "w:left")) ?? DEFAULT_DOCUMENT_LAYOUT.marginsPx.left;
+  const headerDistancePx =
+    sectionTwipsToPixels(readTwipsAttribute(pageMarginTag, "w:header")) ?? DEFAULT_DOCUMENT_LAYOUT.headerDistancePx;
+  const footerDistancePx =
+    sectionTwipsToPixels(readTwipsAttribute(pageMarginTag, "w:footer")) ?? DEFAULT_DOCUMENT_LAYOUT.footerDistancePx;
+  // Word only snaps lines to the document grid for explicit grid types.
+  // A bare <w:docGrid w:linePitch="..."/> (type "default") stores the pitch
+  // but applies no grid, and Word writes that boilerplate into most documents.
+  const docGridType = readStringAttribute(docGridTag, "w:type")?.toLowerCase();
+  const docGridLinePitchPx =
+    docGridType === "lines" ||
+    docGridType === "linesandchars" ||
+    docGridType === "snaptochars"
+      ? sectionTwipsToPixels(readTwipsAttribute(docGridTag, "w:linePitch")) ??
+        DEFAULT_DOCUMENT_LAYOUT.docGridLinePitchPx
+      : DEFAULT_DOCUMENT_LAYOUT.docGridLinePitchPx;
+
+  return {
+    pageWidthPx: pageSize.widthPx,
+    pageHeightPx: pageSize.heightPx,
+    marginsPx: {
+      top: topMarginPx,
+      right: rightMarginPx,
+      bottom: bottomMarginPx,
+      left: leftMarginPx
+    },
+    headerDistancePx,
+    footerDistancePx,
+    docGridLinePitchPx
+  };
+}
+
+export function resolveDocumentSectionPropertiesXml(model: DocModel): string | undefined {
+  return model.metadata.sections?.[0]?.sectionPropertiesXml ?? model.metadata.sectionPropertiesXml;
+}
+
+export function resolveDocumentLayout(model: DocModel): DocumentLayoutMetrics {
+  return parseSectionLayout(
+    resolveDocumentSectionPropertiesXml(model),
+    resolveDocumentLayoutFallback(model)
+  );
+}

@@ -1,0 +1,366 @@
+name: Publish Packages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: publish-packages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      # Trusted publishing should be the default. Only expose an npm token when
+      # we explicitly opt into the legacy fallback path.
+      NPM_TOKEN: ${{ vars.NPM_PUBLISH_USE_TOKEN == 'true' && secrets.NPM_TOKEN || '' }}
+      NPM_TOKEN_FALLBACK_ENABLED: ${{ vars.NPM_PUBLISH_USE_TOKEN == 'true' && 'true' || 'false' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Read workspace package metadata
+        id: meta
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs = require("fs");
+          const path = require("path");
+
+          const packagesDir = path.join(process.cwd(), "packages");
+          const packageDirs = fs
+            .readdirSync(packagesDir, { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => path.join(packagesDir, entry.name));
+
+          const rawPackages = packageDirs
+            .map((dir) => {
+              const packageJsonPath = path.join(dir, "package.json");
+              if (!fs.existsSync(packageJsonPath)) {
+                return undefined;
+              }
+
+              const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+              if (pkg.private) {
+                return undefined;
+              }
+
+              return {
+                name: pkg.name,
+                version: pkg.version,
+                dir: path.relative(process.cwd(), dir),
+                dependencies: Object.keys(pkg.dependencies ?? {}),
+              };
+            })
+            .filter(Boolean);
+
+          if (rawPackages.length === 0) {
+            throw new Error("No publishable workspace packages found under packages/*");
+          }
+
+          const workspaceNames = new Set(rawPackages.map((pkg) => pkg.name));
+          const packages = rawPackages.map((pkg) => ({
+            name: pkg.name,
+            version: pkg.version,
+            dir: pkg.dir,
+            internalDependencies: pkg.dependencies.filter((dependency) =>
+              workspaceNames.has(dependency)
+            ),
+          }));
+
+          const versions = [...new Set(packages.map((pkg) => pkg.version))];
+          if (versions.length !== 1) {
+            throw new Error(
+              `Expected all publishable workspace packages to share one version, found: ${versions.join(", ")}`
+            );
+          }
+
+          const version = versions[0];
+          const tag = `v${version}`;
+
+          console.log(`version=${version}`);
+          console.log(`tag=${tag}`);
+          console.log(`package_count=${packages.length}`);
+          console.log(`package_names=${packages.map((pkg) => pkg.name).join(", ")}`);
+          console.log(`packages_json=${JSON.stringify(packages)}`);
+          NODE
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Check npm publish state
+        id: npm_state
+        env:
+          PACKAGES_JSON: ${{ steps.meta.outputs.packages_json }}
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const { execFileSync } = require("node:child_process");
+
+          const packages = JSON.parse(process.env.PACKAGES_JSON ?? "[]");
+          const published = [];
+          const unpublished = [];
+
+          for (const pkg of packages) {
+            try {
+              execFileSync(
+                "npm",
+                ["view", `${pkg.name}@${pkg.version}`, "version"],
+                {
+                  stdio: "ignore",
+                }
+              );
+              published.push(pkg);
+            } catch {
+              unpublished.push(pkg);
+            }
+          }
+
+          console.log(`all_published=${unpublished.length === 0 ? "true" : "false"}`);
+          console.log(`published_json=${JSON.stringify(published)}`);
+          console.log(`unpublished_json=${JSON.stringify(unpublished)}`);
+          NODE
+
+      - name: Stop when this version is already on npm
+        if: steps.npm_state.outputs.all_published == 'true'
+        run: echo "All workspace packages for ${{ steps.meta.outputs.tag }} already exist on npm; skipping publish."
+
+      - name: Install dependencies
+        if: steps.npm_state.outputs.all_published != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Set up Rust
+        if: steps.npm_state.outputs.all_published != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        if: steps.npm_state.outputs.all_published != 'true'
+        run: cargo install wasm-pack --version 0.13.1 --locked
+
+      - name: Typecheck packages
+        if: steps.npm_state.outputs.all_published != 'true'
+        run: pnpm -r --filter './packages/*' run typecheck
+
+      - name: Build wasm package
+        if: steps.npm_state.outputs.all_published != 'true'
+        run: pnpm --filter @extend-ai/react-docx-wasm run build
+
+      - name: Build packages
+        if: steps.npm_state.outputs.all_published != 'true'
+        run: pnpm -r --filter './packages/*' --filter '!@extend-ai/react-docx-wasm' run build
+
+      - name: Publish with npm token bootstrap
+        if: steps.npm_state.outputs.all_published != 'true' && env.NPM_TOKEN_FALLBACK_ENABLED == 'true' && env.NPM_TOKEN != ''
+        env:
+          PACKAGES_JSON: ${{ steps.meta.outputs.packages_json }}
+          UNPUBLISHED_JSON: ${{ steps.npm_state.outputs.unpublished_json }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+
+          function npmDistTag(version) {
+            const prerelease = version.match(/^[0-9]+\.[0-9]+\.[0-9]+-([0-9A-Za-z-]+)/);
+            return prerelease?.[1] ?? "latest";
+          }
+
+          const packages = JSON.parse(process.env.PACKAGES_JSON ?? "[]");
+          const unpublished = JSON.parse(process.env.UNPUBLISHED_JSON ?? "[]");
+          const unpublishedNames = new Set(unpublished.map((pkg) => pkg.name));
+          const unpublishedByName = new Map(
+            unpublished.map((pkg) => [pkg.name, pkg])
+          );
+          const inDegree = new Map();
+          const dependents = new Map();
+
+          for (const pkg of unpublished) {
+            const internalDependencies = (pkg.internalDependencies ?? []).filter(
+              (dependency) => unpublishedNames.has(dependency)
+            );
+            inDegree.set(pkg.name, internalDependencies.length);
+            for (const dependency of internalDependencies) {
+              const nextDependents = dependents.get(dependency) ?? [];
+              nextDependents.push(pkg.name);
+              dependents.set(dependency, nextDependents);
+            }
+          }
+
+          const queue = packages
+            .map((pkg) => pkg.name)
+            .filter(
+              (name) =>
+                unpublishedNames.has(name) && (inDegree.get(name) ?? 0) === 0
+            );
+          const ordered = [];
+
+          while (queue.length > 0) {
+            const name = queue.shift();
+            ordered.push(name);
+            for (const dependent of dependents.get(name) ?? []) {
+              const next = (inDegree.get(dependent) ?? 0) - 1;
+              inDegree.set(dependent, next);
+              if (next === 0) {
+                queue.push(dependent);
+              }
+            }
+          }
+
+          if (ordered.length !== unpublished.length) {
+            throw new Error("Failed to determine publish order for unpublished workspace packages");
+          }
+
+          for (const name of ordered) {
+            const pkg = unpublishedByName.get(name);
+            const tag = npmDistTag(pkg.version);
+            console.log(`Publishing ${pkg.name}@${pkg.version} with dist-tag ${tag}`);
+            execFileSync(
+              "pnpm",
+              ["publish", "--access", "public", "--no-git-checks", "--tag", tag],
+              {
+                cwd: pkg.dir,
+                stdio: "inherit",
+              }
+            );
+          }
+          NODE
+
+      - name: Publish with npm trusted publishing
+        if: steps.npm_state.outputs.all_published != 'true' && env.NPM_TOKEN == ''
+        env:
+          PACKAGES_JSON: ${{ steps.meta.outputs.packages_json }}
+          UNPUBLISHED_JSON: ${{ steps.npm_state.outputs.unpublished_json }}
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+
+          function npmDistTag(version) {
+            const prerelease = version.match(/^[0-9]+\.[0-9]+\.[0-9]+-([0-9A-Za-z-]+)/);
+            return prerelease?.[1] ?? "latest";
+          }
+
+          const packages = JSON.parse(process.env.PACKAGES_JSON ?? "[]");
+          const unpublished = JSON.parse(process.env.UNPUBLISHED_JSON ?? "[]");
+          const unpublishedNames = new Set(unpublished.map((pkg) => pkg.name));
+          const unpublishedByName = new Map(
+            unpublished.map((pkg) => [pkg.name, pkg])
+          );
+          const inDegree = new Map();
+          const dependents = new Map();
+
+          for (const pkg of unpublished) {
+            const internalDependencies = (pkg.internalDependencies ?? []).filter(
+              (dependency) => unpublishedNames.has(dependency)
+            );
+            inDegree.set(pkg.name, internalDependencies.length);
+            for (const dependency of internalDependencies) {
+              const nextDependents = dependents.get(dependency) ?? [];
+              nextDependents.push(pkg.name);
+              dependents.set(dependency, nextDependents);
+            }
+          }
+
+          const queue = packages
+            .map((pkg) => pkg.name)
+            .filter(
+              (name) =>
+                unpublishedNames.has(name) && (inDegree.get(name) ?? 0) === 0
+            );
+          const ordered = [];
+
+          while (queue.length > 0) {
+            const name = queue.shift();
+            ordered.push(name);
+            for (const dependent of dependents.get(name) ?? []) {
+              const next = (inDegree.get(dependent) ?? 0) - 1;
+              inDegree.set(dependent, next);
+              if (next === 0) {
+                queue.push(dependent);
+              }
+            }
+          }
+
+          if (ordered.length !== unpublished.length) {
+            throw new Error("Failed to determine publish order for unpublished workspace packages");
+          }
+
+          for (const name of ordered) {
+            const pkg = unpublishedByName.get(name);
+            const tag = npmDistTag(pkg.version);
+            console.log(`Publishing ${pkg.name}@${pkg.version} with dist-tag ${tag}`);
+            execFileSync(
+              "pnpm",
+              ["publish", "--access", "public", "--no-git-checks", "--tag", tag],
+              {
+                cwd: pkg.dir,
+                stdio: "inherit",
+              }
+            );
+          }
+          NODE
+
+      - name: Push release tag
+        if: steps.npm_state.outputs.all_published != 'true'
+        run: |
+          if git rev-parse -q --verify "refs/tags/${{ steps.meta.outputs.tag }}" > /dev/null; then
+            echo "${{ steps.meta.outputs.tag }} already exists; skipping tag push."
+          else
+            git tag "${{ steps.meta.outputs.tag }}"
+            git push origin "${{ steps.meta.outputs.tag }}"
+          fi
+
+      - name: Create GitHub release
+        if: steps.npm_state.outputs.all_published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGES_JSON: ${{ steps.meta.outputs.packages_json }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          node <<'NODE' > /tmp/release-notes.md
+          const packages = JSON.parse(process.env.PACKAGES_JSON ?? "[]");
+          const version = process.env.VERSION;
+
+          const lines = [];
+          lines.push(`Published ${packages.length} package(s) to npm at version ${version}.`);
+          lines.push("");
+          lines.push("Packages:");
+          for (const pkg of packages) {
+            lines.push(`- \`${pkg.name}@${pkg.version}\``);
+          }
+          lines.push("");
+          lines.push("Install with:");
+          lines.push("");
+          lines.push("```bash");
+          for (const pkg of packages) {
+            lines.push(`pnpm add ${pkg.name}`);
+          }
+          lines.push("```");
+
+          process.stdout.write(lines.join("\n"));
+          NODE
+
+          if gh release view "${TAG}" > /dev/null 2>&1; then
+            echo "${TAG} release already exists; skipping release creation."
+          else
+            gh release create "${TAG}" \
+              --title "${TAG}" \
+              --notes-file /tmp/release-notes.md
+          fi

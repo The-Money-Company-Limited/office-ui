@@ -1,0 +1,2041 @@
+import type {
+  DocModel,
+  FormFieldRunNode,
+  HeadingLevel,
+  ImageRunNode,
+  ParagraphAlignment,
+  ParagraphNode,
+  TableCellContentNode,
+  TableNode,
+  ParagraphStyle,
+  TextRunNode,
+  TextStyle,
+} from "@extend-ai/react-docx-doc-model";
+import {
+  allocateBlockId,
+  cloneDocModel,
+  cloneParagraphMarkFormatting,
+  cloneParagraphNode,
+  cloneTableNode,
+} from "@extend-ai/react-docx-doc-model";
+
+export {
+  planTableGridColumnDeletion,
+  planTableGridColumnInsertion,
+  tableCellPhysicalGridRange,
+  tableCellsIntersectingGridRange,
+  tablePhysicalGridColumnCount,
+} from "./table-grid";
+export type {
+  TableCellPhysicalGridRange,
+  TableGridColumnDeletionPlan,
+  TableGridColumnDeletionRowPlan,
+  TableGridColumnInsertionPlan,
+  TableGridColumnInsertionRowPlan,
+} from "./table-grid";
+import {
+  ANNOTATION_MARKUP_XML,
+  paragraphSourceForModel,
+  paragraphWithSource,
+  splitItemsAt,
+  formattingAnchorAt,
+  insertionIndexAt,
+  textItemOffsets,
+  visibleText,
+  type ParagraphSource,
+  type SourceItem,
+} from "./paragraph-source";
+
+export {
+  acceptAllRevisions,
+  acceptParagraphRevision,
+  createParagraphComment,
+  deleteComment,
+  rejectAllRevisions,
+  readParagraphAnnotations,
+  joinParagraphsTracked,
+  readParagraphMarkRevisions,
+  rejectParagraphRevision,
+  replaceParagraphTextTracked,
+  replyToComment,
+  setCommentResolved,
+  splitParagraphTracked,
+} from "./annotations";
+export type {
+  AnnotationMutationFailureReason,
+  AnnotationMutationResult,
+  CommentCreationResult,
+  CreateParagraphCommentInput,
+  ParagraphAnnotations,
+  ParagraphCommentRange,
+  ParagraphMarkRevision,
+  ParagraphRevisionInfo,
+  ParagraphRevisionKind,
+  ParagraphRevisionTarget,
+  ReplyToCommentInput,
+  RevisionAuthorship,
+  RevisionBatchResult,
+  TrackedParagraphJoinInput,
+  TrackedParagraphSplitInput,
+  TrackedTextReplacementInput,
+} from "./annotations";
+export { textReplacementBetween, trackModelTextEdits } from "./suggestions";
+export type { TextReplacement } from "./suggestions";
+
+export interface InsertParagraphOptions {
+  paragraphStyle?: ParagraphStyle;
+  runStyle?: TextStyle;
+}
+
+export interface UpdateTextOptions {
+  insertedStyle?: TextStyle;
+}
+
+function paragraphFromText(
+  text: string,
+  options?: InsertParagraphOptions,
+  template?: ParagraphNode
+): ParagraphNode {
+  const clonedTemplate = template ? cloneParagraphNode(template) : undefined;
+  return {
+    type: "paragraph",
+    blockId: allocateBlockId(),
+    style: options?.paragraphStyle ?? clonedTemplate?.style,
+    paragraphMarkStyle: clonedTemplate?.paragraphMarkStyle,
+    children: [{ type: "text", text, style: options?.runStyle }],
+  };
+}
+
+function getParagraph(
+  model: DocModel,
+  nodeIndex: number
+): ParagraphNode | undefined {
+  const node = model.nodes[nodeIndex];
+  if (!node || node.type !== "paragraph") {
+    return undefined;
+  }
+  return node;
+}
+
+function ensureTextRun(
+  paragraph: ParagraphNode,
+  runIndex: number
+): TextRunNode {
+  let textRunCount = -1;
+
+  for (const child of paragraph.children) {
+    if (child.type !== "text") {
+      continue;
+    }
+
+    textRunCount += 1;
+    if (textRunCount === runIndex) {
+      return child;
+    }
+  }
+
+  const created: TextRunNode = {
+    type: "text",
+    text: "",
+    style: {},
+  };
+
+  paragraph.children.push(created);
+  return created;
+}
+
+function textRuns(paragraph: ParagraphNode): TextRunNode[] {
+  return paragraph.children.filter(
+    (child): child is TextRunNode => child.type === "text"
+  );
+}
+
+function cloneTextRun(run: TextRunNode): TextRunNode {
+  return {
+    type: "text",
+    text: run.text,
+    style: run.style ? { ...run.style } : undefined,
+    link: run.link,
+    noteReference: run.noteReference ? { ...run.noteReference } : undefined,
+  };
+}
+
+function noteReferencesEqual(
+  left?: TextRunNode["noteReference"],
+  right?: TextRunNode["noteReference"]
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+  return left.kind === right.kind && left.id === right.id;
+}
+
+function cloneFormFieldRun(run: FormFieldRunNode): FormFieldRunNode {
+  return {
+    type: "form-field",
+    fieldType: run.fieldType,
+    sourceKind: run.sourceKind,
+    id: run.id,
+    tag: run.tag,
+    title: run.title,
+    placeholder: run.placeholder,
+    checked: run.checked,
+    value: run.value,
+    options: run.options?.map((option) => ({
+      displayText: option.displayText,
+      value: option.value,
+    })),
+    widget: run.widget
+      ? {
+          name: run.widget.name,
+          enabled: run.widget.enabled,
+          calcOnExit: run.widget.calcOnExit,
+          text: run.widget.text
+            ? {
+                inputType: run.widget.text.inputType,
+                defaultText: run.widget.text.defaultText,
+                maxLength: run.widget.text.maxLength,
+                textFormat: run.widget.text.textFormat,
+              }
+            : undefined,
+          checkbox: run.widget.checkbox
+            ? {
+                defaultChecked: run.widget.checkbox.defaultChecked,
+                sizeMode: run.widget.checkbox.sizeMode,
+                sizePt: run.widget.checkbox.sizePt,
+              }
+            : undefined,
+          dropdown: run.widget.dropdown
+            ? {
+                defaultValue: run.widget.dropdown.defaultValue,
+              }
+            : undefined,
+        }
+      : undefined,
+    checkedSymbol: run.checkedSymbol,
+    uncheckedSymbol: run.uncheckedSymbol,
+    style: run.style ? { ...run.style } : undefined,
+    link: run.link,
+    sourceXml: run.sourceXml,
+  };
+}
+
+function cloneImageRun(run: ImageRunNode): ImageRunNode {
+  return {
+    type: "image",
+    blockId: run.blockId,
+    semanticKind: run.semanticKind,
+    mathMl: run.mathMl,
+    contentNodes: run.contentNodes?.map(node => node.type === "paragraph" ? cloneParagraphNode(node) : cloneTableNode(node)),
+    src: run.src,
+    alt: run.alt,
+    widthPx: run.widthPx,
+    heightPx: run.heightPx,
+    partName: run.partName,
+    contentType: run.contentType,
+    data: run.data ? new Uint8Array(run.data) : undefined,
+    sourceXml: run.sourceXml,
+    crop: run.crop ? { ...run.crop } : undefined,
+    cssFilter: run.cssFilter,
+    cssOpacity: run.cssOpacity,
+    floating: run.floating ? { ...run.floating } : undefined,
+    syntheticTextBox: run.syntheticTextBox,
+    textBoxText: run.textBoxText,
+  };
+}
+
+function cloneParagraphChildRun(
+  run: ParagraphNode["children"][number]
+): ParagraphNode["children"][number] {
+  if (run.type === "text") {
+    return cloneTextRun(run);
+  }
+
+  if (run.type === "form-field") {
+    return cloneFormFieldRun(run);
+  }
+
+  return cloneImageRun(run);
+}
+
+function cloneTextStyle(style?: TextStyle): TextStyle | undefined {
+  return style
+    ? {
+        ...style,
+        runBorder: style.runBorder ? { ...style.runBorder } : undefined,
+      }
+    : undefined;
+}
+
+function textStylesEqual(left?: TextStyle, right?: TextStyle): boolean {
+  return JSON.stringify(left ?? {}) === JSON.stringify(right ?? {});
+}
+
+function mergeAdjacentRuns(runs: TextRunNode[]): TextRunNode[] {
+  const merged: TextRunNode[] = [];
+
+  for (const run of runs) {
+    const previous = merged[merged.length - 1];
+    if (
+      previous &&
+      textStylesEqual(previous.style, run.style) &&
+      previous.link === run.link &&
+      noteReferencesEqual(previous.noteReference, run.noteReference)
+    ) {
+      previous.text += run.text;
+      continue;
+    }
+
+    merged.push(cloneTextRun(run));
+  }
+
+  return merged;
+}
+
+function formFieldDisplayValue(field: FormFieldRunNode): string {
+  switch (field.fieldType) {
+    case "checkbox":
+      return field.checked ?? field.widget?.checkbox?.defaultChecked
+        ? field.checkedSymbol ?? "☒"
+        : field.uncheckedSymbol ?? "☐";
+    case "dropdown":
+      return field.value ?? field.options?.[0]?.displayText ?? "";
+    case "date":
+    case "text":
+      return field.value ?? field.widget?.text?.defaultText ?? "";
+    default:
+      return "";
+  }
+}
+
+function paragraphEditableText(paragraph: ParagraphNode): string {
+  return paragraph.children
+    .map((child) => {
+      if (child.type === "text") {
+        return child.text;
+      }
+      if (child.type === "form-field") {
+        return formFieldDisplayValue(child);
+      }
+      return "";
+    })
+    .join("");
+}
+
+const UNSAFE_SOURCE_TEXT_PATCH_XML =
+  /<(?:w:(?:fldSimple|fldChar|instrText|tab|br|cr|footnoteReference|endnoteReference|drawing|pict|object|sdt|ins|del|conflictIns|conflictDel|moveFrom|moveTo|commentRangeStart|commentRangeEnd|commentReference|bookmarkStart|bookmarkEnd|customXml|smartTag|permStart|permEnd|proofErr|subDoc|altChunk)|mc:AlternateContent)\b/i;
+const FAIL_CLOSED_SOURCE_TEXT_EDIT_XML = /<w:fldSimple\b/i;
+
+function sourceTextPatchForUpdate(
+  source: ParagraphNode,
+  next: ParagraphNode
+): ParagraphNode["sourceTextPatch"] | undefined {
+  const sourceXml = source.sourceXml;
+  if (!sourceXml || UNSAFE_SOURCE_TEXT_PATCH_XML.test(sourceXml)) {
+    return undefined;
+  }
+  if (
+    source.children.length !== next.children.length ||
+    source.children.some((child) => child.type !== "text") ||
+    next.children.some((child) => child.type !== "text")
+  ) {
+    return undefined;
+  }
+
+  const sourceRunCount = sourceXml.match(/<w:r\b/gi)?.length ?? 0;
+  const sourceTextCount = sourceXml.match(/<w:t\b/gi)?.length ?? 0;
+  const pairedSourceTextCount =
+    sourceXml.match(/<w:t\b[^>]*>[\s\S]*?<\/w:t>/gi)?.length ?? 0;
+  if (
+    sourceRunCount !== source.children.length ||
+    sourceTextCount !== source.children.length ||
+    pairedSourceTextCount !== source.children.length
+  ) {
+    return undefined;
+  }
+
+  const sourceRuns = source.children as TextRunNode[];
+  const nextRuns = next.children as TextRunNode[];
+  const provenanceRuns = source.sourceTextPatch?.runs ?? sourceRuns;
+  const hasStableRunMetadata = sourceRuns.every((run, index) => {
+    const nextRun = nextRuns[index];
+    const provenanceRun = provenanceRuns[index];
+    return (
+      Boolean(nextRun) &&
+      Boolean(provenanceRun) &&
+      run.noteReference === undefined &&
+      nextRun.noteReference === undefined &&
+      provenanceRun.noteReference === undefined &&
+      textStylesEqual(run.style, provenanceRun.style) &&
+      textStylesEqual(nextRun.style, provenanceRun.style) &&
+      run.link === provenanceRun.link &&
+      nextRun.link === provenanceRun.link
+    );
+  });
+  if (!hasStableRunMetadata) {
+    return undefined;
+  }
+
+  return {
+    runs: provenanceRuns.map((run) => ({
+      style: cloneTextStyle(run.style),
+      link: run.link,
+      noteReference: run.noteReference ? { ...run.noteReference } : undefined,
+    })),
+  };
+}
+
+function paragraphTextEditIsFailClosed(
+  paragraph: ParagraphNode,
+  text: string
+): boolean {
+  if (paragraphEditableText(paragraph) === text || !paragraph.sourceXml) {
+    return false;
+  }
+  // Regenerating these paragraphs would drop revisions or comment anchors.
+  return (
+    FAIL_CLOSED_SOURCE_TEXT_EDIT_XML.test(paragraph.sourceXml) ||
+    (ANNOTATION_MARKUP_XML.test(paragraph.sourceXml) &&
+      !paragraphSourceForModel(paragraph))
+  );
+}
+
+/**
+ * Applies a plain (untracked) text edit to a paragraph that carries
+ * revisions or comment anchors by rewriting its source XML, so deleted text,
+ * revision wrappers and comment markers survive. New text joins the run
+ * before it (or after it at the paragraph start), including that run's
+ * `w:ins`, and takes its formatting; zero-width items inside the replaced
+ * range collapse to the edit point.
+ */
+function annotatedParagraphWithText(
+  source: ParagraphNode,
+  text: string
+): ParagraphNode | undefined {
+  if (!source.sourceXml || !ANNOTATION_MARKUP_XML.test(source.sourceXml)) {
+    return undefined;
+  }
+  const parsed = paragraphSourceForModel(source);
+  if (!parsed) {
+    return undefined;
+  }
+  const current = visibleText(parsed.items);
+  const prefix = commonPrefixLength(current, text);
+  const suffix = commonSuffixLength(current, text, prefix);
+  return paragraphWithTextRange(
+    source,
+    parsed,
+    prefix,
+    current.length - suffix,
+    text.slice(prefix, text.length - suffix),
+    prefix
+  );
+}
+
+function paragraphWithTextRange(
+  source: ParagraphNode,
+  parsed: ParagraphSource,
+  start: number,
+  end: number,
+  insertedText: string,
+  anchorOffset: number
+): ParagraphNode {
+  const items = splitItemsAt(splitItemsAt(parsed.items, start), end);
+  const anchor = formattingAnchorAt(items, anchorOffset);
+  const insertAt = insertionIndexAt(items, start);
+  const inserted: SourceItem[] =
+    insertedText && anchor
+      ? [
+          {
+            kind: "text",
+            text: insertedText,
+            run: anchor.run,
+            wrappers: anchor.wrappers.filter(
+              (wrapper) => wrapper.tagName !== "w:del"
+            ),
+            style: anchor.kind === "text" ? anchor.style : undefined,
+            link: anchor.kind === "text" ? anchor.link : undefined,
+          },
+        ]
+      : insertedText
+      ? [
+          {
+            kind: "text",
+            text: insertedText,
+            run: { openTag: "<w:r>", propertiesXml: "" },
+            wrappers: [],
+          },
+        ]
+      : [];
+  const offsets = textItemOffsets(items);
+  const next: SourceItem[] = [];
+  items.forEach((item, index) => {
+    if (index === insertAt) {
+      next.push(...inserted);
+    }
+    const offset = offsets.get(index);
+    if (offset === undefined || offset < start || offset >= end) {
+      next.push(item);
+    }
+  });
+  if (insertAt >= items.length) {
+    next.push(...inserted);
+  }
+  return paragraphWithSource(source, { ...parsed, items: next });
+}
+
+/** Replaces the given offsets without inferring a range from repeated text. */
+export function replaceParagraphTextRange(
+  source: ParagraphNode,
+  start: number,
+  end: number,
+  text: string
+): ParagraphNode {
+  const before = textRuns(source).map(run => run.text).join("");
+  if (
+    !Number.isInteger(start) || !Number.isInteger(end) ||
+    start < 0 || end <= start || end > before.length
+  ) return source;
+  const after = before.slice(0, start) + text + before.slice(end);
+  if (before === after || paragraphTextEditIsFailClosed(source, after)) return source;
+  const parsed = paragraphSourceForModel(source);
+  if (parsed) return paragraphWithTextRange(source, parsed, start, end, text, start + 1);
+
+  const children: ParagraphNode["children"] = [];
+  let offset = 0;
+  for (const child of source.children) {
+    if (child.type !== "text") {
+      children.push(child);
+      continue;
+    }
+    const childStart = offset;
+    offset += child.text.length;
+    if (offset <= start || childStart >= end) {
+      children.push(child);
+      continue;
+    }
+    const prefix = child.text.slice(0, Math.max(0, start - childStart));
+    const suffix = child.text.slice(Math.max(0, end - childStart));
+    const replacement = childStart <= start ? text : "";
+    if (prefix || replacement || suffix) {
+      children.push({ ...child, text: prefix + replacement + suffix });
+    }
+  }
+  if (!children.length) children.push({ type: "text", text: "" });
+  return { ...source, children, sourceXml: undefined, sourceTextPatch: undefined };
+}
+
+function updatedParagraphNodeText(
+  source: ParagraphNode,
+  text: string,
+  options?: UpdateTextOptions
+): ParagraphNode {
+  if (paragraphEditableText(source) === text) {
+    return source;
+  }
+  const annotated = annotatedParagraphWithText(source, text);
+  if (annotated) {
+    return annotated;
+  }
+
+  const paragraph: ParagraphNode = {
+    ...source,
+    children: distributeTextAcrossParagraphChildren(source, text, options),
+  };
+  paragraph.sourceTextPatch = sourceTextPatchForUpdate(source, paragraph);
+  if (!paragraph.sourceTextPatch) {
+    paragraph.sourceXml = undefined;
+  }
+  return paragraph;
+}
+
+function exactSubstringOccurrenceCount(value: string, search: string): number {
+  if (!search) {
+    return 0;
+  }
+  let count = 0;
+  let cursor = 0;
+  while (cursor <= value.length - search.length) {
+    const match = value.indexOf(search, cursor);
+    if (match < 0) {
+      break;
+    }
+    count += 1;
+    cursor = match + search.length;
+  }
+  return count;
+}
+
+function retainTableSourceTextPatch(
+  table: TableNode,
+  sourceParagraph: ParagraphNode,
+  paragraph: ParagraphNode
+): boolean {
+  const tableSourceXml = table.sourceXml;
+  const sourceParagraphXml = sourceParagraph.sourceXml;
+  if (
+    !tableSourceXml ||
+    !sourceParagraphXml ||
+    !paragraph.sourceTextPatch ||
+    exactSubstringOccurrenceCount(tableSourceXml, sourceParagraphXml) !== 1
+  ) {
+    return false;
+  }
+
+  const patches = table.sourceTextPatches ?? [];
+  const nextPatch = {
+    sourceParagraphXml,
+    paragraph: cloneParagraphNode(paragraph),
+  };
+  const existingIndex = patches.findIndex(
+    (patch) => patch.sourceParagraphXml === sourceParagraphXml
+  );
+  table.sourceTextPatches =
+    existingIndex < 0
+      ? [...patches, nextPatch]
+      : patches.map((patch, index) =>
+          index === existingIndex ? nextPatch : patch
+        );
+  return true;
+}
+
+function discardTableSourceXml(table: TableNode): void {
+  table.sourceXml = undefined;
+  table.sourceTextPatches = undefined;
+}
+
+function copyTableForCellTextEdit(
+  table: TableNode,
+  rowIndex: number,
+  cellIndex: number
+): TableNode {
+  const row = table.rows[rowIndex];
+  const cell = row.cells[cellIndex];
+  const rows = [...table.rows];
+  const cells = [...row.cells];
+  cells[cellIndex] = { ...cell, nodes: [...cell.nodes] };
+  rows[rowIndex] = { ...row, cells };
+  return { ...table, rows };
+}
+
+function directParagraphNodeIndex(
+  nodes: TableCellContentNode[],
+  paragraphIndex: number
+): number | undefined {
+  const target = Math.max(0, Math.round(paragraphIndex));
+  let cursor = 0;
+  for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
+    if (nodes[nodeIndex]?.type !== "paragraph") {
+      continue;
+    }
+    if (cursor === target) {
+      return nodeIndex;
+    }
+    cursor += 1;
+  }
+  return undefined;
+}
+
+function recursiveParagraphAtIndex(
+  nodes: TableCellContentNode[],
+  paragraphIndex: number
+): ParagraphNode | undefined {
+  const target = Math.max(0, Math.round(paragraphIndex));
+  let cursor = 0;
+  const visit = (
+    candidates: TableCellContentNode[]
+  ): ParagraphNode | undefined => {
+    for (const candidate of candidates) {
+      if (candidate.type === "paragraph") {
+        if (cursor === target) {
+          return candidate;
+        }
+        cursor += 1;
+        continue;
+      }
+      for (const row of candidate.rows) {
+        for (const cell of row.cells) {
+          const paragraph = visit(cell.nodes);
+          if (paragraph) {
+            return paragraph;
+          }
+        }
+      }
+    }
+    return undefined;
+  };
+  return visit(nodes);
+}
+
+function splitRunsAtOffset(
+  runs: TextRunNode[],
+  offset: number
+): {
+  left: TextRunNode[];
+  right: TextRunNode[];
+} {
+  const safeOffset = Math.max(0, offset);
+  const left: TextRunNode[] = [];
+  const right: TextRunNode[] = [];
+  let cursor = 0;
+
+  for (const run of runs) {
+    const runLength = run.text.length;
+    const runStart = cursor;
+    const runEnd = runStart + runLength;
+    cursor = runEnd;
+
+    if (runEnd <= safeOffset) {
+      left.push(cloneTextRun(run));
+      continue;
+    }
+
+    if (runStart >= safeOffset) {
+      right.push(cloneTextRun(run));
+      continue;
+    }
+
+    const localSplit = Math.max(0, Math.min(runLength, safeOffset - runStart));
+    const before = run.text.slice(0, localSplit);
+    const after = run.text.slice(localSplit);
+    if (before.length > 0) {
+      left.push({
+        type: "text",
+        text: before,
+        style: cloneTextStyle(run.style),
+        link: run.link,
+        noteReference: run.noteReference ? { ...run.noteReference } : undefined,
+      });
+    }
+    if (after.length > 0) {
+      right.push({
+        type: "text",
+        text: after,
+        style: cloneTextStyle(run.style),
+        link: run.link,
+        noteReference: run.noteReference ? { ...run.noteReference } : undefined,
+      });
+    }
+  }
+
+  return { left, right };
+}
+
+function commonPrefixLength(left: string, right: string): number {
+  const limit = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < limit && left[index] === right[index]) {
+    index += 1;
+  }
+  return index;
+}
+
+function commonSuffixLength(
+  left: string,
+  right: string,
+  prefixLength: number
+): number {
+  const leftRemaining = left.length - prefixLength;
+  const rightRemaining = right.length - prefixLength;
+  const limit = Math.min(leftRemaining, rightRemaining);
+  let matched = 0;
+
+  while (
+    matched < limit &&
+    left[left.length - 1 - matched] === right[right.length - 1 - matched]
+  ) {
+    matched += 1;
+  }
+
+  return matched;
+}
+
+function distributeTextAcrossRuns(
+  text: string,
+  templateRuns: TextRunNode[],
+  options?: UpdateTextOptions
+): TextRunNode[] {
+  const normalizedText = text ?? "";
+  if (templateRuns.length === 0) {
+    return [
+      {
+        type: "text",
+        text: normalizedText,
+        style: cloneTextStyle(options?.insertedStyle),
+      },
+    ];
+  }
+
+  const originalRuns = templateRuns.map(cloneTextRun);
+  const originalText = originalRuns.map((run) => run.text).join("");
+  if (originalText === normalizedText) {
+    return originalRuns;
+  }
+
+  const prefixLength = commonPrefixLength(originalText, normalizedText);
+  const suffixLength = commonSuffixLength(
+    originalText,
+    normalizedText,
+    prefixLength
+  );
+  const removeStart = prefixLength;
+  const removeEnd = Math.max(removeStart, originalText.length - suffixLength);
+  const insertedText = normalizedText.slice(
+    prefixLength,
+    normalizedText.length - suffixLength
+  );
+
+  const splitBefore = splitRunsAtOffset(originalRuns, removeStart);
+  const splitAfter = splitRunsAtOffset(
+    splitBefore.right,
+    removeEnd - removeStart
+  );
+  const leftRuns = splitBefore.left;
+  const rightRuns = splitAfter.right;
+
+  const insertedRuns: TextRunNode[] = [];
+  if (insertedText.length > 0) {
+    const previousRun = leftRuns[leftRuns.length - 1];
+    const nextRun = rightRuns[0];
+    const inferredLink =
+      previousRun?.link && nextRun?.link && previousRun.link === nextRun.link
+        ? previousRun.link
+        : previousRun?.link ?? nextRun?.link;
+
+    insertedRuns.push({
+      type: "text",
+      text: insertedText,
+      style: cloneTextStyle(
+        options?.insertedStyle ?? previousRun?.style ?? nextRun?.style
+      ),
+      link: inferredLink,
+    });
+  }
+
+  const merged = mergeAdjacentRuns([
+    ...leftRuns,
+    ...insertedRuns,
+    ...rightRuns,
+  ]);
+  if (merged.length > 0) {
+    return merged;
+  }
+
+  return [
+    {
+      type: "text",
+      text: "",
+      style: cloneTextStyle(options?.insertedStyle ?? templateRuns[0]?.style),
+      link: templateRuns[0]?.link,
+    },
+  ];
+}
+
+function distributeTextAcrossParagraphChildren(
+  paragraph: ParagraphNode,
+  text: string,
+  options?: UpdateTextOptions
+): ParagraphNode["children"] {
+  const hasNonTextRuns = paragraph.children.some(
+    (child) => child.type !== "text"
+  );
+  if (!hasNonTextRuns) {
+    return distributeTextAcrossRuns(text, textRuns(paragraph), options);
+  }
+
+  const textGroups: TextRunNode[][] = [];
+  const anchors: Array<
+    Exclude<ParagraphNode["children"][number], TextRunNode>
+  > = [];
+  let currentGroup: TextRunNode[] = [];
+
+  for (const child of paragraph.children) {
+    if (child.type === "text") {
+      currentGroup.push(cloneTextRun(child));
+      continue;
+    }
+
+    textGroups.push(currentGroup);
+    currentGroup = [];
+    anchors.push(child);
+  }
+  textGroups.push(currentGroup);
+
+  const allAnchorsAreImages =
+    anchors.length > 0 && anchors.every((anchor) => anchor.type === "image");
+  if (allAnchorsAreImages) {
+    const originalSegmentTexts = textGroups.map((group) =>
+      group.map((run) => run.text).join("")
+    );
+    const originalText = originalSegmentTexts.join("");
+    const originalAnchorOffsets: number[] = [];
+    let originalOffsetCursor = 0;
+    for (let index = 0; index < anchors.length; index += 1) {
+      originalOffsetCursor += originalSegmentTexts[index]?.length ?? 0;
+      originalAnchorOffsets.push(originalOffsetCursor);
+    }
+
+    const prefixLength = (() => {
+      const limit = Math.min(originalText.length, text.length);
+      let index = 0;
+      while (index < limit && originalText[index] === text[index]) {
+        index += 1;
+      }
+      return index;
+    })();
+    const suffixLength = (() => {
+      const remainingOriginal = originalText.length - prefixLength;
+      const remainingNext = text.length - prefixLength;
+      const limit = Math.min(remainingOriginal, remainingNext);
+      let index = 0;
+      while (
+        index < limit &&
+        originalText[originalText.length - 1 - index] ===
+          text[text.length - 1 - index]
+      ) {
+        index += 1;
+      }
+      return index;
+    })();
+    const replacedOriginalStart = prefixLength;
+    const replacedOriginalEnd = Math.max(
+      replacedOriginalStart,
+      originalText.length - suffixLength
+    );
+    const replacedNextEnd = Math.max(
+      replacedOriginalStart,
+      text.length - suffixLength
+    );
+    const delta = replacedNextEnd - replacedOriginalEnd;
+    const remappedAnchorOffsets = originalAnchorOffsets.map((anchorOffset) => {
+      if (anchorOffset < replacedOriginalStart) {
+        return anchorOffset;
+      }
+      if (anchorOffset >= replacedOriginalEnd) {
+        return anchorOffset + delta;
+      }
+      return replacedOriginalStart;
+    });
+
+    const segments: string[] = [];
+    let cursor = 0;
+    remappedAnchorOffsets.forEach((anchorOffset) => {
+      const safeAnchorOffset = Math.max(
+        cursor,
+        Math.min(anchorOffset, text.length)
+      );
+      segments.push(text.slice(cursor, safeAnchorOffset));
+      cursor = safeAnchorOffset;
+    });
+    segments.push(text.slice(cursor));
+
+    const nextChildren: ParagraphNode["children"] = [];
+    for (let index = 0; index < textGroups.length; index += 1) {
+      const templateRuns = textGroups[index];
+      const segmentText = segments[index] ?? "";
+
+      if (templateRuns.length > 0) {
+        nextChildren.push(
+          ...distributeTextAcrossRuns(segmentText, templateRuns, options)
+        );
+      } else if (segmentText.length > 0) {
+        nextChildren.push({
+          type: "text",
+          text: segmentText,
+          style: cloneTextStyle(options?.insertedStyle),
+        });
+      }
+
+      if (index < anchors.length) {
+        nextChildren.push(anchors[index]);
+      }
+    }
+
+    if (nextChildren.length > 0) {
+      return nextChildren;
+    }
+  }
+
+  const segments: string[] = [];
+  let cursor = 0;
+  for (let index = 0; index < anchors.length; index += 1) {
+    const anchor = anchors[index];
+    const anchorText =
+      anchor.type === "form-field" ? formFieldDisplayValue(anchor) : "";
+    if (!anchorText) {
+      return distributeTextAcrossRuns(text, textRuns(paragraph), options);
+    }
+
+    const anchorIndex = text.indexOf(anchorText, cursor);
+    if (anchorIndex < 0) {
+      segments.push(text.slice(cursor));
+      cursor = text.length;
+      break;
+    }
+
+    segments.push(text.slice(cursor, anchorIndex));
+    cursor = anchorIndex + anchorText.length;
+  }
+
+  segments.push(text.slice(cursor));
+  while (segments.length < textGroups.length) {
+    segments.push("");
+  }
+
+  const nextChildren: ParagraphNode["children"] = [];
+  for (let index = 0; index < textGroups.length; index += 1) {
+    const templateRuns = textGroups[index];
+    const segmentText = segments[index] ?? "";
+
+    if (templateRuns.length > 0) {
+      nextChildren.push(
+        ...distributeTextAcrossRuns(segmentText, templateRuns, options)
+      );
+    } else if (segmentText.length > 0) {
+      nextChildren.push({
+        type: "text",
+        text: segmentText,
+        style: cloneTextStyle(options?.insertedStyle),
+      });
+    }
+
+    if (index < anchors.length) {
+      nextChildren.push(anchors[index]);
+    }
+  }
+
+  if (nextChildren.length > 0) {
+    return nextChildren;
+  }
+
+  return [
+    {
+      type: "text",
+      text: "",
+      style: cloneTextStyle(options?.insertedStyle),
+    },
+  ];
+}
+
+export function splitParagraphChildrenAtTextOffsets(
+  paragraph: ParagraphNode,
+  text: string,
+  startOffset: number,
+  endOffset: number,
+  options?: {
+    beforeInsertedStyle?: TextStyle;
+    afterInsertedStyle?: TextStyle;
+  }
+): {
+  beforeChildren: ParagraphNode["children"];
+  afterChildren: ParagraphNode["children"];
+} {
+  const normalizedText = text ?? "";
+  const safeStart = Math.max(
+    0,
+    Math.min(Math.round(startOffset), normalizedText.length)
+  );
+  const safeEnd = Math.max(
+    safeStart,
+    Math.min(Math.round(endOffset), normalizedText.length)
+  );
+  const hasNonTextRuns = paragraph.children.some(
+    (child) => child.type !== "text"
+  );
+
+  if (!hasNonTextRuns) {
+    return {
+      beforeChildren: distributeTextAcrossRuns(
+        normalizedText.slice(0, safeStart),
+        textRuns(paragraph),
+        { insertedStyle: options?.beforeInsertedStyle }
+      ),
+      afterChildren: distributeTextAcrossRuns(
+        normalizedText.slice(safeEnd),
+        textRuns(paragraph),
+        { insertedStyle: options?.afterInsertedStyle }
+      ),
+    };
+  }
+
+  const textGroups: TextRunNode[][] = [];
+  const anchors: Array<
+    Exclude<ParagraphNode["children"][number], TextRunNode>
+  > = [];
+  let currentGroup: TextRunNode[] = [];
+
+  for (const child of paragraph.children) {
+    if (child.type === "text") {
+      currentGroup.push(cloneTextRun(child));
+      continue;
+    }
+
+    textGroups.push(currentGroup);
+    currentGroup = [];
+    anchors.push(
+      child.type === "form-field"
+        ? cloneFormFieldRun(child)
+        : cloneImageRun(child)
+    );
+  }
+  textGroups.push(currentGroup);
+
+  let segments: string[] | undefined;
+  let anchorOffsets: number[] | undefined;
+
+  const allAnchorsAreImages =
+    anchors.length > 0 && anchors.every((anchor) => anchor.type === "image");
+  if (allAnchorsAreImages) {
+    const originalSegmentTexts = textGroups.map((group) =>
+      group.map((run) => run.text).join("")
+    );
+    const originalText = originalSegmentTexts.join("");
+    const originalAnchorOffsets: number[] = [];
+    let originalOffsetCursor = 0;
+    for (let index = 0; index < anchors.length; index += 1) {
+      originalOffsetCursor += originalSegmentTexts[index]?.length ?? 0;
+      originalAnchorOffsets.push(originalOffsetCursor);
+    }
+
+    const prefixLength = commonPrefixLength(originalText, normalizedText);
+    const suffixLength = commonSuffixLength(
+      originalText,
+      normalizedText,
+      prefixLength
+    );
+    const replacedOriginalStart = prefixLength;
+    const replacedOriginalEnd = Math.max(
+      replacedOriginalStart,
+      originalText.length - suffixLength
+    );
+    const replacedNextEnd = Math.max(
+      replacedOriginalStart,
+      normalizedText.length - suffixLength
+    );
+    const delta = replacedNextEnd - replacedOriginalEnd;
+    const remappedAnchorOffsets = originalAnchorOffsets.map((anchorOffset) => {
+      if (anchorOffset < replacedOriginalStart) {
+        return anchorOffset;
+      }
+      if (anchorOffset >= replacedOriginalEnd) {
+        return anchorOffset + delta;
+      }
+      return replacedOriginalStart;
+    });
+
+    const nextSegments: string[] = [];
+    let cursor = 0;
+    remappedAnchorOffsets.forEach((anchorOffset) => {
+      const safeAnchorOffset = Math.max(
+        cursor,
+        Math.min(anchorOffset, normalizedText.length)
+      );
+      nextSegments.push(normalizedText.slice(cursor, safeAnchorOffset));
+      cursor = safeAnchorOffset;
+    });
+    nextSegments.push(normalizedText.slice(cursor));
+    segments = nextSegments;
+    anchorOffsets = remappedAnchorOffsets;
+  } else {
+    const nextSegments: string[] = [];
+    const nextAnchorOffsets: number[] = [];
+    let cursor = 0;
+
+    for (let index = 0; index < anchors.length; index += 1) {
+      const anchor = anchors[index];
+      const anchorText =
+        anchor.type === "form-field" ? formFieldDisplayValue(anchor) : "";
+      if (!anchorText) {
+        segments = undefined;
+        anchorOffsets = undefined;
+        break;
+      }
+
+      const anchorIndex = normalizedText.indexOf(anchorText, cursor);
+      if (anchorIndex < 0) {
+        nextSegments.push(normalizedText.slice(cursor));
+        cursor = normalizedText.length;
+        break;
+      }
+
+      nextSegments.push(normalizedText.slice(cursor, anchorIndex));
+      cursor = anchorIndex + anchorText.length;
+      nextAnchorOffsets.push(anchorIndex);
+    }
+
+    if (nextSegments.length > 0 || anchors.length === 0) {
+      nextSegments.push(normalizedText.slice(cursor));
+      while (nextSegments.length < textGroups.length) {
+        nextSegments.push("");
+      }
+      segments = nextSegments;
+      anchorOffsets = nextAnchorOffsets;
+    }
+  }
+
+  if (!segments || !anchorOffsets) {
+    return {
+      beforeChildren: distributeTextAcrossRuns(
+        normalizedText.slice(0, safeStart),
+        textRuns(paragraph),
+        { insertedStyle: options?.beforeInsertedStyle }
+      ),
+      afterChildren: distributeTextAcrossRuns(
+        normalizedText.slice(safeEnd),
+        textRuns(paragraph),
+        { insertedStyle: options?.afterInsertedStyle }
+      ),
+    };
+  }
+
+  const beforeChildren: ParagraphNode["children"] = [];
+  const afterChildren: ParagraphNode["children"] = [];
+  let cursor = 0;
+
+  for (let index = 0; index < textGroups.length; index += 1) {
+    const templateRuns = textGroups[index];
+    const segmentText = segments[index] ?? "";
+    const segmentStart = cursor;
+    const segmentEnd = segmentStart + segmentText.length;
+    cursor = segmentEnd;
+
+    const beforePart =
+      safeStart <= segmentStart
+        ? ""
+        : segmentText.slice(
+            0,
+            Math.max(0, Math.min(segmentText.length, safeStart - segmentStart))
+          );
+    const afterPart =
+      safeEnd >= segmentEnd
+        ? ""
+        : segmentText.slice(
+            Math.max(0, Math.min(segmentText.length, safeEnd - segmentStart))
+          );
+
+    if (templateRuns.length > 0) {
+      if (beforePart.length > 0) {
+        beforeChildren.push(
+          ...distributeTextAcrossRuns(beforePart, templateRuns, {
+            insertedStyle: options?.beforeInsertedStyle,
+          })
+        );
+      }
+      if (afterPart.length > 0) {
+        afterChildren.push(
+          ...distributeTextAcrossRuns(afterPart, templateRuns, {
+            insertedStyle: options?.afterInsertedStyle,
+          })
+        );
+      }
+    } else {
+      if (beforePart.length > 0) {
+        beforeChildren.push({
+          type: "text",
+          text: beforePart,
+          style: cloneTextStyle(options?.beforeInsertedStyle),
+        });
+      }
+      if (afterPart.length > 0) {
+        afterChildren.push({
+          type: "text",
+          text: afterPart,
+          style: cloneTextStyle(options?.afterInsertedStyle),
+        });
+      }
+    }
+
+    if (index < anchors.length) {
+      const anchor = cloneParagraphChildRun(anchors[index]);
+      const anchorOffset = anchorOffsets[index] ?? segmentEnd;
+      if (anchorOffset <= safeStart) {
+        beforeChildren.push(anchor);
+      } else if (anchorOffset >= safeEnd) {
+        afterChildren.push(anchor);
+      } else {
+        beforeChildren.push(anchor);
+      }
+    }
+  }
+
+  if (beforeChildren.length === 0) {
+    beforeChildren.push({
+      type: "text",
+      text: "",
+      style: cloneTextStyle(options?.beforeInsertedStyle),
+    });
+  }
+
+  if (afterChildren.length === 0) {
+    afterChildren.push({
+      type: "text",
+      text: "",
+      style: cloneTextStyle(options?.afterInsertedStyle),
+    });
+  }
+
+  return {
+    beforeChildren,
+    afterChildren,
+  };
+}
+
+function cloneParagraph(paragraph: ParagraphNode): ParagraphNode {
+  // Copies are new blocks: they must not share measurement identity with the
+  // original, so they get a fresh id instead of inheriting one.
+  return {
+    ...cloneParagraphNode(paragraph),
+    blockId: allocateBlockId(),
+  };
+}
+
+export function insertParagraph(
+  model: DocModel,
+  text: string,
+  index = model.nodes.length,
+  options?: InsertParagraphOptions
+): DocModel {
+  const next = cloneDocModel(model);
+  const safeIndex = Math.max(0, Math.min(index, next.nodes.length));
+  next.nodes.splice(safeIndex, 0, paragraphFromText(text, options));
+  return next;
+}
+
+export function removeParagraph(model: DocModel, index: number): DocModel {
+  const next = cloneDocModel(model);
+  const node = getParagraph(next, index);
+  if (!node) {
+    return next;
+  }
+
+  next.nodes.splice(index, 1);
+
+  if (!next.nodes.some((candidate) => candidate.type === "paragraph")) {
+    next.nodes.push(paragraphFromText(""));
+  }
+
+  return next;
+}
+
+export function duplicateParagraph(model: DocModel, index: number): DocModel {
+  const next = cloneDocModel(model);
+  const node = getParagraph(next, index);
+  if (!node) {
+    return next;
+  }
+
+  next.nodes.splice(index + 1, 0, cloneParagraph(node));
+  return next;
+}
+
+export function updateParagraphText(
+  model: DocModel,
+  index: number,
+  text: string,
+  options?: UpdateTextOptions
+): DocModel {
+  // Hot per-keystroke path: share every untouched node so identity-keyed
+  // caches survive the edit; only the edited paragraph is copied.
+  const source = getParagraph(model, index);
+  if (!source) {
+    return { ...model, nodes: [...model.nodes] };
+  }
+  if (paragraphTextEditIsFailClosed(source, text)) {
+    return model;
+  }
+  if (paragraphEditableText(source) === text) {
+    return { ...model, nodes: [...model.nodes] };
+  }
+
+  const paragraph = updatedParagraphNodeText(source, text, options);
+
+  const nextNodes = [...model.nodes];
+  nextNodes[index] = paragraph;
+  return { ...model, nodes: nextNodes };
+}
+
+export function updateTableCellText(
+  model: DocModel,
+  tableIndex: number,
+  rowIndex: number,
+  cellIndex: number,
+  text: string,
+  options?: UpdateTextOptions
+): DocModel {
+  const sourceTable = model.nodes[tableIndex];
+  if (!sourceTable || sourceTable.type !== "table") {
+    return { ...model, nodes: [...model.nodes] };
+  }
+
+  const incomingParagraphTexts = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n");
+  if (incomingParagraphTexts.length === 0) {
+    incomingParagraphTexts.push("");
+  }
+  const sourceCell = sourceTable.rows[rowIndex]?.cells[cellIndex];
+  if (!sourceCell) {
+    return { ...model, nodes: [...model.nodes] };
+  }
+  const sourceParagraphs = sourceCell.nodes.filter(
+    (node): node is ParagraphNode => node.type === "paragraph"
+  );
+  if (
+    sourceParagraphs.some((paragraph, paragraphIndex) =>
+      paragraphTextEditIsFailClosed(
+        paragraph,
+        incomingParagraphTexts[paragraphIndex] ?? ""
+      )
+    )
+  ) {
+    return model;
+  }
+
+  const tableNode = copyTableForCellTextEdit(sourceTable, rowIndex, cellIndex);
+  const row = tableNode.rows[rowIndex];
+  const cell = row?.cells[cellIndex];
+  if (!cell) {
+    return { ...model, nodes: [...model.nodes] };
+  }
+
+  const nextNodes = [...model.nodes];
+  nextNodes[tableIndex] = tableNode;
+  const next = { ...model, nodes: nextNodes };
+
+  const paragraphEntries = cell.nodes
+    .map((node, nodeIndex) => ({ node, nodeIndex }))
+    .filter(
+      (entry): entry is { node: ParagraphNode; nodeIndex: number } =>
+        entry.node.type === "paragraph"
+    );
+
+  if (paragraphEntries.length === 0) {
+    cell.nodes.push(
+      ...incomingParagraphTexts.map((paragraphText) =>
+        paragraphFromText(paragraphText, {
+          runStyle: cloneTextStyle(options?.insertedStyle),
+        })
+      )
+    );
+    discardTableSourceXml(tableNode);
+    return next;
+  }
+
+  let changed = false;
+  let retainedEverySourcePatch = true;
+  paragraphEntries.forEach(({ node: paragraph, nodeIndex }, paragraphIndex) => {
+    const paragraphText = incomingParagraphTexts[paragraphIndex] ?? "";
+    const updatedParagraph = updatedParagraphNodeText(
+      paragraph,
+      paragraphText,
+      options
+    );
+    if (updatedParagraph === paragraph) {
+      return;
+    }
+    changed = true;
+    cell.nodes[nodeIndex] = updatedParagraph;
+    retainedEverySourcePatch =
+      retainTableSourceTextPatch(tableNode, paragraph, updatedParagraph) &&
+      retainedEverySourcePatch;
+  });
+
+  if (incomingParagraphTexts.length > paragraphEntries.length) {
+    changed = true;
+    retainedEverySourcePatch = false;
+    for (
+      let paragraphIndex = paragraphEntries.length;
+      paragraphIndex < incomingParagraphTexts.length;
+      paragraphIndex += 1
+    ) {
+      cell.nodes.push(
+        paragraphFromText(
+          incomingParagraphTexts[paragraphIndex] ?? "",
+          { runStyle: cloneTextStyle(options?.insertedStyle) },
+          paragraphEntries.at(-1)?.node
+        )
+      );
+    }
+  }
+
+  if (!changed) {
+    return model;
+  }
+  if (!retainedEverySourcePatch) {
+    discardTableSourceXml(tableNode);
+  }
+  return next;
+}
+
+export function updateTableCellParagraphText(
+  model: DocModel,
+  tableIndex: number,
+  rowIndex: number,
+  cellIndex: number,
+  paragraphIndex: number,
+  text: string,
+  options?: UpdateTextOptions
+): DocModel {
+  const sourceTable = model.nodes[tableIndex];
+  if (!sourceTable || sourceTable.type !== "table") {
+    return { ...model, nodes: [...model.nodes] };
+  }
+
+  const sourceCell = sourceTable.rows[rowIndex]?.cells[cellIndex];
+  const sourceParagraphNodeIndex = sourceCell
+    ? directParagraphNodeIndex(sourceCell.nodes, paragraphIndex)
+    : undefined;
+  const sourceParagraph =
+    sourceParagraphNodeIndex === undefined
+      ? undefined
+      : sourceCell?.nodes[sourceParagraphNodeIndex];
+  if (
+    !sourceCell ||
+    !sourceParagraph ||
+    sourceParagraph.type !== "paragraph" ||
+    sourceParagraphNodeIndex === undefined
+  ) {
+    return { ...model, nodes: [...model.nodes] };
+  }
+  if (paragraphTextEditIsFailClosed(sourceParagraph, text)) {
+    return model;
+  }
+  if (paragraphEditableText(sourceParagraph) === text) {
+    return model;
+  }
+
+  const tableNode = copyTableForCellTextEdit(sourceTable, rowIndex, cellIndex);
+  const cell = tableNode.rows[rowIndex].cells[cellIndex];
+  const updatedParagraph = updatedParagraphNodeText(
+    sourceParagraph,
+    text,
+    options
+  );
+  cell.nodes[sourceParagraphNodeIndex] = updatedParagraph;
+  if (
+    !retainTableSourceTextPatch(tableNode, sourceParagraph, updatedParagraph)
+  ) {
+    discardTableSourceXml(tableNode);
+  }
+
+  const nextNodes = [...model.nodes];
+  nextNodes[tableIndex] = tableNode;
+  return { ...model, nodes: nextNodes };
+}
+
+export function updateTableCellParagraphTextRecursive(
+  model: DocModel,
+  tableIndex: number,
+  rowIndex: number,
+  cellIndex: number,
+  paragraphIndex: number,
+  text: string,
+  options?: UpdateTextOptions
+): DocModel {
+  const sourceTable = model.nodes[tableIndex];
+  if (!sourceTable || sourceTable.type !== "table") {
+    return { ...model, nodes: [...model.nodes] };
+  }
+  const sourceCell = sourceTable.rows[rowIndex]?.cells[cellIndex];
+  const sourceParagraph = sourceCell
+    ? recursiveParagraphAtIndex(sourceCell.nodes, paragraphIndex)
+    : undefined;
+  if (!sourceCell || !sourceParagraph) {
+    return { ...model, nodes: [...model.nodes] };
+  }
+  if (paragraphTextEditIsFailClosed(sourceParagraph, text)) {
+    return model;
+  }
+  if (paragraphEditableText(sourceParagraph) === text) {
+    return model;
+  }
+
+  const updatedParagraph = updatedParagraphNodeText(
+    sourceParagraph,
+    text,
+    options
+  );
+  const retainSource = (table: TableNode): void => {
+    if (!retainTableSourceTextPatch(table, sourceParagraph, updatedParagraph)) {
+      discardTableSourceXml(table);
+    }
+  };
+  const updateInNodes = (
+    nodes: TableCellContentNode[]
+  ): TableCellContentNode[] | undefined => {
+    for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
+      const node = nodes[nodeIndex];
+      if (node === sourceParagraph) {
+        const nextNodes = [...nodes];
+        nextNodes[nodeIndex] = updatedParagraph;
+        return nextNodes;
+      }
+      if (node.type !== "table") continue;
+      for (let rowIndex = 0; rowIndex < node.rows.length; rowIndex += 1) {
+        const row = node.rows[rowIndex];
+        for (let cellIndex = 0; cellIndex < row.cells.length; cellIndex += 1) {
+          const updatedNodes = updateInNodes(row.cells[cellIndex].nodes);
+          if (!updatedNodes) continue;
+          const table = copyTableForCellTextEdit(node, rowIndex, cellIndex);
+          table.rows[rowIndex].cells[cellIndex].nodes = updatedNodes;
+          retainSource(table);
+          const nextNodes = [...nodes];
+          nextNodes[nodeIndex] = table;
+          return nextNodes;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const updatedNodes = updateInNodes(sourceCell.nodes);
+  if (!updatedNodes) return model;
+  const tableNode = copyTableForCellTextEdit(sourceTable, rowIndex, cellIndex);
+  tableNode.rows[rowIndex].cells[cellIndex].nodes = updatedNodes;
+  retainSource(tableNode);
+  const nextNodes = [...model.nodes];
+  nextNodes[tableIndex] = tableNode;
+  return { ...model, nodes: nextNodes };
+}
+
+function mutateParagraphTextRuns(
+  model: DocModel,
+  transform: (run: TextRunNode) => void
+): void {
+  for (const node of model.nodes) {
+    if (node.type === "paragraph") {
+      for (const child of node.children) {
+        if (child.type === "text") {
+          transform(child);
+        }
+      }
+      node.sourceXml = undefined;
+      continue;
+    }
+
+    for (const row of node.rows) {
+      for (const cell of row.cells) {
+        for (const paragraph of cell.nodes.filter(
+          (child): child is ParagraphNode => child.type === "paragraph"
+        )) {
+          for (const child of paragraph.children) {
+            if (child.type === "text") {
+              transform(child);
+            }
+          }
+          paragraph.sourceXml = undefined;
+        }
+      }
+    }
+    node.sourceXml = undefined;
+  }
+}
+
+export function replaceText(
+  model: DocModel,
+  searchValue: string | RegExp,
+  replacement: string
+): DocModel {
+  const next = cloneDocModel(model);
+
+  mutateParagraphTextRuns(next, (run) => {
+    run.text = run.text.replace(searchValue, replacement);
+  });
+
+  return next;
+}
+
+export function setParagraphHeading(
+  model: DocModel,
+  nodeIndex: number,
+  headingLevel?: HeadingLevel
+): DocModel {
+  const next = cloneDocModel(model);
+  const paragraph = getParagraph(next, nodeIndex);
+  if (!paragraph) {
+    return next;
+  }
+
+  paragraph.style = {
+    ...(paragraph.style ?? {}),
+    headingLevel,
+  };
+  paragraph.sourceXml = undefined;
+
+  return next;
+}
+
+export function setParagraphAlignment(
+  model: DocModel,
+  nodeIndex: number,
+  align?: ParagraphAlignment
+): DocModel {
+  const next = cloneDocModel(model);
+  const paragraph = getParagraph(next, nodeIndex);
+  if (!paragraph) {
+    return next;
+  }
+
+  paragraph.style = {
+    ...(paragraph.style ?? {}),
+    align,
+  };
+  paragraph.sourceXml = undefined;
+
+  return next;
+}
+
+export function applyRunStyle(
+  model: DocModel,
+  nodeIndex: number,
+  runIndex: number,
+  style: Partial<TextStyle>
+): DocModel {
+  const next = cloneDocModel(model);
+  const paragraph = getParagraph(next, nodeIndex);
+  if (!paragraph) {
+    return next;
+  }
+
+  const textRun = ensureTextRun(paragraph, runIndex);
+  textRun.style = {
+    ...(textRun.style ?? {}),
+    ...style,
+  };
+  paragraph.sourceXml = undefined;
+
+  return next;
+}
+
+export function toggleRunStyleFlag(
+  model: DocModel,
+  nodeIndex: number,
+  runIndex: number,
+  key: "bold" | "italic" | "underline" | "strike"
+): DocModel {
+  const next = cloneDocModel(model);
+  const paragraph = getParagraph(next, nodeIndex);
+  if (!paragraph) {
+    return next;
+  }
+
+  const textRun = ensureTextRun(paragraph, runIndex);
+  const current = Boolean(textRun.style?.[key]);
+  textRun.style = {
+    ...(textRun.style ?? {}),
+    [key]: !current,
+  };
+  paragraph.sourceXml = undefined;
+
+  return next;
+}
+
+export function setRunHighlight(
+  model: DocModel,
+  nodeIndex: number,
+  runIndex: number,
+  highlight?: string
+): DocModel {
+  return applyRunStyle(model, nodeIndex, runIndex, { highlight });
+}
+
+export function setRunColor(
+  model: DocModel,
+  nodeIndex: number,
+  runIndex: number,
+  color?: string
+): DocModel {
+  return applyRunStyle(model, nodeIndex, runIndex, { color });
+}
+
+export function copyParagraphs(
+  model: DocModel,
+  startIndex: number,
+  endIndex = startIndex
+): ParagraphNode[] {
+  const start = Math.max(0, Math.min(startIndex, model.nodes.length - 1));
+  const end = Math.max(start, Math.min(endIndex, model.nodes.length - 1));
+
+  const paragraphs: ParagraphNode[] = [];
+  for (let index = start; index <= end; index += 1) {
+    const node = model.nodes[index];
+    if (node?.type === "paragraph") {
+      paragraphs.push(cloneParagraph(node));
+    }
+  }
+
+  return paragraphs;
+}
+
+export function pasteParagraphs(
+  model: DocModel,
+  index: number,
+  paragraphs: ParagraphNode[]
+): DocModel {
+  const next = cloneDocModel(model);
+  const safeIndex = Math.max(0, Math.min(index, next.nodes.length));
+  const copies = paragraphs.map(cloneParagraph);
+  next.nodes.splice(safeIndex, 0, ...copies);
+  return next;
+}
+
+export function serializeParagraphsForClipboard(
+  paragraphs: ParagraphNode[]
+): string {
+  return JSON.stringify(
+    paragraphs.map((paragraph) => ({
+      type: "paragraph",
+      style: paragraph.style ?? undefined,
+      paragraphMarkStyle: paragraph.paragraphMarkStyle,
+      sourceParagraphMarkStyle: paragraph.sourceParagraphMarkStyle,
+      sourceParagraphMarkPropertiesXml: paragraph.sourceParagraphMarkPropertiesXml,
+      sourceParagraphMarkFormatting: paragraph.sourceParagraphMarkFormatting,
+      paragraphMarkDeleted: paragraph.paragraphMarkDeleted,
+      sourceXml: paragraph.sourceXml,
+      children: paragraph.children.map((run) =>
+        run.type === "text"
+          ? {
+              type: "text" as const,
+              text: run.text,
+              style: run.style ?? undefined,
+              link: run.link,
+            }
+          : run.type === "form-field"
+          ? cloneFormFieldRun(run)
+          : {
+              type: "image" as const,
+              src: run.src,
+              alt: run.alt,
+              widthPx: run.widthPx,
+              heightPx: run.heightPx,
+              partName: run.partName,
+              contentType: run.contentType,
+              data: run.data ? Array.from(run.data) : undefined,
+              floating: run.floating ? { ...run.floating } : undefined,
+              syntheticTextBox: run.syntheticTextBox,
+              textBoxText: run.textBoxText,
+            }
+      ),
+    }))
+  );
+}
+
+export function parseParagraphsFromClipboard(
+  input: string
+): ParagraphNode[] | undefined {
+  try {
+    const parsed = JSON.parse(input) as unknown;
+    if (!Array.isArray(parsed)) {
+      return undefined;
+    }
+
+    const normalized: ParagraphNode[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+
+      const value = item as Partial<ParagraphNode>;
+      if (value.type !== "paragraph" || !Array.isArray(value.children)) {
+        continue;
+      }
+
+      const children: ParagraphNode["children"] = [];
+      for (const run of value.children) {
+        if (!run || typeof run !== "object") {
+          continue;
+        }
+
+        if (run.type === "text" && typeof run.text === "string") {
+          children.push({
+            type: "text",
+            text: run.text,
+            style: run.style ? { ...run.style } : undefined,
+            link: typeof run.link === "string" ? run.link : undefined,
+          });
+          continue;
+        }
+
+        if (run.type === "image") {
+          children.push({
+            type: "image",
+            src: run.src,
+            alt: run.alt,
+            widthPx: run.widthPx,
+            heightPx: run.heightPx,
+            partName: run.partName,
+            contentType: run.contentType,
+            data: Array.isArray(run.data)
+              ? new Uint8Array(run.data)
+              : undefined,
+            floating:
+              run.floating && typeof run.floating === "object"
+                ? { ...run.floating }
+                : undefined,
+            syntheticTextBox: Boolean(run.syntheticTextBox),
+            textBoxText:
+              typeof run.textBoxText === "string" ? run.textBoxText : undefined,
+          });
+          continue;
+        }
+
+        if (run.type === "form-field") {
+          const options = Array.isArray(run.options)
+            ? run.options.reduce<NonNullable<FormFieldRunNode["options"]>>(
+                (collected, option) => {
+                  if (!option || typeof option !== "object") {
+                    return collected;
+                  }
+
+                  const displayText =
+                    typeof option.displayText === "string"
+                      ? option.displayText
+                      : undefined;
+                  if (!displayText) {
+                    return collected;
+                  }
+
+                  collected.push({
+                    displayText,
+                    value:
+                      typeof option.value === "string"
+                        ? option.value
+                        : undefined,
+                  });
+                  return collected;
+                },
+                []
+              )
+            : undefined;
+          const widget =
+            run.widget && typeof run.widget === "object"
+              ? {
+                  name:
+                    typeof run.widget.name === "string"
+                      ? run.widget.name
+                      : undefined,
+                  enabled:
+                    typeof run.widget.enabled === "boolean"
+                      ? run.widget.enabled
+                      : undefined,
+                  calcOnExit:
+                    typeof run.widget.calcOnExit === "boolean"
+                      ? run.widget.calcOnExit
+                      : undefined,
+                  text:
+                    run.widget.text && typeof run.widget.text === "object"
+                      ? {
+                          inputType:
+                            typeof run.widget.text.inputType === "string"
+                              ? run.widget.text.inputType
+                              : undefined,
+                          defaultText:
+                            typeof run.widget.text.defaultText === "string"
+                              ? run.widget.text.defaultText
+                              : undefined,
+                          maxLength:
+                            typeof run.widget.text.maxLength === "number"
+                              ? run.widget.text.maxLength
+                              : undefined,
+                          textFormat:
+                            typeof run.widget.text.textFormat === "string"
+                              ? run.widget.text.textFormat
+                              : undefined,
+                        }
+                      : undefined,
+                  checkbox:
+                    run.widget.checkbox &&
+                    typeof run.widget.checkbox === "object"
+                      ? {
+                          defaultChecked:
+                            typeof run.widget.checkbox.defaultChecked ===
+                            "boolean"
+                              ? run.widget.checkbox.defaultChecked
+                              : undefined,
+                          sizeMode:
+                            run.widget.checkbox.sizeMode === "auto" ||
+                            run.widget.checkbox.sizeMode === "exact"
+                              ? run.widget.checkbox.sizeMode
+                              : undefined,
+                          sizePt:
+                            typeof run.widget.checkbox.sizePt === "number"
+                              ? run.widget.checkbox.sizePt
+                              : undefined,
+                        }
+                      : undefined,
+                  dropdown:
+                    run.widget.dropdown &&
+                    typeof run.widget.dropdown === "object"
+                      ? {
+                          defaultValue:
+                            typeof run.widget.dropdown.defaultValue === "string"
+                              ? run.widget.dropdown.defaultValue
+                              : undefined,
+                        }
+                      : undefined,
+                }
+              : undefined;
+
+          children.push({
+            type: "form-field",
+            fieldType: run.fieldType,
+            sourceKind:
+              run.sourceKind === "legacy" || run.sourceKind === "sdt"
+                ? run.sourceKind
+                : undefined,
+            id: typeof run.id === "number" ? run.id : undefined,
+            tag: typeof run.tag === "string" ? run.tag : undefined,
+            title: typeof run.title === "string" ? run.title : undefined,
+            placeholder:
+              typeof run.placeholder === "string" ? run.placeholder : undefined,
+            checked: typeof run.checked === "boolean" ? run.checked : undefined,
+            value: typeof run.value === "string" ? run.value : undefined,
+            options: options && options.length > 0 ? options : undefined,
+            widget,
+            checkedSymbol:
+              typeof run.checkedSymbol === "string"
+                ? run.checkedSymbol
+                : undefined,
+            uncheckedSymbol:
+              typeof run.uncheckedSymbol === "string"
+                ? run.uncheckedSymbol
+                : undefined,
+            style: run.style ? { ...run.style } : undefined,
+            link: typeof run.link === "string" ? run.link : undefined,
+            sourceXml:
+              typeof run.sourceXml === "string" ? run.sourceXml : undefined,
+          });
+        }
+      }
+
+      normalized.push({
+        type: "paragraph",
+        style: value.style ? { ...value.style } : undefined,
+        paragraphMarkStyle: cloneTextStyle(value.paragraphMarkStyle),
+        sourceParagraphMarkStyle: cloneTextStyle(value.sourceParagraphMarkStyle),
+        sourceParagraphMarkPropertiesXml:
+          typeof value.sourceParagraphMarkPropertiesXml === "string"
+            ? value.sourceParagraphMarkPropertiesXml
+            : undefined,
+        sourceParagraphMarkFormatting:
+          value.sourceParagraphMarkFormatting &&
+          typeof value.sourceParagraphMarkFormatting === "object" &&
+          !Array.isArray(value.sourceParagraphMarkFormatting)
+            ? cloneParagraphMarkFormatting(value.sourceParagraphMarkFormatting)
+            : undefined,
+        paragraphMarkDeleted:
+          typeof value.paragraphMarkDeleted === "boolean"
+            ? value.paragraphMarkDeleted
+            : undefined,
+        sourceXml:
+          typeof value.sourceXml === "string" ? value.sourceXml : undefined,
+        children: children.length > 0 ? children : [{ type: "text", text: "" }],
+      });
+    }
+
+    return normalized.length > 0 ? normalized : undefined;
+  } catch {
+    return undefined;
+  }
+}
