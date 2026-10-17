@@ -6,6 +6,7 @@ import {
   getXlsxSelectionStatistics,
   parseXlsxRange,
   resolveXlsxFindIndex,
+  useXlsxCellEditor,
   useXlsxFormulaAssist,
   useXlsxViewer,
   useXlsxViewerController,
@@ -1360,10 +1361,8 @@ function EditorToolbar({
     readOnly,
     redo,
     removeActiveSheet,
-    selectedFormula,
-    selectedValue,
+    getCellInputValue,
     setCellStyle,
-    setCellValue,
     setRangeStyle,
     setSelectedCellStyle,
     undo,
@@ -1373,12 +1372,14 @@ function EditorToolbar({
     useXlsxViewerZoom()
   const [nameDraft, setNameDraft] = React.useState<string | null>(null)
   const [nameInvalid, setNameInvalid] = React.useState(false)
-  const [formulaDraft, setFormulaDraft] = React.useState("")
+  const selectedCellInputValue = getCellInputValue(activeCell)
+  const cellEditor = useXlsxCellEditor()
+  const formulaDraft = cellEditor.draft?.value ?? selectedCellInputValue
   const [formulaFocused, setFormulaFocused] = React.useState(false)
   const formulaInputRef = React.useRef<HTMLInputElement>(null)
   const formulaAssist = useXlsxFormulaAssist(
     formulaDraft,
-    setFormulaDraft,
+    cellEditor.change,
     formulaInputRef
   )
   const viewerPalette = useXlsxViewerPalette()
@@ -1395,8 +1396,6 @@ function EditorToolbar({
     sheetIndex: number
     workbookIdentity: string
   } | null>(null)
-  const formulaEditCellRef = React.useRef<typeof activeCell>(null)
-  const formulaInitialValueRef = React.useRef("")
   const hasWorkbook = sheets.length > 0
   const hasSelection = Boolean(selection)
   const hasActiveCell = Boolean(activeCell)
@@ -1476,7 +1475,6 @@ function EditorToolbar({
     selection && !readOnly && selectionIntersectsMerge
   )
   const currentZoom = Math.round(zoomScale)
-  const selectedCellInputValue = selectedFormula || selectedValue
 
   const activeCellStyle = React.useMemo(() => {
     // Worksheet style objects are mutable; revision invalidates this read after edits.
@@ -1514,16 +1512,6 @@ function EditorToolbar({
     () => getNumberFormatValue(activeCellStyle),
     [activeCellStyle]
   )
-
-  const commitFormula = React.useCallback(() => {
-    const targetCell = formulaEditCellRef.current ?? activeCell
-    if (!targetCell) return
-    if (formulaDraft === formulaInitialValueRef.current) return
-
-    // A leading "=" makes it a formula, the same as typing in the cell.
-    setCellValue(targetCell, formulaDraft)
-    formulaInitialValueRef.current = formulaDraft
-  }, [activeCell, formulaDraft, setCellValue])
 
   const applyStyle = React.useCallback(
     (style: XlsxCellStyleInput) => {
@@ -2494,32 +2482,28 @@ function EditorToolbar({
               )}
               ref={formulaInputRef}
               disabled={!hasActiveCell || readOnly}
-              value={formulaFocused ? formulaDraft : selectedCellInputValue}
+              value={formulaDraft}
               onSelect={formulaAssist.onSelect}
-              onBlur={() => {
+              onBlur={(event) => {
                 formulaAssist.onBlur()
-                commitFormula()
+                cellEditor.onBlur(event)
                 setFormulaFocused(false)
               }}
-              onChange={(event) => setFormulaDraft(event.target.value)}
+              onChange={(event) => cellEditor.change(event.target.value)}
               onFocus={() => {
-                formulaEditCellRef.current = activeCell
-                formulaInitialValueRef.current = selectedCellInputValue
-                setFormulaDraft(selectedCellInputValue)
+                if (!cellEditor.draft && activeCell) {
+                  cellEditor.begin(activeCell, selectedCellInputValue)
+                }
                 setFormulaFocused(true)
               }}
               onKeyDown={(event) => {
                 if (formulaAssist.handleKeyDown(event)) return
                 if (event.key === "Enter") {
                   event.preventDefault()
-                  commitFormula()
-                  event.currentTarget.blur()
+                  cellEditor.commit()
                 } else if (event.key === "Escape") {
                   event.preventDefault()
-                  // Blur normally saves; treat the cancelled draft as already handled.
-                  formulaInitialValueRef.current = formulaDraft
-                  setFormulaDraft(selectedCellInputValue)
-                  event.currentTarget.blur()
+                  cellEditor.cancel()
                 }
               }}
               placeholder="Select a cell, then enter a value or formula"
