@@ -4,10 +4,13 @@ import { setWasmSource, useXlsxViewerController, XlsxViewer } from "../packages/
 
 setWasmSource("/packages/react-xlsx/vendor/sheets-wasm/duke_sheets_wasm_bg.wasm");
 const params = new URLSearchParams(location.search);
-const initial = await (await fetch(`/tmp/drawings-${params.has("frozen") ? "frozen" : "normal"}.xlsx`)).arrayBuffer();
+const initial = await (await fetch(params.has("real") ? "/tests/fixtures/tmp-agent-demo.xlsx" : `/tmp/drawings-${params.has("frozen") ? "frozen" : "normal"}.xlsx`)).arrayBuffer();
 function App() {
   const [file, setFile] = React.useState(initial);
   const controller = useXlsxViewerController({ file, readOnly: params.has("readonly") });
+  React.useEffect(() => {
+    if (params.has("real") && controller.workbook) controller.setActiveSheetByName("9. Charts");
+  }, [controller.workbook]);
   (window as any).controller = controller;
   (window as any).reloadWorkbook = (bytes: number[]) => {
     (window as any).previousWorkbook = controller.workbook;

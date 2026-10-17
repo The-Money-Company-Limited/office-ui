@@ -3798,6 +3798,25 @@ export function mergeWorkbookImageAssets(
         return;
       }
 
+      // The engine omits this view setting; restoring drawings must not change
+      // the gridline spacing used to resolve their anchors.
+      if (sourceAssets.sheetStatesByWorkbookSheetIndex[origin.workbookSheetIndex]?.showGridLines === false) {
+        const worksheet = sheetDocument.documentElement;
+        let views = getFirstChild(worksheet, "sheetViews");
+        if (!views) {
+          views = sheetDocument.createElementNS(SPREADSHEET_NS, "sheetViews");
+          const successor = Array.from(worksheet.children).find((node) => !["sheetPr", "dimension"].includes(node.localName));
+          worksheet.insertBefore(views, successor ?? null);
+        }
+        let view = getFirstChild(views, "sheetView");
+        if (!view) {
+          view = sheetDocument.createElementNS(SPREADSHEET_NS, "sheetView");
+          view.setAttribute("workbookViewId", "0");
+          views.appendChild(view);
+        }
+        view.setAttribute("showGridLines", "0");
+      }
+
       const generatedDrawings = Array.from(parseRelationships(generatedArchive, relsPath, currentSheet.path).values())
         .filter((relationship) => relationship.type === DRAWING_REL_TYPE);
       removeDrawingReferences(sheetDocument, relDocument);

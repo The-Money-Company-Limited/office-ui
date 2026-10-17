@@ -7502,6 +7502,7 @@ function XlsxGrid({
   });
   const paintedBodyCanvasSignatureRef = React.useRef<PaintedBodyCanvasSignature | null>(null);
   const paintedHeaderCanvasSignatureRef = React.useRef<PaintedHeaderCanvasSignature | null>(null);
+  const paintedGridCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const pendingDrawingViewportRef = React.useRef<DrawingViewport | null>(null);
   const drawingViewportFrameRef = React.useRef<number | null>(null);
   const initialScrollKeyRef = React.useRef<string | null>(null);
@@ -12399,7 +12400,13 @@ function XlsxGrid({
   }, []);
 
   React.useLayoutEffect(() => {
-    if (!experimentalCanvas) {
+    if (paintedGridCanvasRef.current !== scrollBodyCanvasRef.current) {
+      // The keyed scroller can replace the canvases without changing sheet data.
+      paintedBodyCanvasSignatureRef.current = null;
+      paintedHeaderCanvasSignatureRef.current = null;
+      paintedGridCanvasRef.current = scrollBodyCanvasRef.current;
+    }
+    if (!experimentalCanvas || !scrollBodyCanvasRef.current) {
       return;
     }
 
@@ -13786,6 +13793,7 @@ function XlsxGrid({
     }
   }, [
     activeSheet,
+    activeTab?.id,
     applyCanvasViewportCompensation,
     bakedCanvasDrawingSignature,
     bakedImageRects,
@@ -13813,6 +13821,7 @@ function XlsxGrid({
     getCanvasImage,
     getBodyBlitBufferCanvas,
     getHeaderBlitBufferCanvas,
+    isLoading,
     palette,
     resolveCellDisplayRect,
     resolveMergeAnchorCell,

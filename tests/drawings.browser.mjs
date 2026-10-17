@@ -41,11 +41,7 @@ const server = await createServer({
     load(id) {
       const file = path.relative(root, id);
       if (baselineFiles.includes(file)) {
-        // Add selectors only: baseline interactions and persistence remain unchanged.
-        return execFileSync("git", ["show", `HEAD:${file}`], { encoding: "utf8" })
-          .replace('onClick={() => handleImageClick(image)}', 'data-xlsx-drawing="image" onClick={() => handleImageClick(image)}')
-          .replace('onClick={() => handleChartClick(chart)}', 'data-xlsx-drawing="chart" onClick={() => handleChartClick(chart)}')
-          .replaceAll('key={position}', 'key={position} data-xlsx-resize={position}');
+        return execFileSync("git", ["show", `HEAD:${file}`], { encoding: "utf8" });
       }
     }
   }] : [],
@@ -69,18 +65,44 @@ const browser = await chromium.launch({
 });
 
 async function drawingState(page) {
-  return page.evaluate(() => window.controller.workbook.getSheet(0).drawings.map(({ name, kind, anchor }) => ({ name, kind, anchor })));
+  return page.evaluate(() => window.controller.workbook.getSheet(window.controller.activeSheet.workbookSheetIndex).drawings.map(({ name, kind, anchor }) => ({ name, kind, anchor })));
 }
 async function historyRoundTrip(page, before, after) {
   await page.keyboard.press("Control+z");
-  await page.waitForFunction((state) => JSON.stringify(window.controller.workbook.getSheet(0).drawings.map(({ name, kind, anchor }) => ({ name, kind, anchor }))) === state, JSON.stringify(before));
+  await page.waitForFunction((state) => JSON.stringify(window.controller.workbook.getSheet(window.controller.activeSheet.workbookSheetIndex).drawings.map(({ name, kind, anchor }) => ({ name, kind, anchor }))) === state, JSON.stringify(before));
   await page.keyboard.press("Control+Shift+z");
-  await page.waitForFunction((state) => JSON.stringify(window.controller.workbook.getSheet(0).drawings.map(({ name, kind, anchor }) => ({ name, kind, anchor }))) === state, JSON.stringify(after));
+  await page.waitForFunction((state) => JSON.stringify(window.controller.workbook.getSheet(window.controller.activeSheet.workbookSheetIndex).drawings.map(({ name, kind, anchor }) => ({ name, kind, anchor }))) === state, JSON.stringify(after));
 }
 async function exported(page) {
   const pending = page.waitForEvent("download");
   await page.evaluate(() => window.controller.exportXlsx());
   return new Uint8Array(await readFile(await (await pending).path()));
+}
+async function assertChartPixels(page, chart, name) {
+  const rect = await chart.boundingBox();
+  assert.ok(rect);
+  const png = await page.screenshot({ path: `tmp/real-chart-${name}.png` });
+  const pixels = await page.evaluate(async ({ bytes, rect }) => {
+    const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: "image/png" }));
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0);
+    const scale = bitmap.width / innerWidth;
+    let black = 0, samples = 0;
+    for (let y = Math.max(0, rect.y) + 5; y < Math.min(innerHeight, rect.y + rect.height) - 5; y += 8) {
+      for (let x = Math.max(0, rect.x) + 5; x < Math.min(innerWidth, rect.x + rect.width) - 5; x += 8) {
+        const [r, g, b] = ctx.getImageData(Math.floor(x * scale), Math.floor(y * scale), 1, 1).data;
+        if (r < 8 && g < 8 && b < 8) black++;
+        samples++;
+      }
+    }
+    bitmap.close();
+    return { black, samples };
+  }, { bytes: [...png], rect });
+  console.log(`real chart ${name}`, pixels);
+  assert.ok(pixels.samples > 100 && pixels.black / pixels.samples < .05, "visible chart pixels are not black");
 }
 async function drag(page, locator, dx, dy, modifiers = [], scrollY = 0) {
   const box = await locator.boundingBox();
@@ -94,7 +116,87 @@ async function drag(page, locator, dx, dy, modifiers = [], scrollY = 0) {
   for (const key of modifiers) await page.keyboard.up(key);
 }
 try {
-  for (const query of ["", "dark&window&frozen", "dom&frozen", "dom&dark&window"]) {
+  await test("real workbook: window-scroll pixels, chart move, resize, history and reload", async () => {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 900 }, deviceScaleFactor: 2 });
+    page.setDefaultTimeout(10000);
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    try {
+      await page.goto(`${server.resolvedUrls.local[0]}tests/drawings.html?real&window`);
+      await page.waitForFunction(() => window.controller?.activeSheet?.name === "9. Charts" && !window.controller.isLoading && !window.controller.isChartsLoading);
+      const measurements = [];
+      for (const x of [0, 400, 800, 400, 0]) {
+        await page.evaluate((x) => window.scrollTo(x, 0), x);
+        await page.waitForTimeout(500);
+        const pixels = await page.evaluate(() => {
+          const canvas = [...document.querySelectorAll("canvas")].sort((a, b) => b.width * b.height - a.width * a.height)[0];
+          const rect = canvas.getBoundingClientRect();
+          const ctx = canvas.getContext("2d");
+          let black = 0, samples = 0;
+          for (let y = 200; y < 850; y += 10) for (let x = 50; x < 1150; x += 10) {
+            const px = Math.floor((x - rect.left) * canvas.width / rect.width);
+            const py = Math.floor((y - rect.top) * canvas.height / rect.height);
+            if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) continue;
+            const [r, g, b] = ctx.getImageData(px, py, 1, 1).data;
+            if (r < 8 && g < 8 && b < 8) black++;
+            samples++;
+          }
+          return { scrollX, black, samples, fraction: black / samples, canvas: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } };
+        });
+        console.log("real pixels", pixels);
+        await page.screenshot({ path: `tmp/real-${process.env.DRAWINGS_BASELINE ? "before" : "after"}-${x}.png` });
+        measurements.push(pixels);
+      }
+      for (const pixels of measurements.sort((a, b) => b.scrollX - a.scrollX)) {
+        assert.ok(pixels.samples > 6000 && pixels.fraction < .05, `scroll ${pixels.scrollX}: ${pixels.black}/${pixels.samples} grid samples are black`);
+      }
+      const chart = page.locator('[data-xlsx-drawing="chart"]').first();
+      await page.evaluate(() => window.scrollTo(400, 800));
+      const initialBox = await chart.boundingBox();
+      assert.ok(initialBox);
+      await page.evaluate((y) => window.scrollTo(400, window.scrollY + y - 200), initialBox.y);
+      await chart.click({ position: { x: 12, y: 12 } });
+      assert.equal(await page.evaluate(() => window.controller.selection), null);
+      assert.equal(await page.locator("[data-xlsx-resize]").count(), 8);
+      await assertChartPixels(page, chart, "selected");
+      assert.equal(await page.evaluate(() => window.controller.activeSheet.showGridLines), false);
+      const original = await drawingState(page);
+      const beforeBox = await chart.boundingBox();
+      await drag(page, chart, 37, 27, ["Alt"]);
+      const moved = await drawingState(page);
+      assert.notDeepEqual(moved, original, "real chart moved");
+      assert.equal(await page.evaluate(() => window.controller.activeSheet.showGridLines), false, "drawing saves retain hidden gridlines");
+      await page.waitForTimeout(200);
+      const movedBox = await chart.boundingBox();
+      assert.ok(Math.abs(movedBox.x - beforeBox.x - 37) < 1);
+      assert.ok(Math.abs(movedBox.y - beforeBox.y - 27) < 1);
+      await historyRoundTrip(page, original, moved);
+      await chart.click({ position: { x: 12, y: 12 } });
+      await drag(page, page.locator('[data-xlsx-resize="se"]'), 44, 7, ["Shift"]);
+      const resized = await drawingState(page);
+      const resizedBox = await chart.boundingBox();
+      assert.notDeepEqual(resized, moved, "real chart resized");
+      assert.ok(resizedBox.width > movedBox.width + 30);
+      assert.ok(Math.abs(resizedBox.width / resizedBox.height - movedBox.width / movedBox.height) < .02);
+      await historyRoundTrip(page, moved, resized);
+      const bytes = await exported(page);
+      await writeFile("tmp/real-chart-edited.xlsx", bytes);
+      const saved = Workbook.fromBytes(bytes);
+      assert.deepEqual(saved.getSheet(9).drawings.map(({ name, kind, anchor }) => ({ name, kind, anchor })), resized);
+      saved.free();
+      await page.evaluate((bytes) => window.reloadWorkbook(bytes), [...bytes]);
+      await page.waitForFunction(() => window.controller.workbook !== window.previousWorkbook && window.controller.activeSheet?.name === "9. Charts" && !window.controller.isLoading && !window.controller.isChartsLoading);
+      assert.deepEqual(await drawingState(page), resized, "real chart anchors survive save and reload");
+      assert.equal(await page.evaluate(() => window.controller.activeSheet.showGridLines), false);
+      await page.evaluate(() => window.scrollTo(400, 800));
+      await chart.scrollIntoViewIfNeeded();
+      await chart.click({ position: { x: 12, y: 12 } });
+      assert.equal(await page.locator("[data-xlsx-resize]").count(), 8);
+      await assertChartPixels(page, chart, "reloaded");
+      assert.deepEqual(errors, []);
+    } finally { await page.close(); }
+  });
+  for (const query of (process.env.REAL_DRAWINGS_ONLY ? [] : ["", "dark&window&frozen", "dom&frozen", "dom&dark&window"])) {
     await test(`drawings: ${query || "canvas light"}: move, ratio resize, nudge, delete, history and XLSX reload`, async () => {
       const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
       page.setDefaultTimeout(10000);
@@ -119,7 +221,7 @@ try {
           }
           const scrollY = kind === "image" && index === 1 && query.includes("window") ? 80 : 0;
           await drag(page, drawing, 37, 27, ["Alt"], scrollY);
-          await page.waitForFunction((previous) => JSON.stringify(window.controller.workbook.getSheet(0).drawings.map(({ name, kind, anchor }) => ({ name, kind, anchor }))) !== previous, JSON.stringify(before));
+          await page.waitForFunction((previous) => JSON.stringify(window.controller.workbook.getSheet(window.controller.activeSheet.workbookSheetIndex).drawings.map(({ name, kind, anchor }) => ({ name, kind, anchor }))) !== previous, JSON.stringify(before));
           const moved = await drawingState(page);
           if (kind === "image" && index === 1) {
             const previousAnchor = before.find(({ anchor }) => anchor.type === "absolute").anchor;
@@ -141,9 +243,9 @@ try {
           const nudged = await drawingState(page);
           assert.notDeepEqual(nudged, resized, "arrow nudges the drawing");
           await page.keyboard.press("Control+z");
-          await page.waitForFunction((state) => JSON.stringify(window.controller.workbook.getSheet(0).drawings.map(({ name, kind, anchor }) => ({ name, kind, anchor }))) === state, JSON.stringify(resized));
+          await page.waitForFunction((state) => JSON.stringify(window.controller.workbook.getSheet(window.controller.activeSheet.workbookSheetIndex).drawings.map(({ name, kind, anchor }) => ({ name, kind, anchor }))) === state, JSON.stringify(resized));
           await page.keyboard.press("Control+Shift+z");
-          await page.waitForFunction((state) => JSON.stringify(window.controller.workbook.getSheet(0).drawings.map(({ name, kind, anchor }) => ({ name, kind, anchor }))) === state, JSON.stringify(nudged));
+          await page.waitForFunction((state) => JSON.stringify(window.controller.workbook.getSheet(window.controller.activeSheet.workbookSheetIndex).drawings.map(({ name, kind, anchor }) => ({ name, kind, anchor }))) === state, JSON.stringify(nudged));
           await drawing.click({ position: { x: 12, y: 12 } });
           await page.keyboard.press("Escape");
           assert.equal(await page.locator("[data-xlsx-resize]").count(), 0);
@@ -165,16 +267,16 @@ try {
           await page.locator(`[data-xlsx-drawing="${kind}"]`).first().click({ position: { x: 12, y: 12 } });
           const before = await drawingState(page);
           await page.keyboard.press("Delete");
-          await page.waitForFunction((length) => window.controller.workbook.getSheet(0).drawings.length === length, before.length - 1);
+          await page.waitForFunction((length) => window.controller.workbook.getSheet(window.controller.activeSheet.workbookSheetIndex).drawings.length === length, before.length - 1);
           const deletedBytes = await exported(page);
           const deleted = Workbook.fromBytes(deletedBytes);
           assert.equal(deleted.getSheet(0).drawings.length, before.length - 1);
           deleted.free();
           await page.keyboard.press("Control+z");
-          await page.waitForFunction((length) => window.controller.workbook.getSheet(0).drawings.length === length, before.length);
+          await page.waitForFunction((length) => window.controller.workbook.getSheet(window.controller.activeSheet.workbookSheetIndex).drawings.length === length, before.length);
           assert.deepEqual(await drawingState(page), before, "undo restores deleted drawing");
           await page.keyboard.press("Control+Shift+z");
-          await page.waitForFunction((length) => window.controller.workbook.getSheet(0).drawings.length === length, before.length - 1);
+          await page.waitForFunction((length) => window.controller.workbook.getSheet(window.controller.activeSheet.workbookSheetIndex).drawings.length === length, before.length - 1);
         }
         assert.deepEqual(errors, []);
         await page.screenshot({ path: `tmp/drawings-${query.replaceAll("&", "-") || "canvas"}.png` });
