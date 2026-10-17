@@ -1,3 +1,5 @@
+import { editWorkbookStructure, type XlsxStructuralEdit } from "./structural-edits";
+import { Workbook } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import * as React from "react";
 import { coerceUserEnteredValue } from "./user-entry";
 import type {
@@ -9,9 +11,8 @@ import type {
   FormControlDrawing as DukeFormControlDrawing,
   FormControlKind as DukeFormControlKind,
   FormControlKindInput as DukeFormControlKindInput,
-  ImageDrawing as DukeImageDrawing,
-  Workbook
-} from "@dukelib/sheets-wasm";
+  ImageDrawing as DukeImageDrawing
+} from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import {
   applyChartSeriesFormula,
@@ -3600,6 +3601,63 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     setHistoryRevision((current) => current + 1);
   }, [createHistoryEntry]);
 
+  const editStructure = React.useCallback((edit: XlsxStructuralEdit) => {
+    if (readOnly || !workbook) return;
+    const before = createHistoryEntry();
+    if (!before) return;
+    const bytes = editWorkbookStructure(before.bytes, commentThreadsRef.current, edit);
+    const nextWorkbook = Workbook.fromBytes(bytes);
+    maybeRecalculateWorkbook(nextWorkbook);
+    const assets = loadWorkbookImageAssets(bytes, nextWorkbook);
+    const currentName = activeSheet?.name;
+    const nextName = edit.kind === "rename" && activeSheet?.workbookSheetIndex === edit.sheetIndex ? edit.name : currentName;
+    const nextSheets = buildSheetList(nextWorkbook, assets.sheetStatesByWorkbookSheetIndex, assets.themePalette, assets.styleById, assets.namedCellStyleByName, assets.tableStyleByName, showHiddenSheets);
+    const nextIndex = Math.max(0, nextSheets.findIndex((sheet) => sheet.name === nextName));
+    const charts = loadWorkbookChartAssets(nextWorkbook, assets, buildVisibleSheetIndexMap(nextSheets), showHiddenSheets);
+    cancelCut();
+    selectionsByTabRef.current.clear();
+    selectionTabRef.current = null;
+    pushHistoryEntry(undoStackRef.current, before);
+    redoStackRef.current = [];
+    setHistoryRevision((current) => current + 1);
+    setImageAssets(assets);
+    setWorkbook(nextWorkbook);
+    setSheets(nextSheets);
+    setChartAssets(charts);
+    setActiveSheetIndexState(nextIndex);
+    setActiveTabIndexState(Math.max(0, charts.tabs.findIndex((tab) => tab.kind === "sheet" && tab.sheetIndex === nextIndex)));
+    setActiveCell(null);
+    setSelection(null);
+    selectionAnchorRef.current = null;
+    setRevision((current) => current + 1);
+  }, [activeSheet, cancelCut, createHistoryEntry, maybeRecalculateWorkbook, readOnly, setChartAssets, setImageAssets, showHiddenSheets, workbook]);
+
+  const insertRows = React.useCallback((index: number, count = 1) => {
+    if (activeSheet) editStructure({ kind: "rows", sheetIndex: activeSheet.workbookSheetIndex, index, count, delete: false });
+  }, [activeSheet, editStructure]);
+  const deleteRows = React.useCallback((index: number, count = 1) => {
+    if (activeSheet) editStructure({ kind: "rows", sheetIndex: activeSheet.workbookSheetIndex, index, count, delete: true });
+  }, [activeSheet, editStructure]);
+  const insertColumns = React.useCallback((index: number, count = 1) => {
+    if (activeSheet) editStructure({ kind: "columns", sheetIndex: activeSheet.workbookSheetIndex, index, count, delete: false });
+  }, [activeSheet, editStructure]);
+  const deleteColumns = React.useCallback((index: number, count = 1) => {
+    if (activeSheet) editStructure({ kind: "columns", sheetIndex: activeSheet.workbookSheetIndex, index, count, delete: true });
+  }, [activeSheet, editStructure]);
+  const renameSheet = React.useCallback((sheetIndex: number, name: string) => {
+    const sheet = sheets[sheetIndex];
+    if (sheet) editStructure({ kind: "rename", sheetIndex: sheet.workbookSheetIndex, name });
+  }, [editStructure, sheets]);
+  const moveSheet = React.useCallback((from: number, to: number) => {
+    const source = sheets[from];
+    const target = sheets[to];
+    if (source && target && from !== to) editStructure({ kind: "move", sheetIndex: source.workbookSheetIndex, to: target.workbookSheetIndex });
+  }, [editStructure, sheets]);
+  const deleteSheet = React.useCallback((sheetIndex: number) => {
+    const sheet = sheets[sheetIndex];
+    if (sheet) editStructure({ kind: "deleteSheet", sheetIndex: sheet.workbookSheetIndex });
+  }, [editStructure, sheets]);
+
   // Comment edits validate first (the helpers throw on an unknown thread or a bad
   // reference), then record one snapshot so undo restores threads and cells together.
   const updateCommentThreads = React.useCallback((update: (threads: XlsxCommentThread[]) => XlsxCommentThread[]) => {
@@ -4847,43 +4905,9 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   }, [readOnly, recordHistoryBeforeMutation, setChartAssets, workbook]);
 
   const removeActiveSheet = React.useCallback(() => {
-    if (readOnly || !workbook || !activeSheet) {
-      return;
-    }
-
-    cancelCut();
-    recordHistoryBeforeMutation();
-    workbook.removeSheet(activeSheet.workbookSheetIndex);
-    selectionsByTabRef.current.clear();
-    selectionTabRef.current = null;
-    sheetOriginsRef.current = sheetOriginsRef.current.filter((_, index) => index !== activeSheet.workbookSheetIndex);
-    setFormControlsByWorkbookSheetIndex((current) => current.filter((_, index) => index !== activeSheet.workbookSheetIndex));
-    setImagesByWorkbookSheetIndex((current) => current.filter((_, index) => index !== activeSheet.workbookSheetIndex));
-    setShapesByWorkbookSheetIndex((current) => current.filter((_, index) => index !== activeSheet.workbookSheetIndex));
-    if (imageAssetsRef.current) {
-      imageAssetsRef.current.formControlsByWorkbookSheetIndex = imageAssetsRef.current.formControlsByWorkbookSheetIndex.filter(
-        (_, index) => index !== activeSheet.workbookSheetIndex
-      );
-      imageAssetsRef.current.sheetStatesByWorkbookSheetIndex = imageAssetsRef.current.sheetStatesByWorkbookSheetIndex.filter(
-        (_, index) => index !== activeSheet.workbookSheetIndex
-      );
-    }
-    const nextSheets = buildSheetList(
-      workbook,
-      imageAssetsRef.current?.sheetStatesByWorkbookSheetIndex,
-      imageAssetsRef.current?.themePalette,
-      imageAssetsRef.current?.styleById,
-      imageAssetsRef.current?.namedCellStyleByName,
-      imageAssetsRef.current?.tableStyleByName,
-      showHiddenSheets
-    );
-    setSheets(nextSheets);
-    if (imageAssetsRef.current) {
-      setChartAssets(loadWorkbookChartAssets(workbook, imageAssetsRef.current, buildVisibleSheetIndexMap(nextSheets), showHiddenSheets));
-    }
-    setActiveSheetIndexState((current) => Math.max(0, Math.min(current, nextSheets.length - 1)));
-    setRevision((current) => current + 1);
-  }, [activeSheet, cancelCut, readOnly, recordHistoryBeforeMutation, setChartAssets, workbook]);
+    if (!workbook || workbook.sheetCount <= 1) return;
+    deleteSheet(activeSheetIndex);
+  }, [activeSheetIndex, deleteSheet, workbook]);
 
   const defineNamedRange = React.useCallback((name: string, range?: XlsxCellRange | null) => {
     if (readOnly || !workbook) {
@@ -5245,6 +5269,13 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       activeTabIndex,
       addFormControl,
       addSheet,
+      insertRows,
+      deleteRows,
+      insertColumns,
+      deleteColumns,
+      renameSheet,
+      moveSheet,
+      deleteSheet,
       canRedo,
       canDownload: Boolean(file ?? src),
       canExport: Boolean(workbook),
@@ -5385,6 +5416,13 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       activeTabIndex,
       addFormControl,
       addSheet,
+      insertRows,
+      deleteRows,
+      insertColumns,
+      deleteColumns,
+      renameSheet,
+      moveSheet,
+      deleteSheet,
       canLoadDeferred,
       canRedo,
       canUndo,

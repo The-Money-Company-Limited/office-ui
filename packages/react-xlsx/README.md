@@ -26,7 +26,7 @@ pnpm add @extend-ai/react-xlsx react react-dom
 
 ## WebAssembly Asset
 
-Workbook parsing and calculation run through the `@dukelib/sheets-wasm` WebAssembly module. The module loads lazily, on the first workbook parse.
+Workbook parsing and calculation use the vendored Duke Sheets WebAssembly build. The binary initializes on the first workbook parse. See `vendor/sheets-wasm/README.md` for the Modal-only rebuild command.
 
 Most apps can use the default loader. If your bundler or deployment needs to host the WASM binary somewhere explicit, configure it before the first parse:
 
@@ -777,3 +777,9 @@ The package exports the main types you are likely to use for custom integrations
 ## License
 
 See the repository license for usage terms.
+
+### Structural edits
+
+`useXlsxViewerEditing()` exposes `insertRows(index, count)`, `deleteRows(index, count)`, `insertColumns(index, count)`, and `deleteColumns(index, count)` on the active sheet. Indexes are zero-based; count defaults to one. `renameSheet(index, name)`, `moveSheet(from, to)`, and `deleteSheet(index)` use visible-sheet indexes. Invalid edits throw before changing workbook/history. Structural edits participate in snapshot undo/redo and export, including threaded comments.
+
+`onHeaderContextMenu(axis, index, event)` lets a host show row/column actions; a right-click outside the current selection first selects the header. `onCellContextMenu` retains a multi-cell selection when right-clicked inside it. The office-ui editor uses these hooks for its insert/delete menus and editable, draggable sheet tabs.

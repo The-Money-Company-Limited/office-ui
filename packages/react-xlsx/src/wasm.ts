@@ -1,4 +1,4 @@
-let wasmModulePromise: Promise<typeof import("@dukelib/sheets-wasm")> | null = null;
+let wasmModulePromise: Promise<typeof import("../vendor/sheets-wasm/duke_sheets_wasm.js")> | null = null;
 
 export type XlsxWasmSource =
   | string
@@ -68,7 +68,7 @@ export function getConfiguredWorkerWasmSource(): WorkerWasmSource | undefined {
 
 export function getSheetsWasmModule() {
   if (!wasmModulePromise) {
-    wasmModulePromise = import("@dukelib/sheets-wasm").then(async (mod) => {
+    wasmModulePromise = import("../vendor/sheets-wasm/duke_sheets_wasm.js").then(async (mod) => {
       if (configuredWasmSource !== undefined) {
         await mod.default({ module_or_path: configuredWasmSource });
       } else {

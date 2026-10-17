@@ -16,3 +16,6 @@ output/
 tmp/
 hs_err_pid*.log
 .tmp-fixtures/
+
+.tmp-structural-site/
+.tmp-structural-red.log

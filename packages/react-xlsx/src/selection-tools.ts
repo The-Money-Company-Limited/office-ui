@@ -1,4 +1,4 @@
-import type { Worksheet } from "@dukelib/sheets-wasm";
+import type { Worksheet } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import type { XlsxCellAddress, XlsxCellRange, XlsxSheetData } from "./types";
 import { parseXlsxRange } from "./range-reference.ts";
 

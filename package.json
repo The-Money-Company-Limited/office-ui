@@ -11,7 +11,8 @@
     "clean": "pnpm -r --filter './packages/*' run clean",
     "dev": "pnpm --filter @react-xlsx/playground dev",
     "test": "pnpm --filter @extend-ai/react-xlsx test",
-    "typecheck": "pnpm -r --filter './packages/*' run typecheck && pnpm --filter @react-xlsx/playground typecheck"
+    "typecheck": "pnpm -r --filter './packages/*' run typecheck && pnpm --filter @react-xlsx/playground typecheck",
+    "test:structural:browser": "node tests/structural-browser.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
@@ -19,6 +20,7 @@
     "@types/react-dom": "^19.1.5",
     "tsup": "^8.5.0",
     "typescript": "^5.8.3",
-    "vite-tsconfig-paths": "^5.1.4"
+    "vite-tsconfig-paths": "^5.1.4",
+    "@playwright/test": "1.56.1"
   }
 }

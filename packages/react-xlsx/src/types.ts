@@ -1,5 +1,5 @@
 import type * as React from "react";
-import type { Workbook, Worksheet } from "@dukelib/sheets-wasm";
+import type { Workbook, Worksheet } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import type { XlsxCommentThread, XlsxSuggestion } from "./comments";
 
 export interface XlsxThemePalette {
@@ -1294,6 +1294,15 @@ export interface XlsxViewerController {
   zoomScale: number;
   getActiveWorksheet: () => Worksheet | null;
   addSheet: (name?: string) => void;
+  insertRows: (index: number, count?: number) => void;
+  deleteRows: (index: number, count?: number) => void;
+  insertColumns: (index: number, count?: number) => void;
+  deleteColumns: (index: number, count?: number) => void;
+  /** Sheet indexes are indexes into the visible sheets list. */
+  renameSheet: (sheetIndex: number, name: string) => void;
+  moveSheet: (from: number, to: number) => void;
+  deleteSheet: (sheetIndex: number) => void;
+
 }
 
 export interface XlsxViewerSelection {
@@ -1321,6 +1330,15 @@ export interface XlsxViewerZoom {
 
 export interface XlsxViewerEditing {
   addSheet: (name?: string) => void;
+  insertRows: (index: number, count?: number) => void;
+  deleteRows: (index: number, count?: number) => void;
+  insertColumns: (index: number, count?: number) => void;
+  deleteColumns: (index: number, count?: number) => void;
+  /** Sheet indexes are indexes into the visible sheets list. */
+  renameSheet: (sheetIndex: number, name: string) => void;
+  moveSheet: (from: number, to: number) => void;
+  deleteSheet: (sheetIndex: number) => void;
+
   addFormControl: (input: XlsxFormControlInput, sheetIndex?: number) => number | null;
   canRedo: boolean;
   canUndo: boolean;
@@ -1598,6 +1616,8 @@ export interface XlsxCommentIndicatorRenderProps {
 }
 
 export interface XlsxViewerProps extends UseXlsxViewerControllerOptions {
+  /** Selects a right-clicked header when outside the selection, then requests the host menu. */
+  onHeaderContextMenu?: (axis: "row" | "column", index: number, event: React.MouseEvent<HTMLDivElement>) => void;
   /** Selects a right-clicked cell when outside the selection, then requests the host menu. */
   onCellContextMenu?: (cell: XlsxCellAddress, event: React.MouseEvent<HTMLDivElement>) => void;
   /** Handles Cmd/Ctrl+F while the grid has keyboard focus. */

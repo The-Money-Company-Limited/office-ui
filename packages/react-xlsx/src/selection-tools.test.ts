@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { before, test } from "node:test";
-import initSheetsWasm, { Workbook } from "@dukelib/sheets-wasm";
+import initSheetsWasm, { Workbook } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import * as tools from "./selection-tools.ts";
 
 before(async () => {
-  await initSheetsWasm({ module_or_path: readFileSync(new URL(import.meta.resolve("@dukelib/sheets-wasm/duke_sheets_wasm_bg.wasm"))) });
+  await initSheetsWasm({ module_or_path: readFileSync(new URL(import.meta.resolve("../vendor/sheets-wasm/duke_sheets_wasm_bg.wasm"))) });
 });
 
 function workbookWithSelection(selection: string) {

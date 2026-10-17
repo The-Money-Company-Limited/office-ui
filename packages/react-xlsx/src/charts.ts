@@ -1,4 +1,4 @@
-import type { Workbook } from "@dukelib/sheets-wasm";
+import type { Workbook } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import { strFromU8, strToU8 } from "fflate";
 import type { WorkbookImageAssets, WorkbookImageSheetOrigin } from "./images";
 import type {

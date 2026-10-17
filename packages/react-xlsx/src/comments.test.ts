@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { before, describe, it } from "node:test";
-import initSheetsWasm, { Workbook } from "@dukelib/sheets-wasm";
+import initSheetsWasm, { Workbook } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import {
   addCommentThread,
@@ -42,7 +42,7 @@ function threadedFixture(): { bytes: Uint8Array; threads: XlsxCommentThread[] } 
 
 before(async () => {
   await initSheetsWasm({
-    module_or_path: readFileSync(new URL(import.meta.resolve("@dukelib/sheets-wasm/duke_sheets_wasm_bg.wasm")))
+    module_or_path: readFileSync(new URL(import.meta.resolve("../vendor/sheets-wasm/duke_sheets_wasm_bg.wasm")))
   });
 });
 

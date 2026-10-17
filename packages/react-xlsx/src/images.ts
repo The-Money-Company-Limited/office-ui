@@ -6,7 +6,7 @@ import type {
   FormControlDrawing as DukeFormControlDrawing,
   FormControlKind as DukeFormControlKind,
   Workbook
-} from "@dukelib/sheets-wasm";
+} from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { resolveWorkbookColor } from "./colors";
 import type {

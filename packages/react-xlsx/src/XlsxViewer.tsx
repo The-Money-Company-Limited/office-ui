@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { Workbook, Worksheet } from "@dukelib/sheets-wasm";
+import type { Workbook, Worksheet } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import {
   type VirtualItem,
   useVirtualizer
@@ -7181,6 +7181,7 @@ function XlsxGrid({
   renderCommentIndicator,
   onCommentClick,
   onCellContextMenu,
+  onHeaderContextMenu,
   onFind,
   scrollToCell,
   cellAnchorIdPrefix,
@@ -7195,7 +7196,7 @@ function XlsxGrid({
   stickyTop = 0
 }: Pick<
   XlsxViewerProps,
-  "allowResizeInReadOnly" | "emptyState" | "enableCanvasSelectionAnimation" | "enableGestureZoom" | "errorState" | "experimentalCanvas" | "fileTooLargeState" | "getCellStyle" | "highlightClassName" | "loadingComponent" | "loadingState" | "onFormControlAction" | "onFormControlChange" | "renderChartLoading" | "renderFormControl" | "renderImage" | "renderImageSelection" | "renderScroller" | "renderTableHeaderMenu" | "renderActiveCellOverlay" | "renderCommentIndicator" | "onCommentClick" | "onCellContextMenu" | "onFind" | "scrollToCell" | "cellAnchorIdPrefix" | "scrollTarget" | "selectionColor" | "selectionFillColor" | "selectionHeaderColor" | "showImages" | "stickyTop"
+  "allowResizeInReadOnly" | "emptyState" | "enableCanvasSelectionAnimation" | "enableGestureZoom" | "errorState" | "experimentalCanvas" | "fileTooLargeState" | "getCellStyle" | "highlightClassName" | "loadingComponent" | "loadingState" | "onFormControlAction" | "onFormControlChange" | "renderChartLoading" | "renderFormControl" | "renderImage" | "renderImageSelection" | "renderScroller" | "renderTableHeaderMenu" | "renderActiveCellOverlay" | "renderCommentIndicator" | "onCommentClick" | "onCellContextMenu" | "onHeaderContextMenu" | "onFind" | "scrollToCell" | "cellAnchorIdPrefix" | "scrollTarget" | "selectionColor" | "selectionFillColor" | "selectionHeaderColor" | "showImages" | "stickyTop"
 > & {
   controller: XlsxViewerController;
   palette: ViewerPalette;
@@ -16052,24 +16053,32 @@ function XlsxGrid({
     role: "grid",
     onScroll: isWindowScroll ? undefined : handleScrollerScroll,
     onContextMenu: (event) => {
-      if (!onCellContextMenu || isInteractiveFocusTarget(event.target, event.currentTarget)) {
-        return;
-      }
+      if (isInteractiveFocusTarget(event.target, event.currentTarget)) return;
       const rect = getScrollViewport()?.getBoundingClientRect();
-      if (!rect || event.clientX < rect.left + displayRowHeaderWidth || event.clientY < rect.top + displayHeaderHeight) {
-        return;
-      }
+      if (!rect) return;
+      const axis = event.clientX < rect.left + displayRowHeaderWidth ? "row"
+        : event.clientY < rect.top + displayHeaderHeight ? "column" : null;
       const hit = resolvePointerCellFromClient(event.clientX, event.clientY);
-      if (!hit) {
-        return;
-      }
-      const cell = resolveMergeAnchorCell(hit);
+      if (!hit || (axis ? !onHeaderContextMenu : !onCellContextMenu)) return;
       event.preventDefault();
       commitEditingRef.current();
-      if (!isCellInRange(cell, selectionRef.current)) {
-        selectCell(cell);
+      if (axis) {
+        const range = selectionRef.current && normalizeRange(selectionRef.current);
+        const index = axis === "row" ? hit.row : hit.col;
+        const inside = range && (axis === "row"
+          ? index >= range.start.row && index <= range.end.row
+          : index >= range.start.col && index <= range.end.col);
+        if (!inside) {
+          selectRange(axis === "row"
+            ? { start: { row: index, col: firstVisibleCol ?? 0 }, end: { row: index, col: lastVisibleCol ?? 0 } }
+            : { start: { row: firstVisibleRow ?? 0, col: index }, end: { row: lastVisibleRow ?? 0, col: index } });
+        }
+        onHeaderContextMenu?.(axis, index, event);
+      } else {
+        const cell = resolveMergeAnchorCell(hit);
+        if (!isCellInRange(cell, selectionRef.current)) selectCell(cell);
+        onCellContextMenu?.(cell, event);
       }
-      onCellContextMenu(cell, event);
     },
     onMouseDown: (event) => {
       // The grid element is not a focus target; keep the mouse from moving focus off the keyboard input.
@@ -16927,6 +16936,7 @@ function XlsxViewerInner({
   renderCommentIndicator,
   onCommentClick,
   onCellContextMenu,
+  onHeaderContextMenu,
   onFind,
   scrollToCell,
   cellAnchorIdPrefix,
@@ -17042,6 +17052,7 @@ function XlsxViewerInner({
                   renderCommentIndicator={renderCommentIndicator}
                   onCommentClick={onCommentClick}
                   onCellContextMenu={onCellContextMenu}
+                  onHeaderContextMenu={onHeaderContextMenu}
                   onFind={onFind}
                   scrollToCell={scrollToCell}
                   cellAnchorIdPrefix={cellAnchorIdPrefix}
@@ -17179,6 +17190,13 @@ export function useXlsxViewerEditing(): XlsxViewerEditing {
   const {
     addFormControl,
     addSheet,
+    insertRows,
+    deleteRows,
+    insertColumns,
+    deleteColumns,
+    renameSheet,
+    moveSheet,
+    deleteSheet,
     canRedo,
     canUndo,
     clearSelectedCells,
@@ -17225,6 +17243,13 @@ export function useXlsxViewerEditing(): XlsxViewerEditing {
     () => ({
       addFormControl,
       addSheet,
+      insertRows,
+      deleteRows,
+      insertColumns,
+      deleteColumns,
+      renameSheet,
+      moveSheet,
+      deleteSheet,
       canRedo,
       canUndo,
       clearSelectedCells,
@@ -17269,6 +17294,13 @@ export function useXlsxViewerEditing(): XlsxViewerEditing {
     [
       addFormControl,
       addSheet,
+      insertRows,
+      deleteRows,
+      insertColumns,
+      deleteColumns,
+      renameSheet,
+      moveSheet,
+      deleteSheet,
       canRedo,
       canUndo,
       clearSelectedCells,

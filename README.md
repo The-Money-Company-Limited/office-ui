@@ -14,7 +14,7 @@ pnpm add @extend-ai/react-xlsx
 
 ## WebAssembly Asset
 
-Workbook parsing and calculation run through the `@dukelib/sheets-wasm` WebAssembly module. The module loads lazily, on the first workbook parse.
+Workbook parsing and calculation use the vendored Duke Sheets WebAssembly build. The binary initializes on the first workbook parse. See `packages/react-xlsx/vendor/sheets-wasm/README.md` for the Modal-only rebuild command.
 
 Most apps can use the default loader. If your bundler or deployment needs to host the WASM binary somewhere explicit, configure it before the first parse:
 

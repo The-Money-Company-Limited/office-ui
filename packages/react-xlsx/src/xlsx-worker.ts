@@ -1,4 +1,4 @@
-import type { Workbook } from "@dukelib/sheets-wasm";
+import type { Workbook } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import { strFromU8, unzipSync } from "fflate";
 import { loadWorkbookChartAssets } from "./charts";
 import { buildThemePaletteFromHex } from "./colors";
