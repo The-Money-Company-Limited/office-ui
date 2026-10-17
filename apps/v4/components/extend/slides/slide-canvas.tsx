@@ -1,5 +1,7 @@
 import * as React from "react"
 
+import { ChartPanel } from "./chart-panel"
+import { readChart, renderCharts } from "./charts.js"
 import {
   applyBox,
   copyTypography,
@@ -51,12 +53,17 @@ export function SlideCanvas({
   const gesture = React.useRef<Gesture | null>(null)
   const editing = React.useRef<HTMLElement | null>(null)
   const [box, setBox] = React.useState<Box | null>(null)
+  const [chartTab, setChartTab] = React.useState<"Type" | "Data" | "Style">(
+    "Type"
+  )
+  const [chartOpen, setChartOpen] = React.useState(false)
   const [guides, setGuides] = React.useState<Guide[]>([])
 
   React.useLayoutEffect(() => {
     const container = content.current!
     const selectedId = selected.current?.id
     container.innerHTML = html
+    renderCharts(container, editable)
     selected.current = selectedId
       ? container.querySelector(`#${selectedId}`)
       : null
@@ -73,11 +80,37 @@ export function SlideCanvas({
     return content.current!.firstElementChild as HTMLElement
   }
   function select(element: SlideElement | null) {
+    const previous = selected.current
+    if (
+      previous &&
+      previous !== element &&
+      previous.matches("figure[data-chart]") &&
+      readChart(previous).errors.length
+    ) {
+      const source = document.createElement("template")
+      source.innerHTML = html
+      const saved = source.content.querySelector(`#${previous.id}`)
+      if (saved) previous.replaceWith(saved)
+      renderCharts(content.current!, editable)
+    }
     selected.current = element
+    setChartOpen(Boolean(element?.matches("figure[data-chart]")))
     setBox(element ? elementBox(element, canvas(), scale) : null)
   }
   function commit() {
-    const clean = sanitizeSlide(canvas().outerHTML, id, document)
+    if (
+      [...canvas().querySelectorAll("figure[data-chart]")].some(
+        (figure) => readChart(figure).errors.length
+      )
+    )
+      return
+    const clone = canvas().cloneNode(true) as HTMLElement
+    for (const figure of clone.querySelectorAll("figure[data-chart]")) {
+      figure.querySelector(":scope > svg")?.remove()
+      figure.removeAttribute("tabindex")
+      figure.removeAttribute("aria-label")
+    }
+    const clean = sanitizeSlide(clone.outerHTML, id, document)
     if (clean !== html) onChange(clean)
   }
   function endText() {
@@ -92,7 +125,10 @@ export function SlideCanvas({
   }
   function targetElement(target: EventTarget | null): SlideElement | null {
     if (!(target instanceof Element)) return null
-    const element = target.closest("svg, table") || target
+    const element =
+      target.closest("figure[data-chart]") ||
+      target.closest("svg, table") ||
+      target
     if (
       element === canvas() ||
       !canvas().contains(element) ||
@@ -194,6 +230,7 @@ export function SlideCanvas({
     }
     const element = selected.current
     if (event.key === "Escape") {
+      setChartOpen(false)
       select(null)
       return
     }
@@ -252,6 +289,17 @@ export function SlideCanvas({
     }
   }
   function editText(element: SlideElement | null) {
+    if (element?.matches("figure[data-chart]")) {
+      select(element)
+      setChartTab("Data")
+      setChartOpen(true)
+      requestAnimationFrame(() =>
+        host.current
+          ?.querySelector<HTMLInputElement>(".slides-chart-panel input")
+          ?.focus()
+      )
+      return
+    }
     if (
       !(element instanceof HTMLElement) ||
       !/^(H[1-3]|P|LI|SPAN|B|I|U|A|TD|TH|DIV)$/.test(element.tagName) ||
@@ -282,6 +330,13 @@ export function SlideCanvas({
       onPointerUp={pointerEnd}
       onPointerCancel={(event) => pointerEnd(event, true)}
       onKeyDown={keyDown}
+      onFocus={(event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.matches("figure[data-chart]")
+        )
+          select(event.target as HTMLElement)
+      }}
       onDoubleClick={(event) => {
         if (editable)
           editText(
@@ -297,6 +352,42 @@ export function SlideCanvas({
           event.preventDefault()
       }}
     >
+      {editable &&
+        chartOpen &&
+        box &&
+        selected.current?.matches("figure[data-chart]") && (
+          <ChartPanel
+            key={selected.current.id}
+            figure={selected.current}
+            tab={chartTab}
+            onTab={setChartTab}
+            onCommit={commit}
+            onUndo={onUndo}
+            onRedo={onRedo}
+            onClose={() => {
+              if (readChart(selected.current!).errors.length) {
+                const selectedId = selected.current!.id
+                content.current!.innerHTML = html
+                renderCharts(content.current!, true)
+                selected.current = content.current!.querySelector(
+                  `#${selectedId}`
+                )
+              } else commit()
+              setChartOpen(false)
+              host.current?.focus({ preventScroll: true })
+            }}
+            style={{
+              left: Math.max(
+                0,
+                Math.min(
+                  (box.x + box.width) * scale + 12,
+                  SLIDE_WIDTH * scale - 330
+                )
+              ),
+              top: Math.max(0, box.y * scale),
+            }}
+          />
+        )}
       <div className="slides-scale" style={{ transform: `scale(${scale})` }}>
         <div ref={content} className="slides-content" data-slide-id={id} />
         {editable && box && (

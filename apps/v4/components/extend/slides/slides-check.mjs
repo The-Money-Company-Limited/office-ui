@@ -23,7 +23,12 @@ async function main() {
       new URL("./validate.js", import.meta.url),
       "utf8"
     )
-    const validatorURL = `data:text/javascript;base64,${Buffer.from(validator).toString("base64")}`
+    const charts = await readFile(
+      new URL("./charts.js", import.meta.url),
+      "utf8"
+    )
+    const chartsURL = `data:text/javascript;base64,${Buffer.from(charts).toString("base64")}`
+    const validatorURL = `data:text/javascript;base64,${Buffer.from(validator.replace("./charts.js", chartsURL)).toString("base64")}`
     const { SLIDE_HEIGHT, SLIDE_WIDTH, validateManifest } = await import(
       validatorURL
     )
@@ -48,9 +53,13 @@ async function main() {
         '<!doctype html><html><body style="margin:0"><div class="slides-content"></div></body></html>'
       )
       await page.addStyleTag({ content: css })
-      await page.evaluate(async (source) => {
-        window.slidesValidator = await import(source)
-      }, validatorURL)
+      await page.evaluate(
+        async ({ validatorURL, chartsURL }) => {
+          window.slidesValidator = await import(validatorURL)
+          window.slidesCharts = await import(chartsURL)
+        },
+        { validatorURL, chartsURL }
+      )
       if (png) await mkdir(png, { recursive: true })
       for (const id of manifest.order) {
         try {
@@ -78,6 +87,21 @@ async function main() {
                 }
               )
               document.querySelector(".slides-content").innerHTML = html
+              for (const figure of document.querySelectorAll(
+                "figure[data-chart]"
+              )) {
+                for (const message of window.slidesCharts.readChart(figure)
+                  .errors)
+                  issues.push({
+                    code: "chart-data",
+                    severity: "error",
+                    element: figure.id,
+                    text: figure.textContent.trim().slice(0, 80),
+                    message,
+                    hint: message,
+                  })
+              }
+              window.slidesCharts.renderCharts(document)
               await document.fonts.ready
               await Promise.all(
                 [...document.images].map((image) =>

@@ -18,10 +18,10 @@ JSZip resolves from `apps/v4/package.json`; there is no nested slides package.
 
 Staging refuses an existing output directory. Use a fresh release path for a
 subsequent run. `tests/results/` contains ignored screenshots, ZIP/PPTX downloads,
-the chart PNG extracted from the PPTX and JSON test results. The browser runner
+and JSON test results. The browser runner
 starts and closes its own HTTP server and Chromium process.
 
-The eleven browser cases cover:
+The original eleven browser cases cover:
 
 - Drag, resize and keyboard nudge preserve every flow sibling's box. Nested flow
   groups and rotated titles are covered. Selection leaves flow untouched; one
@@ -38,7 +38,7 @@ The eleven browser cases cover:
 - Window anchors, theme changes without scrolling, native fullscreen navigation
   and Escape returning to the displayed slide.
 - ZIP edits survive reload. PPTX contains native text/shapes/image/table/rule
-  objects, a rendered SVG raster and speaker notes; every XML part parses.
+  objects, a native editable chart and speaker notes; every XML part parses.
   This checks the archive, not desktop PowerPoint.
 
 For focused iterations, build the real artifact entry point with unrelated
@@ -143,3 +143,36 @@ out-of-scope sample files. The preview copy passed the same CLI on Modal with
 4 slides, 0 errors and 0 warnings (`results/checker/sample-preview.txt`). It changes
 padding to 128px, fits the grid/table to 1664px and moves the two footers inside
 the safe area. The preview HTML lives in `results/checker-margin/sample-preview`.
+
+## Editable charts (COD-1474)
+
+From `~/Desktop/Code/office-remote`, run:
+
+```sh
+./r up
+./r sync office-ui
+./r run office-ui 'sh apps/v4/components/extend/slides/tests/verify-charts.sh'
+```
+
+The script runs ESLint, whole-app `tsc --noEmit -p .`, chart parsing/rendering
+units with behavior-removal controls, the actual chart CLI with a disabled-check
+control, the existing checker, `pnpm artifact-template:build`, staging and all
+slides browser cases. Browser cases cover live value edits, type/series/legend
+changes, undo, TSV paste, invalid draft cancellation, keyboard entry, both themes,
+ZIP reload, and native chart XML/workbooks for all seven types. It then builds
+HEAD's unchanged editor in an isolated fixture and requires both new chart
+browser cases to fail, and checks the exported PPTX archive.
+
+Results and screenshots are under `tests/results/`: `chart-units.json`,
+`chart-checker/report.json`, `chart-checker.log`, `chart-artifact-build.log`,
+`chart-positive.json`, `baseline-results.json`, `chart-dark.png`,
+`chart-light.png`, `editable-chart.pptx`, and `chart-types.pptx`.
+
+Verified on Modal on 2026-10-17: ESLint and whole-app TypeScript passed; the full
+artifact build passed with the existing Vite directive/sourcemap and chunk-size
+warnings. All 13 release browser cases passed. All chart unit/checker mutation
+controls passed, and both new browser cases failed against HEAD's unchanged
+editor. The sample checker reported 4 slides, 0 errors, 0 warnings. PPTX XML
+assertions passed for all seven types (including charts inside a rasterized
+container), and the PPTX archive passed `unzip -t`. Light/dark screenshots were
+visually inspected. Desktop PowerPoint itself was not opened.

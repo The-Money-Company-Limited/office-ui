@@ -20,7 +20,7 @@ both editing and presenting and included as PowerPoint speaker notes.
 
 ## Closed subset
 
-HTML: `h1 h2 h3 p ul ol li b i u a span div img table hr`. Tables additionally
+HTML: `h1 h2 h3 p ul ol li b i u a span div figure img table hr`. Tables additionally
 allow `thead tbody tfoot tr th td`. SVG additionally allows
 `g path rect circle ellipse line polyline polygon text tspan title desc`.
 No scripts, stylesheets, custom elements, frames, embedded HTML or SVG animation.
@@ -72,6 +72,20 @@ slide ID and its container exposes `data-slide-id`. Thumbnails contain no IDs.
 `#<slide-id>` links scroll to the real slide. The document scrolls the window;
 only the fixed slide strip scrolls independently.
 
+## Charts
+
+Use `<figure data-chart="column" style="width: 1200px; height: 600px;"><table><tr><th>Category</th><th>Series</th></tr><tr><td>A</td><td>18</td></tr></table></figure>`; header row names series, first column names categories, remaining cells are finite numbers with no blanks or merged/ragged cells.
+Types: `column|bar|line|area|pie|doughnut|scatter`; pie/doughnut require one non-negative series with positive total; scatter uses numeric first-column X values.
+Optional attributes: `data-title`, `data-legend="none|top|bottom|left|right"` (bottom), `data-labels="true|false"` (false), `data-gridlines="true|false"` (true), `data-stacked="true|false"` (false; column/bar/area), `data-x-title`, `data-y-title`, `data-format="number|percent|currency"` (number; fractional percentages, USD).
+`data-colors="blue,teal,violet,rose,amber,slate"` selects/reorders the deck palette (series, or slices for pie/doughnut); SVG is generated locally and never saved as chart data.
+
+Select a chart for its contextual Type/Data/Style panel; double-click or focus it
+and press Enter for Data. Edit cells, add/remove rows or series, or paste TSV
+starting at a cell. Valid text edits commit on blur, other controls immediately;
+each completed edit is one undo step. Escape closes the panel and returns focus
+to the canvas, discarding invalid drafts. ZIP preserves the table and attributes;
+PowerPoint exports a native editable chart and embedded workbook.
+
 ## Editing and exports
 
 Click selects; drag pins an element at its measured box; eight handles resize.
@@ -84,7 +98,7 @@ until that text is replaced. There is no save path (COD-1462).
 
 Download produces a ZIP of the current sanitized `deck/` files. Export uses
 PptxGenJS 4.0.1 with real text boxes, simple shapes, embedded images and tables.
-SVG, lists, merged tables and effects requiring rasterization become PNGs.
+Non-chart SVG, lists, merged tables and effects requiring rasterization become PNGs.
 PowerPoint typography/layout is an approximation; complex effects are rendered
 at slide resolution. Present uses fullscreen when available, otherwise a
 viewport presentation; arrows, space and PageDown/PageUp navigate, Escape exits.
@@ -94,7 +108,7 @@ network request is needed to export.
 
 ## Check your slides
 
-Keep `slides-check.mjs`, `validate.js` and `slides.css` together; once on the deck's computer, run `npm install --no-save playwright && npx playwright install --with-deps chromium` beside the checker.
+Keep `slides-check.mjs`, `validate.js`, `charts.js` and `slides.css` together; once on the deck's computer, run `npm install --no-save playwright && npx playwright install --with-deps chromium` beside the checker.
 Run `node slides-check.mjs <deck-dir>`; add `--json` for per-element findings and fix hints, or `--png <dir>` for 1920×1080 screenshots.
 Exit 1 means fix the errors and rerun; outside-slide and 128px margin findings are warnings only (exit 0). Margin checks use border boxes with 1px tolerance, report only the outermost offending text-bearing group, and skip decoration. Use the same installed fonts as the artifact.
 

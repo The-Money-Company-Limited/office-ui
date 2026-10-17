@@ -257,7 +257,7 @@ if (process.argv.includes("--negative-control")) {
   ]
   const directory = path.join(output, "negative-control")
   await mkdir(directory, { recursive: true })
-  for (const file of ["validate.js", "slides.css"])
+  for (const file of ["validate.js", "charts.js", "slides.css"])
     await cp(path.join(slides, file), path.join(directory, file))
   const mutant = path.join(directory, "slides-check.mjs")
   for (const [i, [from, to]] of mutants.entries()) {

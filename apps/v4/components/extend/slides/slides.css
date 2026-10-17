@@ -305,3 +305,119 @@
 .slides-exit:focus-visible {
   opacity: 1;
 }
+.slides-content figure[data-chart] > table {
+  display: none;
+}
+.slides-content figure[data-chart] > svg {
+  width: 100%;
+  height: 100%;
+}
+.slides-content figure[data-chart]:focus-visible {
+  outline: 3px solid #3787ff;
+}
+.slides-chart-panel {
+  position: absolute;
+  z-index: 20;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  max-height: 440px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--surface-rim);
+  border-radius: var(--radius-control);
+  background: var(--glass-fill);
+  color: var(--foreground);
+  box-shadow:
+    inset 0 1px 0 var(--surface-highlight),
+    var(--surface-shadow);
+  backdrop-filter: var(--surface-blur);
+  -webkit-backdrop-filter: var(--surface-blur);
+  font-size: 13px;
+  touch-action: auto;
+}
+.slides-chart-panel header,
+.slides-chart-panel nav,
+.slides-chart-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.slides-chart-panel header {
+  justify-content: space-between;
+}
+.slides-chart-panel button {
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  background: var(--raised-fill);
+}
+.slides-chart-panel button:hover {
+  background: var(--raised-fill-hover);
+}
+.slides-chart-panel button[aria-pressed="true"] {
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+.slides-chart-panel button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.slides-chart-panel input,
+.slides-chart-panel select {
+  min-width: 0;
+  width: 100%;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+}
+.slides-chart-panel :is(input, select):focus-visible {
+  outline: 2px solid var(--ring);
+}
+.slides-chart-types {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.slides-chart-types button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-transform: capitalize;
+}
+.slides-chart-types svg {
+  width: 28px;
+  height: 28px;
+}
+.slides-chart-grid {
+  overflow: auto;
+  margin: 8px 0;
+}
+.slides-chart-grid input {
+  width: 85px;
+}
+.slides-chart-grid td {
+  padding: 2px;
+}
+.slides-chart-style {
+  display: grid;
+  gap: 10px;
+}
+.slides-chart-style label {
+  display: grid;
+  gap: 4px;
+}
+.slides-chart-style .slides-chart-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.slides-chart-check input {
+  width: auto;
+}
+.slides-chart-help {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}

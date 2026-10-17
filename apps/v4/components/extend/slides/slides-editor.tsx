@@ -10,6 +10,7 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { IconPlaceholder } from "@/components/icon-placeholder"
 
+import { renderCharts } from "./charts.js"
 import { SlideCanvas } from "./slide-canvas"
 import { loadDeck, SLIDE_HEIGHT, SLIDE_WIDTH, type Deck } from "./validate.js"
 
@@ -38,6 +39,13 @@ export function SlidesEditor({
   const presentation = React.useRef(false)
   const returnSlide = React.useRef<string | null>(null)
   const deck = history?.current
+
+  React.useLayoutEffect(() => {
+    for (const thumbnail of surface.current?.querySelectorAll(
+      ".slides-thumbnail-content"
+    ) || [])
+      renderCharts(thumbnail)
+  }, [deck, presenting])
 
   const exitPresentation = React.useCallback(async () => {
     if (!presentation.current) return

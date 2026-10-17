@@ -1,3 +1,5 @@
+import { chartAttribute } from "./charts.js"
+
 /** The deck contract lives here; callers supply a DOM (a browser or CLI adapter). */
 export const SLIDE_WIDTH = 1920
 export const SLIDE_HEIGHT = 1080
@@ -30,7 +32,7 @@ export function validateManifest(value) {
   return { title, order, ...(sections ? { sections } : {}) }
 }
 const HTML_TAGS = new Set(
-  "h1 h2 h3 p ul ol li b i u a span div img table thead tbody tfoot tr th td hr".split(
+  "h1 h2 h3 p ul ol li b i u a span div figure img table thead tbody tfoot tr th td hr".split(
     " "
   )
 )
@@ -124,6 +126,7 @@ export function sanitizeSlide(source, slideId, dom, warn = console.warn) {
         name === "style" ||
         name === "id" ||
         name === "title" ||
+        (tag === "figure" && chartAttribute(name, value)) ||
         (tag === "img" &&
           ((name === "src" && safeImage(value)) || name === "alt")) ||
         (tag === "a" &&
@@ -208,6 +211,11 @@ export function sanitizeSlide(source, slideId, dom, warn = console.warn) {
         } while (seen.has(element.id))
       }
       seen.add(element.id)
+    }
+    if (tag === "figure" && element.hasAttribute("data-chart")) {
+      for (const child of [...element.children]) {
+        if (child.localName !== "table") child.remove()
+      }
     }
     for (const child of [...element.children]) clean(child, svg)
     for (const node of [...element.childNodes])

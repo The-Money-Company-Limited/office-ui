@@ -621,18 +621,12 @@ await run("zip and editable PowerPoint export", async (page) => {
     "native table"
   )
   const fourth = await pptx.file("ppt/slides/slide4.xml").async("string")
-  assert.ok(fourth.includes("<p:pic>"), "SVG raster fallback")
+  assert.ok(fourth.includes("<c:chart"), "native editable chart")
   assert.ok(
     (
       await pptx.file("ppt/notesSlides/notesSlide1.xml").async("string")
     ).includes("Introduce a deck")
   )
-  const media = Object.entries(pptx.files).filter(([name]) =>
-    /^ppt\/media\/.*\.png$/.test(name)
-  )
-  const chart = await media.at(-1)[1].async("nodebuffer")
-  assert.ok(chart.length > 5000, "chart raster contains rendered content")
-  await writeFile(`${output}/chart.png`, chart)
   for (const [name, file] of Object.entries(pptx.files)) {
     if (!name.endsWith(".xml")) continue
     const xml = await file.async("string")
@@ -647,6 +641,176 @@ await run("zip and editable PowerPoint export", async (page) => {
       null,
       name
     )
+  }
+})
+await run("charts editing and native export", async (page) => {
+  await open(page)
+  await page.getByRole("button", { name: "Slide 4", exact: true }).click()
+  const chart = page.locator("#adoption-chart")
+  await chart.click()
+  const panel = page.getByRole("dialog", { name: "Chart controls" })
+  await panel.getByRole("button", { name: "line chart", exact: true }).click()
+  assert.equal(await chart.getAttribute("data-chart"), "line")
+  await chart.dblclick({ position: { x: 40, y: 60 } })
+  const value = panel.getByRole("textbox", {
+    name: "Row 2 column 2",
+    exact: true,
+  })
+  await value.fill("27")
+  assert.ok(
+    (await chart.locator("svg").textContent()).includes("27"),
+    "live preview"
+  )
+  await value.press("Tab")
+  await page.getByRole("button", { name: "Undo", exact: true }).click()
+  assert.equal(
+    await chart.locator("tr").nth(1).locator("td").nth(1).textContent(),
+    "18",
+    "one undo per cell edit"
+  )
+  await page.getByRole("button", { name: "Redo", exact: true }).click()
+  await panel.getByRole("button", { name: "Add series", exact: true }).click()
+  assert.equal(await chart.locator("tr").first().locator("th").count(), 3)
+  await panel.getByRole("button", { name: "Style", exact: true }).click()
+  await panel.getByLabel("Legend", { exact: true }).selectOption("right")
+  assert.equal(await chart.getAttribute("data-legend"), "right")
+  await page.getByRole("button", { name: "Undo", exact: true }).click()
+  assert.equal(await chart.getAttribute("data-legend"), "none")
+  assert.equal(await chart.getAttribute("data-chart"), "line")
+  await panel.getByLabel("Title", { exact: true }).fill("Editable adoption")
+  await panel.getByLabel("Title", { exact: true }).press("Tab")
+  await page.screenshot({ path: `${output}/chart-dark.png` })
+  await page.getByRole("button", { name: "Use light appearance" }).click()
+  await page.screenshot({ path: `${output}/chart-light.png` })
+  await panel.getByRole("button", { name: "Data", exact: true }).click()
+  const first = panel.getByRole("textbox", {
+    name: "Row 2 column 2",
+    exact: true,
+  })
+  await first.fill("bad")
+  await first.press("Tab")
+  assert.ok(await panel.getByRole("alert").isVisible())
+  await first.press("Escape")
+  assert.equal(await panel.count(), 0)
+  assert.equal(
+    await chart.locator("tr").nth(1).locator("td").nth(1).textContent(),
+    "27"
+  )
+  await chart.focus()
+  await chart.press("Enter")
+  assert.equal(
+    await panel
+      .getByRole("textbox", { name: "Row 1 column 1", exact: true })
+      .evaluate((element) => document.activeElement === element),
+    true
+  )
+  await panel
+    .getByRole("textbox", { name: "Row 2 column 2", exact: true })
+    .evaluate((element) => {
+      const data = new DataTransfer()
+      data.setData("text/plain", "42\t7\n32\t8")
+      element.dispatchEvent(
+        new ClipboardEvent("paste", {
+          clipboardData: data,
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+  assert.equal(
+    await chart.locator("tr").nth(1).locator("td").nth(1).textContent(),
+    "42"
+  )
+  await page.getByRole("button", { name: "Undo", exact: true }).click()
+  assert.equal(
+    await chart.locator("tr").nth(1).locator("td").nth(1).textContent(),
+    "27",
+    "one undo per TSV paste"
+  )
+  await panel.getByRole("button", { name: "Close chart controls" }).click()
+  let pending = page.waitForEvent("download", { timeout: 45000 })
+  await page.getByRole("button", { name: "Download", exact: true }).click()
+  await page.getByRole("menuitem", { name: "PowerPoint .pptx" }).click()
+  let download = await pending
+  await download.saveAs(`${output}/editable-chart.pptx`)
+  const pptx = await JSZip.loadAsync(
+    await readFile(`${output}/editable-chart.pptx`)
+  )
+  const chartFile = Object.keys(pptx.files).find((name) =>
+    /^ppt\/charts\/chart\d+.xml$/.test(name)
+  )
+  assert.ok(chartFile)
+  const xml = await pptx.file(chartFile).async("string")
+  assert.match(xml, /<c:lineChart>/)
+  assert.match(xml, /<c:v>27<\/c:v>/)
+  assert.match(xml, /<c:v>Series 2<\/c:v>/)
+  assert.match(xml, /a4e1d1/i)
+  assert.match(xml, /Editable adoption/)
+  assert.ok(!xml.includes("<c:legend>"))
+  assert.equal((xml.match(/<c:ser>/g) || []).length, 2)
+  assert.ok(
+    Object.keys(pptx.files).some((name) => name.endsWith(".xlsx")),
+    "embedded editable workbook"
+  )
+  pending = page.waitForEvent("download")
+  await page.getByRole("button", { name: "Download", exact: true }).click()
+  await page.getByRole("menuitem", { name: "Deck as .zip" }).click()
+  download = await pending
+  await download.saveAs(`${output}/editable-chart.zip`)
+  const zip = await JSZip.loadAsync(
+    await readFile(`${output}/editable-chart.zip`)
+  )
+  const html = await zip.file("deck/slides/adoption.html").async("string")
+  assert.match(html, /data-chart="line"/)
+  assert.match(html, />27<\/td>/)
+  assert.ok(!html.includes("<svg"), "ZIP keeps only chart source")
+  await page.route("**/deck/slides/adoption.html", (route) =>
+    route.fulfill({ contentType: "text/html", body: html })
+  )
+  await page.reload()
+  assert.equal(await chart.getAttribute("data-chart"), "line")
+  assert.ok((await chart.locator("svg").textContent()).includes("27"))
+})
+await run("charts seven native PowerPoint types", async (page) => {
+  const types = ["column", "bar", "line", "area", "pie", "doughnut", "scatter"]
+  await page.route("**/deck/slides/adoption.html", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: `<section id="adoption"><div style="position: relative; width: 1920px; height: 1080px; box-shadow: 0px 0px 4px #000000;">${types.map((type, i) => `<figure data-chart="${type}" data-title="${type}" data-colors="rose,teal" data-legend="right" data-labels="true" data-stacked="true" data-format="currency" data-x-title="Horizontal" data-y-title="Vertical" style="position: absolute; left: ${128 + (i % 3) * 550}px; top: ${128 + Math.floor(i / 3) * 280}px; width: 500px; height: 260px;"><table><tr><th>X</th><th>Revenue</th></tr><tr><td>1</td><td>18</td></tr><tr><td>3</td><td>32</td></tr></table></figure>`).join("")}</div></section>`,
+    })
+  )
+  await open(page)
+  assert.equal(await page.locator("#adoption figure svg").count(), 7)
+  const pending = page.waitForEvent("download", { timeout: 45000 })
+  await page.getByRole("button", { name: "Download", exact: true }).click()
+  await page.getByRole("menuitem", { name: "PowerPoint .pptx" }).click()
+  const download = await pending
+  await download.saveAs(`${output}/chart-types.pptx`)
+  const pptx = await JSZip.loadAsync(
+    await readFile(`${output}/chart-types.pptx`)
+  )
+  const files = Object.keys(pptx.files).filter((name) =>
+    /^ppt\/charts\/chart\d+.xml$/.test(name)
+  )
+  assert.equal(files.length, 7)
+  for (const [i, file] of files.entries()) {
+    const xml = await pptx.file(file).async("string")
+    assert.match(
+      xml,
+      new RegExp(`<c:${types[i] === "column" ? "bar" : types[i]}Chart>`)
+    )
+    assert.match(xml, /<c:v>18<\/c:v>/)
+    assert.match(xml, /<c:v>32<\/c:v>/)
+    assert.match(xml, /fda4af/i)
+    assert.match(xml, /<c:legendPos val="r"/)
+    assert.match(xml, /<c:showVal val="1"/)
+    if (["column", "bar", "area"].includes(types[i]))
+      assert.match(xml, /<c:grouping val="stacked"/)
+    if (types[i] === "scatter") {
+      assert.match(xml, /<c:xVal>/)
+      assert.match(xml, /<c:yVal>/)
+      assert.match(xml, /<c:v>3<\/c:v>/)
+    }
   }
 })
 await browser.close()

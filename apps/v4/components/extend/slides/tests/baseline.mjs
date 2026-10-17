@@ -9,7 +9,8 @@ const slides = "apps/v4/components/extend/slides"
 const results = path.join(app, "components/extend/slides/tests/results")
 const fixture = path.join(results, "baseline-source")
 const baseline = path.join(results, "baseline-bundle")
-const revision = "acb9dfce7fd6e9d0395364785753efbc763fe3bf"
+const charts = process.argv.includes("--charts")
+const revision = charts ? "HEAD" : "acb9dfce7fd6e9d0395364785753efbc763fe3bf"
 const { default: ts } = await import(
   pathToFileURL(path.join(app, "node_modules/typescript/lib/typescript.js"))
 )
@@ -72,14 +73,20 @@ await writeFile(
 )
 assert.equal(build.status, 0, "baseline build")
 for (const entry of ["artifact.json", "deck"])
-  await cp(path.join(results, "bundle", entry), path.join(baseline, entry), {
-    recursive: true,
-  })
+  await cp(
+    path.join(results, charts ? "staging/valid" : "bundle", entry),
+    path.join(baseline, entry),
+    { recursive: true }
+  )
 const browser = spawnSync(
   "sh",
   ["apps/v4/components/extend/slides/tests/run-browser.sh"],
   {
-    env: { ...process.env, SLIDES_BUNDLE: baseline, SLIDES_CASE: "polish " },
+    env: {
+      ...process.env,
+      SLIDES_BUNDLE: baseline,
+      SLIDES_CASE: charts ? "charts " : "polish ",
+    },
     encoding: "utf8",
   }
 )
@@ -96,7 +103,7 @@ assert.equal(
 const cases = JSON.parse(
   await readFile(path.join(results, "results.json"), "utf8")
 )
-assert.equal(cases.length, 7)
+assert.equal(cases.length, charts ? 2 : 7)
 assert.ok(
   cases.every((test) => !test.pass),
   "every regression fails without the fixes"
@@ -106,5 +113,5 @@ await writeFile(
   JSON.stringify(cases, null, 2)
 )
 console.log(
-  "PASS negative control: all 7 polish regressions fail against the committed editor"
+  `PASS negative control: all ${cases.length} regressions fail against the committed editor`
 )

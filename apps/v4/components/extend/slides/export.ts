@@ -2,6 +2,7 @@ import { toPng } from "html-to-image"
 import JSZip from "jszip"
 import pptxgen from "pptxgenjs"
 
+import { readChart, renderCharts } from "./charts.js"
 import { SLIDE_HEIGHT, SLIDE_WIDTH, type Deck } from "./validate.js"
 
 function saveBlob(blob: Blob, name: string) {
@@ -115,6 +116,7 @@ export async function exportPowerPoint(deck: Deck) {
     await document.fonts.ready
     for (const id of deck.manifest.order) {
       host.innerHTML = deck.slides[id]
+      renderCharts(host)
       const root = host.firstElementChild as HTMLElement
       root.removeAttribute("id")
       for (const element of root.querySelectorAll("[id]"))
@@ -143,6 +145,11 @@ export async function exportPowerPoint(deck: Deck) {
         // A wrapper gives SVG roots the HTMLElement surface expected by html-to-image.
         const wrapper = document.createElement("div")
         const clone = element.cloneNode(true) as HTMLElement
+        // Keep charts editable even when their surrounding layout needs a bitmap.
+        for (const chart of clone.querySelectorAll<HTMLElement>(
+          "figure[data-chart]"
+        ))
+          chart.style.visibility = "hidden"
         const computed = getComputedStyle(element)
         for (let index = 0; index < computed.length; index++) {
           const property = computed[index]
@@ -175,6 +182,8 @@ export async function exportPowerPoint(deck: Deck) {
         } finally {
           wrapper.remove()
         }
+        for (const chart of element.querySelectorAll("figure[data-chart]"))
+          await visit(chart)
       }
       async function visit(element: Element) {
         const style = getComputedStyle(element)
@@ -192,6 +201,79 @@ export async function exportPowerPoint(deck: Deck) {
           return
         }
         if (box.w <= 0 || box.h <= 0) return
+        if (element.matches("figure[data-chart]")) {
+          const chart = readChart(element)
+          if (chart.errors.length)
+            throw new Error(`Chart ${element.id}: ${chart.errors.join(" ")}`)
+          const type = chart.type === "column" ? "bar" : chart.type
+          const series = chart.series.map((series) => ({
+            ...series,
+            labels: chart.categories,
+          }))
+          const data =
+            type === "scatter"
+              ? [
+                  {
+                    name: chart.xTitle || "X",
+                    values: chart.categories.map(Number),
+                  },
+                  ...series,
+                ]
+              : series
+          const format =
+            chart.format === "percent"
+              ? "0.##%"
+              : chart.format === "currency"
+                ? "$#,##0.00"
+                : "#,##0.##"
+          const foreground = color(style.color)
+          const categoryTitle =
+            chart.type === "bar" ? chart.yTitle : chart.xTitle
+          const valueTitle = chart.type === "bar" ? chart.xTitle : chart.yTitle
+          const positions = {
+            top: "t",
+            bottom: "b",
+            left: "l",
+            right: "r",
+          } as const
+          slide.addChart(type, data, {
+            ...box,
+            chartColors: chart.colors,
+            chartArea: { fill: { transparency: 100 } },
+            plotArea: { fill: { transparency: 100 } },
+            showTitle: Boolean(chart.title),
+            title: chart.title,
+            titleColor: foreground,
+            showLegend: chart.legend !== "none",
+            legendPos: positions[chart.legend as keyof typeof positions] || "b",
+            legendColor: foreground,
+            showValue: chart.labels,
+            dataLabelColor: foreground,
+            dataLabelFormatCode: format,
+            catAxisTitle: categoryTitle,
+            showCatAxisTitle: Boolean(categoryTitle),
+            catAxisTitleColor: foreground,
+            valAxisTitle: valueTitle,
+            showValAxisTitle: Boolean(valueTitle),
+            valAxisTitleColor: foreground,
+            catAxisLabelColor: foreground,
+            valAxisLabelColor: foreground,
+            valAxisLabelFormatCode: format,
+            valLabelFormatCode: format,
+            catGridLine: { style: "none" },
+            valGridLine: {
+              style: chart.gridlines ? "solid" : "none",
+              color: foreground,
+              size: 0.5,
+            },
+            barDir: chart.type === "bar" ? "bar" : "col",
+            barGrouping: chart.stacked ? "stacked" : "clustered",
+            lineDataSymbol: "circle",
+            lineSize: type === "scatter" ? 0 : 2,
+            holeSize: 55,
+          })
+          return
+        }
         const complex =
           style.transform !== "none" ||
           style.boxShadow !== "none" ||
