@@ -54030,6 +54030,11 @@ export function DocxEditorViewer({
                   : replaced.inserted === "" && replaced.sourceEnd - replaced.sourceStart === 1
                   ? "delete"
                   : undefined;
+                // A burst continues from the caret before the edit; after Backspace that is the deleted character's end.
+                const range = editor.activeTextRange;
+                const caretBefore = range && sameParagraphLocation(range.end.location, location)
+                  ? range.end.offset
+                  : replaced?.sourceStart;
                 const nextText = edit.source;
                 const nextStart = edit.sourceSelectionStart;
                 const nextEnd = edit.sourceSelectionEnd;
@@ -54057,7 +54062,7 @@ export function DocxEditorViewer({
                   nextText,
                   nextStart,
                   nextEnd,
-                  edit.replacement?.sourceStart,
+                  coalesceClass === "delete" ? caretBefore : edit.replacement?.sourceStart,
                   coalesceClass ? `w:${locationKey}:${coalesceClass}` : undefined
                 );
                 schedulePaginationMeasurementResume();
