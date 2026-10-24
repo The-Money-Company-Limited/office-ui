@@ -111,6 +111,11 @@ export class Autosave {
       if (this.adapter === adapter) this.adapter = null
     }
   }
+  // The open document's bytes as they are now, unsaved edits included.
+  async documentBytes(): Promise<Uint8Array | null> {
+    const file = (await this.adapter?.serialize())?.files[0]
+    return file ? new Uint8Array(file.bytes) : null
+  }
   dirty = () => {
     if (!this.state.canSave) return
     this.revision++

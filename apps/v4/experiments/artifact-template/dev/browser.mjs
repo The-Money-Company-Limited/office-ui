@@ -197,6 +197,21 @@ async function run(kind, scenario) {
         )
     })
   }
+  if (scenario === "webmcp")
+    await page.addInitScript(() => {
+      // Stands in for the browser's WebMCP host: it keeps what the page registers.
+      const tools = new Map()
+      window.webmcpTools = tools
+      Object.defineProperty(Document.prototype, "modelContext", {
+        configurable: true,
+        value: {
+          registerTool: async (tool, { signal }) => {
+            tools.set(tool.name, tool)
+            signal.addEventListener("abort", () => tools.delete(tool.name))
+          },
+        },
+      })
+    })
   await page.addInitScript(() => {
     window.cellDraws = []
     const fillText = CanvasRenderingContext2D.prototype.fillText
@@ -233,7 +248,54 @@ async function run(kind, scenario) {
       kind === "slides" && scenario !== "slide-ids"
         ? await page.locator("#welcome-title").innerText()
         : "Autosave original"
-    if (scenario === "undo" && kind === "docx") {
+    if (scenario === "webmcp") {
+      // An agent in the browser reads the open document, unsaved edits included; nothing writes.
+      const call = (name, input = {}) =>
+        page.evaluate(
+          async ([name, input]) => window.webmcpTools.get(name).execute(input),
+          [name, input]
+        )
+      const tools = () =>
+        page.evaluate(() =>
+          [...window.webmcpTools.values()].map((tool) => ({
+            name: tool.name,
+            annotations: tool.annotations,
+          }))
+        )
+      const readOnly = { readOnlyHint: true, untrustedContentHint: true }
+      if (kind === "docx") {
+        await page.waitForFunction(() => window.webmcpTools.size === 2)
+        assert.deepEqual(await tools(), [
+          { name: "doc_read", annotations: readOnly },
+          { name: "doc_find", annotations: readOnly },
+        ])
+        const found = await call("doc_find", { text: "original" })
+        assert.deepEqual(
+          found.matches.map(({ start, end }) => [start, end]),
+          [[9, 17]]
+        )
+        await edit(page, kind, "Unsaved")
+        const { paragraphs } = await call("doc_read")
+        assert.equal(paragraphs[0].text, "Unsaved Autosave original")
+      } else if (kind === "xlsx") {
+        await page.waitForFunction(() => window.webmcpTools.size === 1)
+        assert.deepEqual(await tools(), [
+          { name: "sheet_read", annotations: readOnly },
+        ])
+        const all = await call("sheet_read")
+        assert.deepEqual(all.sheets, ["Sheet1"])
+        assert.deepEqual(
+          all.cells.find((cell) => cell.ref === "A1")?.value,
+          "Autosave original"
+        )
+        assert.deepEqual((await call("sheet_read", { range: "B1" })).cells, [
+          { ref: "B1", value: 42 },
+        ])
+      } else {
+        await page.waitForTimeout(1000)
+        assert.deepEqual(await tools(), [])
+      }
+    } else if (scenario === "undo" && kind === "docx") {
       // Undo takes back the last word typed, as in Google Docs, not one key or the whole burst.
       const mode = page.getByRole("button", { name: /Mode: Viewing/ })
       if (await mode.count()) {
@@ -654,12 +716,14 @@ try {
       "slide-ids",
       "header",
       "undo",
+      "webmcp",
     ])
       if (
         (scenario !== "alignment" || kind === "xlsx") &&
         (scenario !== "slide-ids" || kind === "slides") &&
         (scenario !== "header" || kind === "pptx" || kind === "pdf") &&
         (scenario !== "undo" || kind === "docx" || kind === "xlsx") &&
+        (scenario !== "webmcp" || ["docx", "xlsx", "pdf"].includes(kind)) &&
         (kind !== "pptx" || scenario === "header")
       )
         await run(kind, scenario)
