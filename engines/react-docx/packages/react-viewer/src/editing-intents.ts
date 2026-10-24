@@ -268,14 +268,17 @@ export interface TextCommitBurst {
 
 // Per-keystroke commits coalesce into one history entry while the burst is
 // unbroken: same paragraph and intent class, caret continuity (each edit
-// starts where the previous one left the caret), and no long pause.
+// starts where the previous one left the caret), and no long pause. A new
+// word starts a new entry, so undo takes back typing word by word, as in
+// Google Docs.
 export function shouldCoalesceTextCommit(
   previous: TextCommitBurst | undefined,
-  next: { key: string; caretBefore: number; at: number },
+  next: { key: string; caretBefore: number; at: number; startsWord?: boolean },
   windowMs = 1000
 ): boolean {
   return Boolean(
     previous &&
+      !next.startsWord &&
       previous.key === next.key &&
       next.at >= previous.at &&
       next.at - previous.at <= windowMs &&

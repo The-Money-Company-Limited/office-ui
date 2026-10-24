@@ -233,7 +233,57 @@ async function run(kind, scenario) {
       kind === "slides" && scenario !== "slide-ids"
         ? await page.locator("#welcome-title").innerText()
         : "Autosave original"
-    if (scenario === "header") {
+    if (scenario === "undo" && kind === "docx") {
+      // Undo takes back the last word typed, as in Google Docs, not one key or the whole burst.
+      const mode = page.getByRole("button", { name: /Mode: Viewing/ })
+      if (await mode.count()) {
+        await mode.click()
+        await page.getByRole("menuitem", { name: "Editing", exact: true }).click()
+      }
+      const paragraph = page
+        .locator('[data-docx-paragraph-node-index="0"]')
+        .first()
+      await paragraph.click()
+      await page.keyboard.press("End")
+      await page.keyboard.type(" alpha beta", { delay: 40 })
+      const text = async () => (await paragraph.innerText()).trimEnd()
+      await page.waitForFunction(
+        () => document.body.innerText.includes("alpha beta")
+      )
+      await page.keyboard.press("ControlOrMeta+z")
+      assert.equal(await text(), "Autosave original alpha")
+      await page.keyboard.press("ControlOrMeta+z")
+      assert.equal(await text(), "Autosave original")
+      await page.keyboard.press("ControlOrMeta+Shift+z")
+      assert.equal(await text(), "Autosave original alpha")
+    } else if (scenario === "undo" && kind === "xlsx") {
+      // One undo takes back one committed cell edit.
+      const name = page.getByRole("textbox", { name: "Name box", exact: true })
+      const formula = page.getByRole("textbox", {
+        name: "Formula bar",
+        exact: true,
+      })
+      const cell = async (ref) => {
+        await name.fill(ref)
+        await name.press("Enter")
+        return formula.inputValue()
+      }
+      for (const [ref, value] of [
+        ["A3", "first"],
+        ["A4", "second"],
+      ]) {
+        await name.fill(ref)
+        await name.press("Enter")
+        await page.keyboard.type(value, { delay: 30 })
+        await page.keyboard.press("Enter")
+      }
+      await page.keyboard.press("ControlOrMeta+z")
+      assert.equal(await cell("A4"), "")
+      assert.equal(await cell("A3"), "first")
+      await page.locator('[data-cell-ref="B3"], #c-B3').first().click()
+      await page.keyboard.press("ControlOrMeta+z")
+      assert.equal(await cell("A3"), "")
+    } else if (scenario === "header") {
       // The header names the file and switches the page's theme, which a reload keeps.
       await page.getByText(`sample.${kind}`, { exact: true }).first().waitFor()
       const dark = () =>
@@ -603,11 +653,13 @@ try {
       "alignment",
       "slide-ids",
       "header",
+      "undo",
     ])
       if (
         (scenario !== "alignment" || kind === "xlsx") &&
         (scenario !== "slide-ids" || kind === "slides") &&
         (scenario !== "header" || kind === "pptx" || kind === "pdf") &&
+        (scenario !== "undo" || kind === "docx" || kind === "xlsx") &&
         (kind !== "pptx" || scenario === "header")
       )
         await run(kind, scenario)

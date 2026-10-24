@@ -376,6 +376,17 @@ describe("shouldCoalesceTextCommit", () => {
     ).toBe(true);
   });
 
+  it("starts a new entry at the start of a word", () => {
+    expect(
+      shouldCoalesceTextCommit(burst, {
+        key: "p:3:insert",
+        caretBefore: 5,
+        at: 1400,
+        startsWord: true
+      })
+    ).toBe(false);
+  });
+
   it("does not coalesce without a previous burst", () => {
     expect(
       shouldCoalesceTextCommit(undefined, {
