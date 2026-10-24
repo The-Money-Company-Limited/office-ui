@@ -318,6 +318,12 @@ async function run(kind, scenario) {
       assert.equal(await text(), "Autosave original")
       await page.keyboard.press("ControlOrMeta+Shift+z")
       assert.equal(await text(), "Autosave original alpha")
+      // Held-down Backspace is one step too.
+      await page.keyboard.press("End")
+      for (let i = 0; i < 3; i++) await page.keyboard.press("Backspace")
+      assert.equal(await text(), "Autosave original alp")
+      await page.keyboard.press("ControlOrMeta+z")
+      assert.equal(await text(), "Autosave original alpha")
     } else if (scenario === "undo" && kind === "xlsx") {
       // One undo takes back one committed cell edit.
       const name = page.getByRole("textbox", { name: "Name box", exact: true })
