@@ -27,6 +27,7 @@ const kinds = process.env.AUTOSAVE_KINDS?.split(",") ?? [
   "xlsx",
   "slides",
   "pdf",
+  "pptx",
 ]
 
 async function properties(page) {
@@ -49,6 +50,7 @@ async function ready(page, kind, readOnly = false) {
   if (kind === "xlsx")
     await page.locator('[data-cell-ref="A1"], #c-A1').first().waitFor()
   if (kind === "slides") await page.locator("#welcome-title").waitFor()
+  if (kind === "pptx") await page.getByText("of 1", { exact: true }).waitFor()
   if (kind === "pdf")
     await page
       .getByRole("button", { name: "More actions", exact: true })
@@ -231,7 +233,23 @@ async function run(kind, scenario) {
       kind === "slides" && scenario !== "slide-ids"
         ? await page.locator("#welcome-title").innerText()
         : "Autosave original"
-    if (scenario === "slide-ids") {
+    if (scenario === "header") {
+      // The header names the file and switches the page's theme, which a reload keeps.
+      await page.getByText(`sample.${kind}`, { exact: true }).first().waitFor()
+      const dark = () =>
+        page.evaluate(() => document.documentElement.classList.contains("dark"))
+      const wasDark = await dark()
+      await page
+        .getByRole("button", {
+          name: wasDark ? "Use light appearance" : "Use dark appearance",
+          exact: true,
+        })
+        .click()
+      assert.equal(await dark(), !wasDark)
+      await page.reload()
+      await ready(page, kind)
+      assert.equal(await dark(), !wasDark)
+    } else if (scenario === "slide-ids") {
       const title = page.locator('[id="9-title"]')
       await title.dblclick()
       await title.fill("Numeric ID edited")
@@ -584,10 +602,13 @@ try {
       "not-document-access",
       "alignment",
       "slide-ids",
+      "header",
     ])
       if (
         (scenario !== "alignment" || kind === "xlsx") &&
-        (scenario !== "slide-ids" || kind === "slides")
+        (scenario !== "slide-ids" || kind === "slides") &&
+        (scenario !== "header" || kind === "pptx" || kind === "pdf") &&
+        (kind !== "pptx" || scenario === "header")
       )
         await run(kind, scenario)
 } finally {
