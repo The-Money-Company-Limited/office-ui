@@ -35252,12 +35252,17 @@ export function useDocxEditor(
                 insertedStyle,
               });
 
+        const before = paragraphText(paragraph);
         const coalesce =
           options?.coalesceKey !== undefined &&
           shouldCoalesceTextCommit(textCommitBurstRef.current, {
             key: options.coalesceKey,
             caretBefore: insertionOffset,
             at: now,
+            startsWord:
+              options.coalesceKey.endsWith(":insert") &&
+              /\s/.test(before.charAt(insertionOffset - 1)) &&
+              /\S/.test(text.charAt(insertionOffset)),
           });
         textCommitBurstRef.current =
           options?.coalesceKey !== undefined
@@ -46640,10 +46645,11 @@ export function DocxEditorViewer({
       text: string,
       start: number,
       end = start,
-      insertionOffset = start
+      insertionOffset = start,
+      coalesceKey?: string
     ): void => {
       editor.suppressNextDomSelectionRestore();
-      const committed = editor.commitParagraphTextAtRange(location, text, { start, end }, { insertionOffset });
+      const committed = editor.commitParagraphTextAtRange(location, text, { start, end }, { insertionOffset, coalesceKey });
       if (!committed) return;
       syncWrappedParagraphRange(location, committed.start, committed.end, {
         textOverride: committed.text,
@@ -54015,6 +54021,15 @@ export function DocxEditorViewer({
                 cancelPendingPointerSelectionReconcile();
                 const edit = wrappedTextareaEdit(event.currentTarget);
                 wrappedParagraphInputHintRef.current = undefined;
+                // One typed or deleted character joins the open undo step, as in the other editing hosts.
+                const replaced = edit.replacement;
+                const coalesceClass = !replaced
+                  ? undefined
+                  : replaced.sourceStart === replaced.sourceEnd && replaced.inserted.length === 1
+                  ? "insert"
+                  : replaced.inserted === "" && replaced.sourceEnd - replaced.sourceStart === 1
+                  ? "delete"
+                  : undefined;
                 const nextText = edit.source;
                 const nextStart = edit.sourceSelectionStart;
                 const nextEnd = edit.sourceSelectionEnd;
@@ -54037,7 +54052,14 @@ export function DocxEditorViewer({
                 editor.beginSelectionSession("keyboard", {
                   settleAfterMs: 220,
                 });
-                commitWrappedParagraphTextAtLocation(location, nextText, nextStart, nextEnd, edit.replacement?.sourceStart);
+                commitWrappedParagraphTextAtLocation(
+                  location,
+                  nextText,
+                  nextStart,
+                  nextEnd,
+                  edit.replacement?.sourceStart,
+                  coalesceClass ? `w:${locationKey}:${coalesceClass}` : undefined
+                );
                 schedulePaginationMeasurementResume();
               }}
               onSelect={(event) => {

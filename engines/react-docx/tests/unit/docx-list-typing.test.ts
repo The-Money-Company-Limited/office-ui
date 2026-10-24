@@ -417,9 +417,18 @@ it.each(["- ", "* ", "1. ", "1) "])("keeps character-by-character %j typing and 
       e.undo();
     },
     (e) => {
+      // Undo takes back one word at a time.
+      expect(textOf(paragraph(e, false, 3))).toBe("after ");
+      e.undo();
+    },
+    (e) => {
       expect(textOf(paragraph(e, false, 3))).toBe("");
       expect(textOf(paragraph(e, false, 1))).toBe("apples");
       expect(textOf(paragraph(e, false, 2))).toBe("pears");
+      e.redo();
+    },
+    (e) => {
+      expect(textOf(paragraph(e, false, 3))).toBe("after ");
       e.redo();
     },
   ]);
