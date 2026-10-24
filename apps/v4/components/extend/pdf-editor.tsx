@@ -196,6 +196,7 @@ import {
   PdfEditorStampsPanel,
   PdfEditorThumbnailsPanel,
 } from "@/components/extend/pdf-editor-panels"
+import { AppearanceToggle } from "@/components/extend/appearance-toggle"
 import { PdfEditorPropertiesPanel } from "@/components/extend/pdf-editor-properties"
 import {
   CameraGlyph,
@@ -351,6 +352,9 @@ export type PDFEditorProps = {
   showToolbar?: boolean
   showUpload?: boolean
   showDownload?: boolean
+  /** The page's theme; with onIsDarkChange the toolbar shows a light/dark switch. */
+  isDark?: boolean
+  onIsDarkChange?: (isDark: boolean) => void
   toolbarActions?: React.ReactNode
   /** Extra actions for the text selection menu. Each receives normalized page coordinates. */
   selectionActions?: PdfEditorSelectionAction[]
@@ -2082,6 +2086,8 @@ type PdfEditorInnerProps = {
   showToolbar: boolean
   showUpload: boolean
   showDownload: boolean
+  isDark?: boolean
+  onIsDarkChange?: (isDark: boolean) => void
   toolbarActions?: React.ReactNode
   selectionActions: PdfEditorSelectionAction[]
   signatureFontsStylesheetUrl: string | null
@@ -2275,6 +2281,8 @@ function PdfEditorInner({
   showToolbar,
   showUpload,
   showDownload,
+  isDark,
+  onIsDarkChange,
   toolbarActions,
   selectionActions,
   signatureFontsStylesheetUrl,
@@ -3675,6 +3683,12 @@ function PdfEditorInner({
                       className="min-w-0 flex-1"
                       end={
                         <>
+                          {onIsDarkChange ? (
+                            <AppearanceToggle
+                              isDark={isDark ?? false}
+                              onIsDarkChange={onIsDarkChange}
+                            />
+                          ) : null}
                           {canSave ? (
                             <PdfEditorModeSwitch
                               mode={mode}
@@ -4338,6 +4352,8 @@ export const PDFEditor = React.forwardRef<PDFEditorHandle, PDFEditorProps>(
       showToolbar = true,
       showUpload = true,
       showDownload = true,
+      isDark,
+      onIsDarkChange,
       toolbarActions,
       selectionActions,
       persistSignatures = true,
@@ -4538,6 +4554,8 @@ export const PDFEditor = React.forwardRef<PDFEditorHandle, PDFEditorProps>(
         showToolbar={showToolbar}
         showUpload={showUpload}
         showDownload={showDownload}
+        isDark={isDark}
+        onIsDarkChange={onIsDarkChange}
         toolbarActions={toolbarActions}
         selectionActions={resolvedSelectionActions}
         signatureFontsStylesheetUrl={signatureFontsStylesheetUrl}

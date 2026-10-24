@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Separator } from "@/components/ui/separator"
 import { IconPlaceholder } from "@/components/icon-placeholder"
+import { AppearanceToggle } from "@/components/extend/appearance-toggle"
 
 import { chartPanelLayout } from "./chart-layout"
 import { renderCharts } from "./charts.js"
@@ -377,35 +378,7 @@ export function SlidesEditor({
               <SaveStatus />
               <SaveAccess />
             </div>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => onIsDarkChange(!isDark)}
-              aria-label={
-                isDark ? "Use light appearance" : "Use dark appearance"
-              }
-              title={isDark ? "Use light appearance" : "Use dark appearance"}
-            >
-              {isDark ? (
-                <IconPlaceholder
-                  lucide="Sun"
-                  tabler="IconSun"
-                  hugeicons="Sun03Icon"
-                  phosphor="SunIcon"
-                  remixicon="RiSunLine"
-                  className="size-4"
-                />
-              ) : (
-                <IconPlaceholder
-                  lucide="Moon"
-                  tabler="IconMoon"
-                  hugeicons="Moon02Icon"
-                  phosphor="MoonIcon"
-                  remixicon="RiMoonLine"
-                  className="size-4"
-                />
-              )}
-            </Button>
+            <AppearanceToggle isDark={isDark} onIsDarkChange={onIsDarkChange} />
             <Separator
               orientation="vertical"
               className="mx-1 h-4 self-center"

@@ -7,7 +7,8 @@ node node_modules/eslint/bin/eslint.js \
   experiments/artifact-template/dev/*.mjs \
   components/extend/docx-editor.tsx components/extend/xlsx-editor.tsx \
   components/extend/pdf-editor.tsx components/extend/pdf-editor-dialogs.tsx \
-  components/extend/pdf-editor-panels.tsx \
+  components/extend/pdf-editor-panels.tsx components/extend/pptx-viewer.tsx \
+  components/extend/appearance-toggle.tsx \
   components/extend/slides/slides-editor.tsx components/extend/slides/slide-canvas.tsx \
   components/extend/slides/export.ts components/extend/slides/validate.js
 printf '%s\n' 'PASS ESLint'

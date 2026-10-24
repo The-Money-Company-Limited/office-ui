@@ -49,6 +49,7 @@ import {
   useElementWidth,
   useInlineThumbnailSidebar,
 } from "@/components/extend/document-viewer-sidebar"
+import { AppearanceToggle } from "@/components/extend/appearance-toggle"
 import { FileThumbnail } from "@/components/extend/file-thumbnail"
 import { IconPlaceholder } from "@/components/icon-placeholder"
 
@@ -371,8 +372,11 @@ function PptxSlideNumberControl({
 function PptxToolbar({
   activeSlideIndex,
   controlsDisabled,
+  fileName,
+  isDark,
   isPreparingDownload,
   onDownload,
+  onIsDarkChange,
   onPresent,
   onSlideChange,
   onToggleSidebar,
@@ -387,8 +391,11 @@ function PptxToolbar({
 }: {
   activeSlideIndex: number
   controlsDisabled: boolean
+  fileName?: string
+  isDark?: boolean
   isPreparingDownload: boolean
   onDownload: () => void
+  onIsDarkChange?: (isDark: boolean) => void
   onPresent: () => void
   onSlideChange: (slideIndex: number) => void
   onToggleSidebar: () => void
@@ -442,6 +449,14 @@ function PptxToolbar({
               />
             </Button>
           </ToolbarTooltip>
+          {fileName ? (
+            <span
+              className="min-w-0 truncate px-1 text-sm font-semibold"
+              title={fileName}
+            >
+              {fileName}
+            </span>
+          ) : null}
           <Separator orientation="vertical" className="mx-1 h-4 self-center" />
           <ToolbarTooltip label="Previous slide">
             <Button
@@ -558,6 +573,12 @@ function PptxToolbar({
               </Button>
             </ToolbarTooltip>
           </div>
+          {onIsDarkChange ? (
+            <AppearanceToggle
+              isDark={isDark ?? false}
+              onIsDarkChange={onIsDarkChange}
+            />
+          ) : null}
           <Button
             type="button"
             variant="ghost"
@@ -1038,6 +1059,9 @@ export type PptxViewerPreviewProps = {
   defaultZoom?: ViewerZoomLevel
   fileName?: string
   initialSlide?: number
+  /** The page's theme; with onIsDarkChange the toolbar shows a light/dark switch. */
+  isDark?: boolean
+  onIsDarkChange?: (isDark: boolean) => void
   showDownload?: boolean
   showToolbar?: boolean
   showUpload?: boolean
@@ -1058,6 +1082,8 @@ export function PptxViewerPreview({
   defaultZoom = DEFAULT_ZOOM,
   fileName,
   initialSlide = 1,
+  isDark,
+  onIsDarkChange,
   showDownload = true,
   showToolbar = true,
   showUpload = true,
@@ -1575,8 +1601,11 @@ export function PptxViewerPreview({
     <PptxToolbar
       activeSlideIndex={activeSlideIndex}
       controlsDisabled={controlsDisabled}
+      fileName={fileName ? displayFileName : undefined}
+      isDark={isDark}
       isPreparingDownload={isPreparingDownload}
       onDownload={handleDownload}
+      onIsDarkChange={onIsDarkChange}
       onPresent={handlePresent}
       onSlideChange={handleSlideChange}
       onToggleSidebar={() => setSidebarChoice(!sidebarOpen)}

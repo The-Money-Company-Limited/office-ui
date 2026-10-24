@@ -168,6 +168,8 @@ function App() {
                 scrollsWindow
                 showUpload={false}
                 slideIdPrefix=""
+                isDark={isDark}
+                onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
               />
             ) : (
               <PdfEditor
@@ -176,6 +178,8 @@ function App() {
                 anchorIdPrefix=""
                 scrollsWindow
                 showUpload={false}
+                isDark={isDark}
+                onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
               />
             )}
           </React.Suspense>
