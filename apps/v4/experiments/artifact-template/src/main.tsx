@@ -6,6 +6,7 @@ import "./theme.css"
 
 import { Autosave } from "./autosave"
 import { AutosaveContext } from "./autosave-context"
+import { registerDocumentTools } from "./webmcp"
 
 const DocxEditor = React.lazy(() =>
   import("@/components/extend/docx-editor").then((module) => ({
@@ -110,6 +111,13 @@ function App() {
       current = false
     }
   }, [])
+
+  const kind = artifact?.kind
+  React.useEffect(
+    () =>
+      kind ? registerDocumentTools(kind, () => save.documentBytes()) : undefined,
+    [kind, save]
+  )
 
   const documentProps = artifact
     ? {
