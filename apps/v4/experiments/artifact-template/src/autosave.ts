@@ -1,27 +1,52 @@
 export type DocumentFile = { path: string; bytes: ArrayBuffer }
 export type DocumentSnapshot = { files: DocumentFile[]; saved?: () => void }
 export type DocumentAdapter = {
-  serialize: () => DocumentSnapshot | Promise<DocumentSnapshot>
+  // A read passes `commit: false` and the editor must stay as it is; a save
+  // may commit edits in progress, such as a table cell's text.
+  serialize: (options?: {
+    commit: boolean
+  }) => DocumentSnapshot | Promise<DocumentSnapshot>
   download: () => void | Promise<void>
 }
 export type SaveState = {
+  // False until the first access answer, so an editor never flashes "View only".
+  known: boolean
   canSave: boolean
   reason?: string
   status: string
   conflict: boolean
 }
 
+// What a refused save tells the person: what happened, then how to keep their work.
 const failures: Record<string, string> = {
-  forbidden: "You no longer have permission to edit. Keep a copy or reload.",
+  forbidden: "You can no longer edit this. Download a copy to keep your changes.",
+  read_only:
+    "This document can't be edited here any more. Download a copy to keep your changes.",
+  signed_out: "Your sign-in expired. Sign in again to keep saving.",
   path_not_allowed:
-    "This save includes a path outside the document. Keep a copy and reload.",
-  not_document: "This page is no longer a document",
-  too_large: "The document is too large. Download a copy.",
-  error: "Please try again when the connection returns.",
+    "Changes to this document can't be saved. Download a copy to keep them.",
+  not_document:
+    "This page is no longer a document. Download a copy to keep your changes.",
+  too_large: "This document is too large to save here. Download a copy.",
 }
+// Refusals that end editing; the page shows the reason instead of edit controls.
+// Those about access end when the bridge again says the person may save.
+const endsEditing: Record<string, string> = {
+  forbidden: "read_only",
+  read_only: "read_only",
+  path_not_allowed: "read_only",
+  signed_out: "signed_out",
+  not_document: "not_document",
+}
+const resumable = new Set(["forbidden", "read_only", "signed_out"])
 
 export class Autosave {
-  private state: SaveState = { canSave: false, status: "", conflict: false }
+  private state: SaveState = {
+    known: false,
+    canSave: false,
+    status: "",
+    conflict: false,
+  }
   private listeners = new Set<() => void>()
   private version = ""
   private liveVersion = ""
@@ -52,6 +77,7 @@ export class Autosave {
   } | null = null
   private receivedAccess = false
   private blocked = false
+  private blockedBy?: string
 
   constructor(
     private page: Window,
@@ -116,11 +142,12 @@ export class Autosave {
   setLoaded(loaded: boolean) {
     this.loaded = loaded
   }
-  // The open document's bytes as they are now, unsaved edits included; null
-  // while it is still loading, when the editor holds an empty document.
+  // The open document's bytes as they are now, unsaved edits included, read
+  // without changing the editor; null while it is still loading, when the
+  // editor holds an empty document.
   async documentBytes(): Promise<Uint8Array | null> {
     if (!this.loaded) return null
-    const file = (await this.adapter?.serialize())?.files[0]
+    const file = (await this.adapter?.serialize({ commit: false }))?.files[0]
     return file ? new Uint8Array(file.bytes) : null
   }
   dirty = () => {
@@ -207,13 +234,14 @@ export class Autosave {
     if (version) this.liveVersion = version
     if (reason === "conflict") {
       this.blocked = true
+      this.blockedBy = reason
       this.update({ conflict: true, status: "Couldn't save" })
     } else if (reason === "offline" || reason === "error") {
       this.update({
         status:
           reason === "offline"
             ? "Offline, will retry"
-            : `Couldn't save. ${failures.error}`,
+            : "Couldn't save yet. Retrying…",
       })
       this.retryWaiting = true
       const delay = Math.min(30_000, 2000 * 2 ** this.retry++)
@@ -225,17 +253,12 @@ export class Autosave {
       this.schedule(Math.max(delay, this.retryNotBefore - Date.now()))
     } else {
       this.blocked = true
+      this.blockedBy = reason
+      const ended = endsEditing[reason]
       this.update({
-        canSave: ["forbidden", "not_document"].includes(reason)
-          ? false
-          : this.state.canSave,
-        reason:
-          reason === "not_document"
-            ? reason
-            : reason === "forbidden"
-              ? "read_only"
-              : this.state.reason,
-        status: `Couldn't save. ${failures[reason] ?? reason}`,
+        canSave: ended ? false : this.state.canSave,
+        reason: ended ?? this.state.reason,
+        status: failures[reason] ?? `Couldn't save (${reason}).`,
       })
     }
   }
@@ -256,13 +279,23 @@ export class Autosave {
       clearTimeout(this.helloTimer)
       if (!this.version) this.version = data.version
       this.liveVersion = data.version
+      const resume =
+        this.blocked && data.canSave && resumable.has(this.blockedBy ?? "")
+      if (resume) {
+        this.blocked = false
+        this.blockedBy = undefined
+      }
+      const stuck = this.blocked && !!endsEditing[this.blockedBy ?? ""]
       this.update({
-        canSave: data.canSave,
-        reason: data.reason,
+        known: true,
+        canSave: data.canSave && !stuck,
+        reason: stuck ? this.state.reason : data.reason,
+        ...(resume ? { status: "" } : {}),
         ...(data.reason === "not_document"
           ? { status: failures.not_document }
           : {}),
       })
+      if (resume && this.revision !== this.savedRevision) this.schedule(0)
     } else if (
       data.type === "saved" &&
       this.pending &&
@@ -318,6 +351,7 @@ export class Autosave {
     this.savedRevision = this.revision
     this.version = this.liveVersion
     this.blocked = false
+    this.blockedBy = undefined
     this.retry = 0
     this.update({ conflict: false, status: "" })
     const selection = this.page.getSelection()
@@ -352,10 +386,10 @@ export class Autosave {
   downloadCopy = async () => {
     try {
       await this.adapter?.download()
+      return true
     } catch {
-      this.update({
-        status: "Couldn't save. Download failed; please try again.",
-      })
+      this.update({ status: "The download didn't start. Please try again." })
+      return false
     }
   }
 }

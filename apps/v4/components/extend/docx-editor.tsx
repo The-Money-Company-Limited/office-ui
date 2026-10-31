@@ -2075,10 +2075,10 @@ function DocxEditorContent({
   )
   const editor = useDocxEditor(editorOptions)
   useDocumentAdapter({
-    serialize: async () => ({
+    serialize: async (options) => ({
       files: [{
         path: `document/${displayFileName}`,
-        bytes: await editor.getDocumentBuffer(),
+        bytes: await editor.getDocumentBuffer(options),
       }],
     }),
     download: editor.exportDocx,

@@ -9,7 +9,11 @@ import {
   paragraphIdFromDomId,
   withUniqueBodyParaIds,
   type DocModel,
+  type DocNode,
+  type FooterSection,
+  type HeaderSection,
   type ParagraphNode,
+  type TableNode,
 } from "@extend-ai/react-docx-doc-model";
 import {
   acceptAllRevisions,
@@ -36,6 +40,20 @@ export interface DocParagraph {
   id: string;
   /** Index in the document body. */
   index: number;
+  text: string;
+}
+
+export interface DocTable {
+  /** Index in the document body. */
+  index: number;
+  /** Each cell's text; a cell's paragraphs are joined with "\n". */
+  rows: string[][];
+}
+
+export interface DocHeaderFooter {
+  kind: "header" | "footer";
+  /** The pages it is on: `default`, `first` or `even`. */
+  type: string;
   text: string;
 }
 
@@ -155,6 +173,17 @@ function paragraphText(node: ParagraphNode): string {
     .join("");
 }
 
+function rowsText(node: TableNode): string[][] {
+  return node.rows.map((row) => row.cells.map((cell) => cell.nodes.map(blockText).join("\n")));
+}
+
+/** A table's rows on separate lines, its cells separated by tabs. */
+function blockText(node: DocNode): string {
+  return node.type === "paragraph"
+    ? paragraphText(node)
+    : rowsText(node).map((cells) => cells.join("\t")).join("\n");
+}
+
 /** `#doc_p-n1 > span` → `p-n1`; `#p-0A1B2C3D-l2` → `p-0A1B2C3D`. */
 function selectorParagraphId(selector: string | undefined): string | undefined {
   const id = selector?.trim().match(/^#([^\s>+~:.[#]+)/)?.[1];
@@ -210,6 +239,35 @@ export class Doc {
       }
     });
     return result;
+  }
+
+  /** Body tables, which `paragraphs()` leaves out. */
+  tables(): DocTable[] {
+    return this.model.nodes.flatMap((node, index) =>
+      node.type === "table" ? [{ index, rows: rowsText(node) }] : []
+    );
+  }
+
+  /** Every section's headers and footers, each part once. */
+  headersFooters(): DocHeaderFooter[] {
+    const { metadata } = this.model;
+    const parts = new Map<string, DocHeaderFooter>();
+    const add = (kind: DocHeaderFooter["kind"], sections: Array<HeaderSection | FooterSection>) => {
+      for (const section of sections) {
+        if (!parts.has(section.partName)) {
+          parts.set(section.partName, {
+            kind,
+            type: section.referenceType ?? "default",
+            text: section.nodes.map(blockText).join("\n"),
+          });
+        }
+      }
+    };
+    for (const section of [metadata, ...(metadata.sections ?? [])]) {
+      add("header", section.headerSections ?? []);
+      add("footer", section.footerSections ?? []);
+    }
+    return [...parts.values()];
   }
 
   find(text: string, options: FindOptions = {}): TextRange[] {

@@ -13,7 +13,12 @@ import {
 import type { Autosave, DocumentAdapter, SaveState } from "./autosave"
 
 export const AutosaveContext = React.createContext<Autosave | null>(null)
-const viewing: SaveState = { canSave: true, status: "", conflict: false }
+const viewing: SaveState = {
+  known: true,
+  canSave: true,
+  status: "",
+  conflict: false,
+}
 const subscribe = () => () => {}
 const snapshot = () => viewing
 
@@ -38,7 +43,7 @@ export function useDocumentAdapter(adapter: DocumentAdapter) {
   React.useLayoutEffect(
     () =>
       save?.register({
-        serialize: () => latest.current.serialize(),
+        serialize: (options) => latest.current.serialize(options),
         download: () => latest.current.download(),
       }),
     [save]
@@ -62,12 +67,15 @@ export function useDocumentRevision(revision: unknown, ready: boolean) {
 }
 
 export function SaveAccess() {
-  const { canSave, reason } = useSaveState()
-  if (canSave) return null
+  const { known, canSave, reason } = useSaveState()
+  if (canSave || !known) return null
+  // A new tab, so edits made before a sign-in expired stay on this page.
   return reason === "signed_out" ? (
     <a
       className="text-xs text-muted-foreground"
       href={`https://www.cool.computer/private-access?redirect_url=${encodeURIComponent(window.location.href)}`}
+      target="_blank"
+      rel="noopener"
     >
       Sign in to edit
     </a>
@@ -101,21 +109,29 @@ export function SaveStatus() {
         className="w-80 border-white/15 bg-background/80 shadow-xl backdrop-blur-xl"
       >
         <PopoverTitle className="text-sm font-medium">
-          This was changed while you were editing.
+          This document changed somewhere else.
         </PopoverTitle>
-        <div className="mt-5 flex flex-wrap justify-end gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => void save.downloadCopy()}
-          >
-            Keep mine as a copy
-          </Button>
-          <Button size="sm" onClick={save.reloadTheirs}>
-            Reload theirs
-          </Button>
-        </div>
+        <ConflictChoices save={save} />
       </PopoverPopup>
     </Popover>
+  )
+}
+
+// Mounted while the conflict popover is open, so "Copy downloaded" resets each time.
+function ConflictChoices({ save }: { save: Autosave }) {
+  const [downloaded, setDownloaded] = React.useState(false)
+  return (
+    <div className="mt-5 flex flex-wrap justify-end gap-2">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => void save.downloadCopy().then(setDownloaded)}
+      >
+        {downloaded ? "Copy downloaded" : "Download mine"}
+      </Button>
+      <Button size="sm" onClick={save.reloadTheirs}>
+        Load latest
+      </Button>
+    </div>
   )
 }

@@ -198,9 +198,34 @@ test("permanent failures retain local edits and do not retry", async (t) => {
     reason: "forbidden",
   })
   assert.equal(h.save.getSnapshot().canSave, false)
-  assert.match(h.save.getSnapshot().status, /permission/)
+  assert.match(h.save.getSnapshot().status, /can no longer edit/)
   await h.tick(60_000)
   assert.equal(h.saves().length, 1)
+})
+
+test("an expired sign-in resumes saving when access returns", async (t) => {
+  const h = setup(t)
+  h.access()
+  h.set("mine")
+  await h.tick(2000)
+  h.reply({ type: "save_failed", id: h.saves()[0].data.id, reason: "signed_out" })
+  assert.equal(h.save.getSnapshot().canSave, false)
+  assert.equal(h.save.getSnapshot().reason, "signed_out")
+  assert.match(h.save.getSnapshot().status, /Sign in again/)
+  await h.tick(60_000)
+  assert.equal(h.saves().length, 1)
+  h.access()
+  assert.equal(h.save.getSnapshot().canSave, true)
+  await h.tick(0)
+  assert.equal(h.save.getSnapshot().status, "Saving…")
+  assert.equal(h.saves().length, 2)
+})
+
+test("the access label waits for the first access answer", (t) => {
+  const h = setup(t)
+  assert.equal(h.save.getSnapshot().known, false)
+  h.access()
+  assert.equal(h.save.getSnapshot().known, true)
 })
 
 test("timeout retry retains id, base and transferred bytes despite newer edits", async (t) => {
@@ -299,12 +324,12 @@ for (const reason of ["path_not_allowed", "not_document"]) {
     h.set("one")
     await h.tick(2000)
     h.reply({ type: "save_failed", id: h.saves()[0].data.id, reason })
-    assert.equal(h.save.getSnapshot().canSave, reason === "path_not_allowed")
+    assert.equal(h.save.getSnapshot().canSave, false)
     assert.match(
       h.save.getSnapshot().status,
       reason === "not_document"
         ? /This page is no longer a document/
-        : /path outside the document/
+        : /can't be saved/
     )
     assert.equal(
       h.page.dispatchEvent(new Event("beforeunload", { cancelable: true })),

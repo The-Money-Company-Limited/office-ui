@@ -281,24 +281,54 @@ async function run(kind, scenario) {
         )
       const readOnly = { readOnlyHint: true, untrustedContentHint: true }
       if (kind === "docx") {
-        await page.waitForFunction(() => window.webmcpTools.size === 2)
+        await page.waitForFunction(() => window.webmcpTools.size === 4)
         assert.deepEqual(await tools(), [
           { name: "doc_read", annotations: readOnly },
           { name: "doc_find", annotations: readOnly },
+          { name: "doc_comments", annotations: readOnly },
+          { name: "doc_revisions", annotations: readOnly },
         ])
         const found = await call("doc_find", { text: "original" })
         assert.deepEqual(
           found.matches.map(({ start, end }) => [start, end]),
           [[9, 17]]
         )
+        assert.deepEqual(found.tableCells, [{ table: 1, row: 0, column: 0 }])
+        assert.deepEqual(found.headersFooters, [])
         await edit(page, kind, "Unsaved")
-        const { paragraphs } = await call("doc_read")
-        assert.equal(paragraphs[0].text, "Unsaved Autosave original")
+        const read = await call("doc_read")
+        assert.equal(read.paragraphs[0].text, "Unsaved Autosave original")
+        assert.deepEqual(read.tables, [{ index: 1, rows: [["Cell original"]] }])
+        assert.deepEqual(read.headersFooters, [])
+        assert.deepEqual(await call("doc_comments"), { comments: [] })
+        assert.deepEqual((await call("doc_revisions")).revisions, [])
+        // A read sees a table cell's in-progress text and leaves it with the editor, which saves it.
+        await page.getByText("Cell original", { exact: true }).first().click()
+        await page.keyboard.press("End")
+        await page.keyboard.type(" draft")
+        for (const _ of [1, 2])
+          assert.deepEqual((await call("doc_read")).tables[0].rows, [
+            ["Cell original draft"],
+          ])
+        await page.locator('[data-docx-paragraph-node-index="0"]').first().click()
+        for (let attempt = 0; ; attempt++) {
+          try {
+            await checkBytes(kind, await readFile(file), "Cell original draft")
+            break
+          } catch (error) {
+            if (attempt > 100) throw error
+            await page.waitForTimeout(100)
+          }
+        }
       } else if (kind === "xlsx") {
-        await page.waitForFunction(() => window.webmcpTools.size === 1)
+        await page.waitForFunction(() => window.webmcpTools.size === 3)
         assert.deepEqual(await tools(), [
           { name: "sheet_read", annotations: readOnly },
+          { name: "sheet_comments", annotations: readOnly },
+          { name: "sheet_suggestions", annotations: readOnly },
         ])
+        assert.deepEqual(await call("sheet_comments"), { comments: [] })
+        assert.deepEqual(await call("sheet_suggestions"), { suggestions: [] })
         const all = await call("sheet_read")
         assert.deepEqual(all.sheets, ["Sheet1"])
         assert.deepEqual(
@@ -418,16 +448,14 @@ async function run(kind, scenario) {
           hasText:
             scenario === "not_document"
               ? /This page is no longer a document/
-              : /path outside the document/,
+              : /can't be saved/,
         })
         .waitFor()
       assert.deepEqual(await readFile(file), before)
       assert.equal((await control()).saves.length, 0)
+      // A refused path ends editing, and later access polls don't bring it back.
       if (scenario === "path_not_allowed")
-        assert.equal(
-          await page.getByText("View only", { exact: true }).count(),
-          0
-        )
+        await page.getByText("View only", { exact: true }).waitFor()
     } else if (scenario === "beforeunload") {
       await control({ mode: "offline", retryAfter: 60 })
       await edit(page, kind, "Unsaved edit")
@@ -533,13 +561,13 @@ async function run(kind, scenario) {
       }
       if (scenario === "conflict") {
         await page
-          .getByText("This was changed while you were editing.", {
+          .getByText("This document changed somewhere else.", {
             exact: true,
           })
           .waitFor()
         const pending = page.waitForEvent("download")
         await page
-          .getByRole("button", { name: "Keep mine as a copy", exact: true })
+          .getByRole("button", { name: "Download mine", exact: true })
           .click()
         const download = await pending
         const target = `${output}/${label}-copy.${kind === "slides" ? "zip" : kind}`
@@ -549,12 +577,12 @@ async function run(kind, scenario) {
         assert.equal((await control()).saves.length, 0)
         await page.screenshot({ path: `${output}/${label}.png` })
         await page
-          .getByRole("button", { name: "Reload theirs", exact: true })
+          .getByRole("button", { name: "Load latest", exact: true })
           .click()
         await ready(page, kind)
         assert.equal(
           await page
-            .getByText("This was changed while you were editing.", {
+            .getByText("This document changed somewhere else.", {
               exact: true,
             })
             .count(),
@@ -641,18 +669,33 @@ async function run(kind, scenario) {
           await page
             .getByRole("button", { name: "Rectangle", exact: true })
             .click()
-          const box = await page.locator("#page-1").boundingBox()
-          assert.ok(box)
-          await page.mouse.move(box.x + 100, box.y + 150)
-          await page.mouse.down()
-          await page.mouse.move(box.x + 250, box.y + 230, { steps: 8 })
-          await page.mouse.up()
-          await page
-            .locator("[data-autosave-status]")
-            .filter({ hasText: /^Saved$/ })
-            .waitFor()
-          const pdf = await PDFDocument.load(await readFile(file))
-          assert.equal(pdf.getPage(0).node.Annots()?.size(), 1)
+          // After a reload the page can still be laying out; draw until the editor records it.
+          const undo = page.getByRole("button", { name: "Undo", exact: true })
+          for (let attempt = 0; !(await undo.isEnabled()); attempt++) {
+            if (attempt === 3) assert.fail("the rectangle was not drawn")
+            const box = await page.locator("#page-1").boundingBox()
+            assert.ok(box)
+            await page.mouse.move(box.x + 100, box.y + 150)
+            await page.mouse.down()
+            await page.mouse.move(box.x + 250, box.y + 230, { steps: 8 })
+            await page.mouse.up()
+            await page.waitForTimeout(500)
+          }
+          // Poll the file: "Saved" fades after 3 s and a fast save can fade before a wait starts.
+          for (let attempt = 0; ; attempt++) {
+            const pdf = await PDFDocument.load(await readFile(file))
+            if (pdf.getPage(0).node.Annots()?.size() === 1) break
+            if (attempt > 200)
+              assert.fail(
+                `the rectangle annotation was not saved: ${JSON.stringify({
+                  status: await page.locator("[data-autosave-status]").allInnerTexts(),
+                  saves: (await control()).saves.length,
+                  annotations: await page.locator("#page-1 [data-annotation-id], #page-1 svg rect").count(),
+                  undo: await page.getByRole("button", { name: "Undo", exact: true }).isEnabled(),
+                })}`
+              )
+            await page.waitForTimeout(100)
+          }
           assert.ok(
             await page
               .getByRole("button", { name: "Undo", exact: true })
