@@ -124,10 +124,10 @@ slide IDs, referenced images and the 25/64 MiB limits, and retains 32 receipts
 for 24 hours (`advance` moves its receipt clock in milliseconds).
 The production bridge still owns authorization, size limits and atomic releases.
 
-Run checks on Modal only, from `office-remote`:
+Run checks on Modal only, from `tools/modal`:
 
 ```sh
-repo=worktrees/office-ui/one-repo
+repo=office-ui
 ./r up
 ./r sync "$repo"
 ./r run "$repo" 'pnpm install && pnpm build'
