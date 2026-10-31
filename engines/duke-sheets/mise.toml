@@ -1,0 +1,709 @@
+# mise configuration for duke-sheets
+# See https://mise.jdx.dev for documentation
+
+[tools]
+uv = "0.9"
+rust = "1.92"
+node = "20"
+"cargo:wasm-pack" = "latest"
+dotnet = "8"
+
+# Setup Tasks
+
+[tasks.setup]
+description = "Install all binding dependencies (run once)"
+run = """
+#!/bin/bash
+set -e
+
+echo "=== Setting up duke-sheets bindings ==="
+
+echo ""
+echo "1. Adding WASM target to Rust toolchain..."
+rustup target add wasm32-unknown-unknown
+
+echo ""
+echo "2. Installing maturin via uv tool..."
+uv tool install maturin
+
+echo ""
+echo "3. Setting up Python bindings environment..."
+cd bindings/python
+uv sync
+
+echo ""
+echo "=== Setup complete! ==="
+echo ""
+echo "Available commands:"
+echo "  mise run build          # Build all bindings"
+echo "  mise run test           # Build and test all bindings"
+echo "  mise run build:python   # Build Python bindings only"
+echo "  mise run build:wasm     # Build WASM bindings only"
+"""
+
+# Build Tasks
+
+[tasks.build]
+description = "Build all bindings"
+depends = ["build:python", "build:wasm", "build:nodejs"]
+
+[tasks."build:python"]
+description = "Build Python bindings"
+dir = "bindings/python"
+run = "uv run maturin develop"
+
+[tasks."build:wasm"]
+description = "Build WASM bindings"
+dir = "bindings/wasm"
+run = "wasm-pack build --target web --dev"
+
+[tasks."build:nodejs"]
+description = "Build Node.js/TypeScript bindings"
+dir = "bindings/nodejs"
+run = "npm run build"
+
+[tasks."build:wasm:release"]
+description = "Build WASM bindings (release, all targets)"
+dir = "bindings/wasm"
+run = '''
+wasm-pack build --target web --release --out-dir pkg-web
+wasm-pack build --target nodejs --release --out-dir pkg
+'''
+
+# Test Tasks
+
+[tasks.test]
+description = "Build and test all bindings"
+depends = ["test:python", "test:wasm", "test:nodejs"]
+
+[tasks."test:python"]
+description = "Test Python bindings"
+dir = "bindings/python"
+depends = ["build:python"]
+run = "uv run pytest tests/ -v"
+
+[tasks."test:wasm"]
+description = "Test WASM bindings (requires Firefox)"
+dir = "bindings/wasm"
+run = "wasm-pack test --headless --firefox"
+
+[tasks."test:wasm:node"]
+description = "Test WASM bindings (Node.js)"
+dir = "bindings/wasm"
+run = "wasm-pack test --node"
+
+[tasks."test:nodejs"]
+description = "Test Node.js/TypeScript bindings"
+dir = "bindings/nodejs"
+depends = ["build:nodejs"]
+run = "npx vitest run"
+[tasks."test:bindings"]
+alias = "tb"
+description = "Alias for 'mise run test'"
+depends = ["test"]
+
+
+[tasks."test:cargo"]
+alias = "tc"
+description = "Run Rust tests (creates required temp dirs)"
+run = """
+#!/bin/bash
+set -e
+mkdir -p /tmp/duke-sheets-urp /tmp/duke-sheets-excel
+cargo test "$@"
+"""
+
+[tasks."test:report"]
+alias = "tr"
+description = "Run all Rust tests and print a per-crate summary report"
+run = "bash tools/test-report.sh"
+
+[tasks."features:verify"]
+description = "Parse FEATURES.md, run tests linked from rows claiming support, fail if any claim's test fails or any claim has no linked test"
+run = "python3 tools/features_verify.py"
+
+# Clean Tasks
+
+[tasks.clean]
+description = "Clean all binding build artifacts"
+depends = ["clean:python", "clean:wasm"]
+
+[tasks."clean:python"]
+description = "Clean Python binding artifacts"
+dir = "bindings/python"
+run = """
+rm -rf target/
+rm -rf .venv/
+rm -rf *.egg-info/
+rm -rf dist/
+rm -rf build/
+find . -name "*.so" -delete
+find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+"""
+
+[tasks."clean:wasm"]
+description = "Clean WASM binding artifacts"
+dir = "bindings/wasm"
+run = """
+rm -rf target/
+rm -rf pkg/
+"""
+
+# Development Tasks
+
+[tasks.demo]
+description = "Build WASM bindings and serve the demo at http://localhost:8080"
+depends = ["build:wasm"]
+dir = "bindings/wasm"
+run = "python3 -m http.server 8080"
+
+[tasks.dev]
+description = "Build bindings in development mode and run tests"
+depends = ["build", "test"]
+
+[tasks."dev:python"]
+description = "Python development cycle"
+depends = ["build:python", "test:python"]
+
+[tasks."dev:wasm"]
+description = "WASM development cycle"
+depends = ["build:wasm", "test:wasm:node"]
+
+# Docker Image Tasks
+
+[tasks."docker:build"]
+description = "Build the PyUNO Docker image (LibreOffice + URP)"
+run = "docker build -t duke-sheets-pyuno tests/fixtures/pyuno"
+
+# E2E Test Tasks
+#
+# `test:lo` and `test:excel` are thin passthrough wrappers around
+# `cargo test` for targeted, single-backend runs. The LibreOffice
+# container and Windows Excel VM are auto-started lazily by the test code
+# itself (via the duke-sheets-test-harness crate), so the wrappers only
+# need to ensure the shared host directories exist and serialize tests
+# with `RUST_TEST_THREADS=1`.
+#
+# Filters and any other `cargo test` arguments are passed through after
+# `--`, e.g. `mise run test:lo -- --test e2e -- --ignored`.
+#
+# For whole-suite runs prefer `test:fast` / `test:all`, which drive
+# `tools/run-tests.py` instead. `RUST_TEST_THREADS=1` here applies to
+# every binary in the invocation, so using it for the whole workspace
+# serializes the ~2800 tests that never touch a backend along with the
+# ones that do.
+
+[tasks."test:lo"]
+description = "Run cargo tests with LibreOffice auto-start. Args after -- pass through to cargo test."
+run = """
+#!/bin/bash
+set -e
+mkdir -p /tmp/duke-sheets-urp
+RUST_TEST_THREADS=1 cargo test "$@"
+"""
+
+[tasks."test:excel"]
+description = "Run cargo tests with Excel COM bridge auto-start. Args after -- pass through to cargo test."
+run = """
+#!/bin/bash
+set -e
+mkdir -p /tmp/duke-sheets-excel
+RUST_TEST_THREADS=1 cargo test "$@"
+"""
+
+# Parity/corpus tests run via test:lo (which delegates to cargo test).
+# The parity tests in `crates/duke-sheets/tests/{formula,xlsb,chart}_parity.rs`
+# auto-generate their `data/*-parity.xlsx`/`.xlsb` fixtures via the
+# `duke_sheets_test_harness::fixture::ensure_via_cargo_test()` helper on
+# first run; subsequent runs reuse the cached file. Examples:
+#
+#   mise run test:lo -- --test formula_parity -- --ignored
+#   mise run test:lo -- --test xlsb_parity -- --ignored
+#   mise run test:lo -- --test chart_parity -- --ignored
+#   mise run test:lo -- --test chart_corpus -- --ignored   # needs DUKE_CORPUS_DIR
+
+[tasks."test:fast"]
+alias = "tf"
+description = "Run every test that needs no backend, fully parallel. Args pass through to tools/run-tests.py."
+run = "python3 tools/run-tests.py --groups pure \"$@\""
+
+[tasks."test:all"]
+alias = "ta"
+description = "Run the full test suite: pure tests in parallel, LibreOffice and Excel groups serial and concurrent with them."
+run = "python3 tools/run-tests.py \"$@\""
+
+# Windows VM Tasks (Excel COM bridge via QEMU/KVM)
+
+[tasks."vm:build-qemu"]
+description = "Build QEMU 9.2.3 into .qemu/ (survives reboots)"
+run = """
+#!/bin/bash
+set -euo pipefail
+
+QEMU_VERSION="9.2.3"
+REPO_DIR="$(pwd)"
+INSTALL_DIR="$REPO_DIR/.qemu"
+BUILD_DIR="$INSTALL_DIR/build"
+
+# Skip if already built
+if [ -x "$INSTALL_DIR/qemu-system-x86_64" ]; then
+    existing_ver=$("$INSTALL_DIR/qemu-system-x86_64" --version 2>/dev/null | head -1 | grep -oP '\\d+\\.\\d+\\.\\d+' || true)
+    if [ "$existing_ver" = "$QEMU_VERSION" ]; then
+        echo "QEMU $QEMU_VERSION already built at $INSTALL_DIR, skipping."
+        exit 0
+    fi
+fi
+
+mkdir -p "$BUILD_DIR"
+
+TARBALL="$BUILD_DIR/qemu-${QEMU_VERSION}.tar.xz"
+SRC="$BUILD_DIR/qemu-${QEMU_VERSION}"
+
+if [ ! -f "$TARBALL" ]; then
+    echo "Downloading QEMU ${QEMU_VERSION}..."
+    curl -L -o "$TARBALL" "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz"
+fi
+
+if [ ! -d "$SRC" ]; then
+    echo "Extracting..."
+    tar xf "$TARBALL" -C "$BUILD_DIR"
+fi
+
+cd "$SRC"
+rm -rf build
+
+export PKG_CONFIG_PATH="/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+
+echo "Configuring (x86_64 system emulator only)..."
+./configure \
+    --target-list=x86_64-softmmu \
+    --disable-gtk --disable-sdl --disable-opengl --disable-virglrenderer \
+    --enable-vnc --enable-slirp \
+    --disable-docs \
+    2>&1 | grep -E "^(slirp|Build dir)" || true
+
+echo "Building with $(nproc) cores..."
+ninja -C build -j"$(nproc)" qemu-system-x86_64 qemu-img 2>&1 | tail -5
+
+cp build/qemu-system-x86_64 build/qemu-img "$INSTALL_DIR/"
+echo "Installed to $INSTALL_DIR/"
+"$INSTALL_DIR/qemu-system-x86_64" --version | head -1
+"""
+
+[tasks."vm:start"]
+description = "Start the Windows Excel VM (requires vm:build-qemu)"
+depends = ["vm:build-qemu"]
+run = "bash tools/vm/qemu-start.sh"
+
+[tasks."vm:stop"]
+description = "Stop the Windows Excel VM"
+run = "bash tools/vm/qemu-stop.sh"
+
+[tasks."vm:build-bridge"]
+description = "Cross-compile the C# Excel bridge server for Windows"
+dir = "tools/excel-bridge-server"
+run = """
+#!/bin/bash
+set -e
+SHARE_DIR="/tmp/duke-sheets-excel"
+mkdir -p "$SHARE_DIR"
+echo "Building ExcelBridgeServer.exe for Windows..."
+dotnet publish -c Release -r win-x64 --self-contained \
+    -p:PublishSingleFile=true -o "$SHARE_DIR/"
+echo "Published to $SHARE_DIR/ExcelBridgeServer.exe"
+"""
+
+[tasks."vm:deploy-bridge"]
+description = "Build bridge, copy to VM, restart (requires vm:start)"
+depends = ["vm:build-bridge"]
+run = """
+#!/bin/bash
+set -e
+WINRM="python3 tools/vm/winrm-exec.py"
+
+echo "Stopping bridge on VM..."
+$WINRM -ps 'Stop-ScheduledTask -TaskName "ExcelBridgeServer" -ErrorAction SilentlyContinue; Start-Sleep 2'
+
+echo "Copying new exe from SMB share..."
+$WINRM -ps 'Copy-Item "\\\\10.0.2.4\\qemu\\ExcelBridgeServer.exe" "C:\\tools\\ExcelBridgeServer.exe" -Force'
+
+echo "Starting bridge..."
+$WINRM -ps 'Start-ScheduledTask -TaskName "ExcelBridgeServer"; Start-Sleep 2; (Get-ScheduledTask -TaskName "ExcelBridgeServer").State'
+
+echo "Verifying bridge is reachable..."
+if echo '{"id":1,"cmd":"Init","params":{}}' | ncat -w 5 localhost 9876 2>/dev/null | grep -q '"ok"'; then
+    echo "Bridge is up and responding!"
+else
+    echo "WARNING: Bridge may not be ready yet (Init check failed)"
+fi
+"""
+
+# URP Bridge Tasks (LibreOffice direct connection via UNO Remote Protocol)
+
+[tasks."urp:start"]
+description = "Start LibreOffice in Docker with URP socket on port 2002 and shared /tmp volume"
+depends = ["docker:build"]
+run = """
+#!/bin/bash
+set -e
+mkdir -p /tmp/duke-sheets-urp
+echo "Starting LibreOffice with URP socket on localhost:2002..."
+echo "Shared volume: /tmp/duke-sheets-urp"
+echo "Press Ctrl+C to stop."
+docker run --rm -p 2002:2002 -v /tmp/duke-sheets-urp:/tmp/duke-sheets-urp duke-sheets-pyuno \
+  bash -c 'soffice --headless --accept="socket,host=0.0.0.0,port=2002;urp;StarOffice.ComponentContext" & sleep 2 && echo "LibreOffice ready on port 2002" && wait'
+"""
+
+[tasks."perf:calc"]
+description = "Run calc profiler with perf stat and emit JSON"
+run = '''
+#!/bin/bash
+set -euo pipefail
+
+FILE=""
+FIXTURE=""
+SHEET=""
+CPU=""
+SERIAL=0
+EVENTS="instructions,cycles,task-clock,cache-misses,branches,branch-misses"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --file) FILE="$2"; shift 2 ;;
+    --fixture) FIXTURE="$2"; shift 2 ;;
+    --sheet) SHEET="$2"; shift 2 ;;
+    --cpu) CPU="$2"; shift 2 ;;
+    --serial) SERIAL=1; shift ;;
+    --events) EVENTS="$2"; shift 2 ;;
+    *) echo "Unknown arg: $1"; echo "Usage: mise run perf:calc -- --file path.xlsx | --fixture repeated-lookups [--sheet N] [--serial] [--cpu N] [--events ...]"; exit 1 ;;
+  esac
+done
+
+[[ -n "$FILE" && -n "$FIXTURE" ]] && { echo "Provide either --file or --fixture, not both"; exit 1; }
+[[ -z "$FILE" && -z "$FIXTURE" ]] && { echo "Missing --file <path.xlsx> or --fixture <name>"; exit 1; }
+
+cargo build --release -p duke-sheets --features full --example profile_calc >/dev/null
+
+JSON_OUT=$(mktemp)
+PERF_OUT=$(mktemp)
+
+CMD=(./target/release/examples/profile_calc --json --once)
+[[ -n "$FILE" ]] && CMD+=("$FILE")
+[[ -n "$FIXTURE" ]] && CMD+=(--fixture "$FIXTURE")
+[[ -n "$SHEET" ]] && CMD+=(--sheet "$SHEET")
+[[ "$SERIAL" == "1" ]] && CMD+=(--serial)
+
+if [[ -n "$CPU" ]]; then
+  PERF_CMD=(taskset -c "$CPU" perf stat -x, -e "$EVENTS" -- "${CMD[@]}")
+else
+  PERF_CMD=(perf stat -x, -e "$EVENTS" -- "${CMD[@]}")
+fi
+
+set +e
+"${PERF_CMD[@]}" >"$JSON_OUT" 2>"$PERF_OUT"
+STATUS=$?
+set -e
+
+python3 - "$JSON_OUT" "$PERF_OUT" "$STATUS" <<'PY'
+import json, sys
+json_path, perf_path, status = sys.argv[1], sys.argv[2], int(sys.argv[3])
+
+with open(json_path) as f:
+    payload = json.load(f)
+
+metrics = {}
+with open(perf_path) as f:
+    for raw in f:
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        parts = line.split(',')
+        if len(parts) < 3:
+            continue
+        value, unit, event = parts[0], parts[1], parts[2]
+        key = event.strip()
+        if value == '<not supported>':
+            metrics[key] = None
+            continue
+        try:
+            metrics[key] = float(value.replace(',', ''))
+        except ValueError:
+            metrics[key] = value
+
+target_formulas = payload.get('target_formulas') or payload.get('formula_count') or 0
+instructions = metrics.get('instructions')
+cycles = metrics.get('cycles')
+
+payload['perf_exit_status'] = status
+payload['perf_metrics'] = metrics
+payload['instructions_per_formula'] = (instructions / target_formulas) if instructions not in (None, 0) and target_formulas else None
+payload['cycles_per_formula'] = (cycles / target_formulas) if cycles not in (None, 0) and target_formulas else None
+
+print(json.dumps(payload, indent=2, sort_keys=True))
+PY
+
+exit "$STATUS"
+'''
+
+[tasks."perf:calc:callgrind"]
+description = "Run calc profiler with callgrind and emit JSON"
+run = '''
+#!/bin/bash
+set -euo pipefail
+
+FILE=""
+FIXTURE=""
+SHEET=""
+SERIAL=1
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --file) FILE="$2"; shift 2 ;;
+    --fixture) FIXTURE="$2"; shift 2 ;;
+    --sheet) SHEET="$2"; shift 2 ;;
+    --serial) SERIAL=1; shift ;;
+    *) echo "Unknown arg: $1"; echo "Usage: mise run perf:calc:callgrind -- --file path.xlsx | --fixture repeated-lookups [--sheet N] [--serial]"; exit 1 ;;
+  esac
+done
+
+[[ -n "$FILE" && -n "$FIXTURE" ]] && { echo "Provide either --file or --fixture, not both"; exit 1; }
+[[ -z "$FILE" && -z "$FIXTURE" ]] && { echo "Missing --file <path.xlsx> or --fixture <name>"; exit 1; }
+
+cargo build --release -p duke-sheets --features full --example profile_calc >/dev/null
+
+OPEN_JSON=$(mktemp)
+OPEN_CG=$(mktemp)
+CALC_JSON=$(mktemp)
+CALC_CG=$(mktemp)
+
+OPEN_CMD=(./target/release/examples/profile_calc --json --once --open-only)
+CALC_CMD=(./target/release/examples/profile_calc --json --once)
+[[ -n "$FILE" ]] && OPEN_CMD+=("$FILE") && CALC_CMD+=("$FILE")
+[[ -n "$FIXTURE" ]] && OPEN_CMD+=(--fixture "$FIXTURE") && CALC_CMD+=(--fixture "$FIXTURE")
+[[ -n "$SHEET" ]] && OPEN_CMD+=(--sheet "$SHEET") && CALC_CMD+=(--sheet "$SHEET")
+[[ "$SERIAL" == "1" ]] && OPEN_CMD+=(--serial) && CALC_CMD+=(--serial)
+
+set +e
+valgrind --tool=callgrind --callgrind-out-file="$OPEN_CG" -- "${OPEN_CMD[@]}" >"$OPEN_JSON" 2>/dev/null
+OPEN_STATUS=$?
+valgrind --tool=callgrind --callgrind-out-file="$CALC_CG" -- "${CALC_CMD[@]}" >"$CALC_JSON" 2>/dev/null
+CALC_STATUS=$?
+set -e
+
+python3 - "$OPEN_JSON" "$OPEN_CG" "$OPEN_STATUS" "$CALC_JSON" "$CALC_CG" "$CALC_STATUS" <<'PY'
+import json, sys
+
+open_json_path, open_cg_path, open_status, calc_json_path, calc_cg_path, calc_status = sys.argv[1:7]
+
+def load_json(path):
+    with open(path) as f:
+        return json.load(f)
+
+def callgrind_summary(path):
+    with open(path) as f:
+        for line in f:
+            if line.startswith('summary:'):
+                return int(line.split(':', 1)[1].strip())
+    return None
+
+open_payload = load_json(open_json_path)
+calc_payload = load_json(calc_json_path)
+open_ir = callgrind_summary(open_cg_path)
+total_ir = callgrind_summary(calc_cg_path)
+calc_ir = None
+if open_ir is not None and total_ir is not None:
+    calc_ir = max(0, total_ir - open_ir)
+
+target_formulas = calc_payload.get('target_formulas') or calc_payload.get('formula_count') or 0
+
+payload = {
+    **calc_payload,
+    'callgrind': {
+        'open_exit_status': int(open_status),
+        'calc_exit_status': int(calc_status),
+        'open_ir': open_ir,
+        'total_ir': total_ir,
+        'calc_ir': calc_ir,
+        'calc_ir_per_formula': (calc_ir / target_formulas) if calc_ir is not None and target_formulas else None,
+        'open_only_open_ms': open_payload.get('open_ms'),
+    }
+}
+
+print(json.dumps(payload, indent=2, sort_keys=True))
+
+if int(open_status) != 0 or int(calc_status) != 0:
+    sys.exit(int(calc_status) or int(open_status))
+PY
+'''
+
+[tasks."perf:calc:snapshot"]
+description = "Capture a callgrind JSON snapshot for a calc workload"
+run = '''
+#!/bin/bash
+set -euo pipefail
+
+OUT=""
+ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --out) OUT="$2"; shift 2 ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+
+[[ -z "$OUT" ]] && { echo "Missing --out <path.json>"; exit 1; }
+mkdir -p "$(dirname "$OUT")"
+
+mise run perf:calc:callgrind -- "${ARGS[@]}" > "$OUT"
+echo "Wrote snapshot: $OUT"
+'''
+
+[tasks."perf:calc:compare"]
+description = "Compare current callgrind calc_ir_per_formula against a JSON snapshot"
+run = '''
+#!/bin/bash
+set -euo pipefail
+
+BASELINE=""
+TOLERANCE="0.10"
+ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --baseline) BASELINE="$2"; shift 2 ;;
+    --tolerance) TOLERANCE="$2"; shift 2 ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+
+[[ -z "$BASELINE" ]] && { echo "Missing --baseline <path.json>"; exit 1; }
+[[ ! -f "$BASELINE" ]] && { echo "Baseline not found: $BASELINE"; exit 1; }
+
+CURRENT=$(mktemp)
+mise run perf:calc:callgrind -- "${ARGS[@]}" > "$CURRENT"
+
+python3 - "$BASELINE" "$CURRENT" "$TOLERANCE" <<'PY'
+import json, sys
+
+baseline_path, current_path, tolerance = sys.argv[1], sys.argv[2], float(sys.argv[3])
+
+with open(baseline_path) as f:
+    baseline = json.load(f)
+with open(current_path) as f:
+    current = json.load(f)
+
+base = baseline["callgrind"]["calc_ir_per_formula"]
+curr = current["callgrind"]["calc_ir_per_formula"]
+if base is None or curr is None:
+    raise SystemExit("calc_ir_per_formula missing from baseline or current run")
+
+delta = (curr - base) / base
+result = {
+    "baseline": baseline_path,
+    "baseline_calc_ir_per_formula": base,
+    "current_calc_ir_per_formula": curr,
+    "delta_ratio": delta,
+    "delta_percent": delta * 100.0,
+    "tolerance_ratio": tolerance,
+    "regressed": delta > tolerance,
+}
+print(json.dumps(result, indent=2, sort_keys=True))
+if result["regressed"]:
+    raise SystemExit(1)
+PY
+'''
+
+# Release Tasks
+
+[tasks."release:node"]
+description = "Bump Node.js binding version and rebuild"
+run = '''
+#!/bin/bash
+set -euo pipefail
+VERSION="${1:?Usage: mise run release:node <version>}"
+echo "=== Releasing @dukelib/sheets v${VERSION} ==="
+
+# Bump source of truth + sync platform packages
+cd bindings/nodejs
+npm version "${VERSION}" --no-git-tag-version
+npx napi version
+cd ../..
+
+# Rebuild (regenerates index.js with version stamps)
+mise run build:nodejs
+
+echo "Done. Verify with: git diff bindings/nodejs/"
+'''
+
+[tasks."release:python"]
+description = "Bump Python binding version"
+run = '''
+#!/bin/bash
+set -euo pipefail
+VERSION="${1:?Usage: mise run release:python <version>}"
+
+echo "=== Releasing duke-sheets (Python) v${VERSION} ==="
+
+# Two sources of truth that must stay in sync
+# (no build tool propagates between them)
+sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" bindings/python/Cargo.toml
+sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" bindings/python/pyproject.toml
+
+echo ""
+echo "Done. Verify with: git diff bindings/python/"
+'''
+
+[tasks."release:wasm"]
+description = "Bump WASM binding version and rebuild"
+run = '''
+#!/bin/bash
+set -euo pipefail
+VERSION="${1:?Usage: mise run release:wasm <version>}"
+echo "=== Releasing duke-sheets-wasm v${VERSION} ==="
+
+# Bump source of truth
+sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" bindings/wasm/Cargo.toml
+
+# Rebuild (wasm-pack stamps Cargo.toml version into pkg/package.json)
+mise run build:wasm:release
+
+echo "Done. Verify with: git diff bindings/wasm/"
+'''
+
+[tasks."release:all"]
+description = "Bump all binding versions and rebuild. Usage: mise run release:all --node 0.1.12 --python 0.1.3 --wasm 0.1.6"
+run = '''
+#!/bin/bash
+set -euo pipefail
+
+NODE_V="" PY_V="" WASM_V=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --node)    NODE_V="$2"; shift 2 ;;
+    --python)  PY_V="$2"; shift 2 ;;
+    --wasm)    WASM_V="$2"; shift 2 ;;
+    *) echo "Unknown arg: $1. Usage: mise run release:all --node X --python Y --wasm Z"; exit 1 ;;
+  esac
+done
+
+[[ -z "$NODE_V" ]]  && { echo "Missing --node <version>"; exit 1; }
+[[ -z "$PY_V" ]]    && { echo "Missing --python <version>"; exit 1; }
+[[ -z "$WASM_V" ]]  && { echo "Missing --wasm <version>"; exit 1; }
+
+echo "=== Releasing all bindings ==="
+echo "  Node.js: ${NODE_V}"
+echo "  Python:  ${PY_V}"
+echo "  WASM:    ${WASM_V}"
+echo ""
+
+mise run release:node "${NODE_V}"
+mise run release:python "${PY_V}"
+mise run release:wasm "${WASM_V}"
+
+echo ""
+echo "All versions bumped. To commit and tag:"
+echo "  git add bindings/ && git commit -m 'release: node ${NODE_V}, python ${PY_V}, wasm ${WASM_V}'"
+echo "  git tag node-v${NODE_V} && git tag python-v${PY_V} && git tag wasm-v${WASM_V}"
+echo "  git push && git push --tags"
+'''

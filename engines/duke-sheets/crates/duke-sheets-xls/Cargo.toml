@@ -1,0 +1,25 @@
+[package]
+name = "duke-sheets-xls"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "XLS (BIFF8) reader/writer for duke-sheets"
+
+[dependencies]
+duke-sheets-core.workspace = true
+duke-sheets-formula.workspace = true
+duke-sheets-chart.workspace = true
+duke-sheets-crypto.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+log.workspace = true
+md-5 = "0.10"
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true
+duke-sheets-libreoffice = { path = "../duke-sheets-libreoffice" }
+duke-sheets-test-harness.workspace = true
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "net"] }

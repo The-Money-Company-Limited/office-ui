@@ -1,0 +1,27 @@
+[package]
+name = "duke-sheets-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Core data structures for duke-sheets spreadsheet library"
+
+[dependencies]
+thiserror.workspace = true
+ahash.workspace = true
+chrono.workspace = true
+ssfmt.workspace = true
+# parse/write expose drawing_part, which the DrawingText/Color
+# conversion helpers in src/drawing.rs need; without them the core
+# crate does not build standalone.
+duke-sheets-chart = { workspace = true, features = ["parse", "write"] }
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+proptest.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde", "chrono/serde"]

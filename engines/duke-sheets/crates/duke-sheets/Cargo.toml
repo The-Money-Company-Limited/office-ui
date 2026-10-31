@@ -1,0 +1,76 @@
+[package]
+name = "duke-sheets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "A Rust library for reading, writing, and manipulating spreadsheets (Excel, CSV)"
+keywords = ["excel", "xlsx", "xls", "spreadsheet", "csv"]
+categories = ["parser-implementations", "encoding"]
+
+[dependencies]
+duke-sheets-core.workspace = true
+duke-sheets-crypto.workspace = true
+duke-sheets-formula.workspace = true
+duke-sheets-xlsx.workspace = true
+duke-sheets-xls = { workspace = true, optional = true }
+duke-sheets-xlsb = { workspace = true, optional = true }
+duke-sheets-csv.workspace = true
+duke-sheets-chart.workspace = true
+zip.workspace = true
+thiserror.workspace = true
+ahash.workspace = true
+dashmap.workspace = true
+rayon = { workspace = true, optional = true }
+
+[dev-dependencies]
+rayon.workspace = true
+tempfile.workspace = true
+pretty_assertions.workspace = true
+zip.workspace = true
+criterion.workspace = true
+serde_json.workspace = true
+calamine = "0.26"
+umya-spreadsheet = "2.3"
+rust_xlsxwriter = "0.82"
+# Reach into the CFB layer in tests for tamper-detection coverage.
+duke-sheets-xls.workspace = true
+duke-sheets-libreoffice = { path = "../duke-sheets-libreoffice" }
+duke-sheets-test-harness.workspace = true
+libreoffice-urp = { path = "../libreoffice-urp" }
+tokio = { version = "1", features = ["full", "test-util"] }
+
+[features]
+default = ["full"]
+xlsx = []
+xls = ["dep:duke-sheets-xls"]
+xlsb = ["dep:duke-sheets-xlsb"]
+csv = []
+parallel = ["dep:rayon"]
+full = ["xlsx", "xls", "xlsb", "csv", "parallel"]
+
+[[bench]]
+name = "xlsx_read"
+harness = false
+
+[[bench]]
+name = "xlsx_write"
+harness = false
+
+
+[[bench]]
+name = "csv_roundtrip"
+harness = false
+
+[[bench]]
+name = "formula_parser"
+harness = false
+
+[[bench]]
+name = "calculation"
+harness = false
+
+[[example]]
+name = "profile_calc"
+required-features = ["full"]

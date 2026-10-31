@@ -1,0 +1,116 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/duke-sheets-core",
+    "crates/duke-sheets-formula",
+    "crates/duke-sheets-xlsx",
+    "crates/duke-sheets-xls",
+    "crates/duke-sheets-csv",
+    "crates/duke-sheets-chart",
+    "crates/duke-sheets",
+    "crates/duke-sheets-ffi",
+    "crates/duke-sheets-cli",
+    "crates/excel-com-protocol",
+    "crates/duke-sheets-excel-com",
+    "crates/libreoffice-urp",
+    "crates/duke-sheets-libreoffice",
+    "crates/duke-sheets-html",
+    "crates/duke-sheets-xlsb",
+    "crates/duke-sheets-vml",
+    "crates/duke-sheets-crypto",
+    "crates/duke-sheets-test-harness",
+    "crates/ssfmt",
+]
+# Bindings are excluded from the default workspace build
+exclude = [
+    "bindings/python",
+    "bindings/wasm",
+    "bindings/nodejs",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/guseggert/duke-sheets"
+rust-version = "1.82"
+
+[workspace.dependencies]
+# Internal crates
+duke-sheets-core = { path = "crates/duke-sheets-core" }
+duke-sheets-formula = { path = "crates/duke-sheets-formula" }
+duke-sheets-xlsx = { path = "crates/duke-sheets-xlsx" }
+duke-sheets-xls = { path = "crates/duke-sheets-xls" }
+duke-sheets-csv = { path = "crates/duke-sheets-csv" }
+duke-sheets-chart = { path = "crates/duke-sheets-chart" }
+duke-sheets-vml = { path = "crates/duke-sheets-vml" }
+duke-sheets-html = { path = "crates/duke-sheets-html" }
+duke-sheets-xlsb = { path = "crates/duke-sheets-xlsb" }
+duke-sheets-crypto = { path = "crates/duke-sheets-crypto" }
+duke-sheets-test-harness = { path = "crates/duke-sheets-test-harness" }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+log = "0.4"
+tracing = "0.1"
+
+# XML parsing (for XLSX)
+quick-xml = "0.37"
+
+# ZIP handling (for XLSX) - only deflate needed; bzip2/lzma/zstd use C deps that break WASM
+# `time` feature removed: it calls SystemTime::now() via DateTime::default_for_write(),
+# which panics on wasm32-unknown-unknown. Without it, zip uses a fixed date (1980-01-01).
+zip = { version = "2.1", default-features = false, features = ["deflate"] }
+
+# Text encoding
+encoding_rs = "0.8"
+
+# CSV handling
+csv = "1.3"
+
+# Date/time
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+
+# Decimal precision for financial calculations
+rust_decimal = "1.35"
+
+# Number format rendering (Excel-compatible ECMA-376 format codes)
+ssfmt = { path = "crates/ssfmt" }
+
+# Regex (for formulas, number formats)
+regex = "1.10"
+lazy-regex = "3.1"
+
+# Lazy static (for FFI global context)
+lazy_static = "1.4"
+once_cell = "1.19"
+
+# Hash functions (for style deduplication)
+ahash = "0.8"
+dashmap = "6.1"
+
+# Parallel calculation (optional)
+rayon = "1.11"
+
+# Serialization (optional, for debugging)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Dev dependencies (in workspace.dependencies so crates can inherit)
+tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.4"
+pretty_assertions = "1.4"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[profile.bench]
+lto = true

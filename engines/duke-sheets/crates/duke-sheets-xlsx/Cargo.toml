@@ -1,0 +1,31 @@
+[package]
+name = "duke-sheets-xlsx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "XLSX (Office Open XML) reader/writer for duke-sheets"
+
+[dependencies]
+duke-sheets-core.workspace = true
+duke-sheets-formula.workspace = true
+duke-sheets-chart = { workspace = true, features = ["parse", "write"] }
+duke-sheets-vml.workspace = true
+duke-sheets-crypto.workspace = true
+# Encrypted .xlsx files are CFB-wrapped, not ZIP. We reuse the
+# corpus-hardened CFB parser from the XLS crate.
+duke-sheets-xls.workspace = true
+thiserror.workspace = true
+quick-xml.workspace = true
+zip.workspace = true
+chrono.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true
+duke-sheets-libreoffice = { path = "../duke-sheets-libreoffice" }
+duke-sheets-test-harness.workspace = true
+libreoffice-urp = { path = "../libreoffice-urp" }
+tokio = { version = "1", features = ["full", "test-util"] }

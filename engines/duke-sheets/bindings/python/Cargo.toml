@@ -1,0 +1,22 @@
+[package]
+name = "duke-sheets-python"
+version = "0.1.20"
+edition = "2021"
+description = "Python bindings for duke-sheets - high-performance Excel library"
+license = "MIT"
+publish = false
+
+[lib]
+name = "duke_sheets"
+crate-type = ["cdylib"]
+
+[dependencies]
+duke-sheets = { path = "../../crates/duke-sheets", features = ["full"] }
+duke-sheets-core = { path = "../../crates/duke-sheets-core" }
+duke-sheets-xlsx = { path = "../../crates/duke-sheets-xlsx" }
+duke-sheets-csv = { path = "../../crates/duke-sheets-csv" }
+duke-sheets-chart = { path = "../../crates/duke-sheets-chart" }
+pyo3 = { version = "0.22", features = ["extension-module", "multiple-pymethods", "abi3-py38"] }
+
+[features]
+default = []

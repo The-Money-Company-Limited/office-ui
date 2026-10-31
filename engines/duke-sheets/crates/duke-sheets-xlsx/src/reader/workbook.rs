@@ -1,0 +1,342 @@
+//! Workbook-level XLSX reader helpers (workbook.xml, workbook.xml.rels, sheet .rels).
+
+use std::collections::HashMap;
+use std::io::{BufReader, Read, Seek};
+use std::sync::Arc;
+
+use quick_xml::events::Event;
+use quick_xml::name::ResolveResult;
+use quick_xml::reader::NsReader;
+
+use crate::error::{XlsxError, XlsxResult};
+use crate::opc::{OpcPackage, PartName, RelationshipKind, RelationshipSet, RelationshipSource};
+use crate::XlsxPackagePolicy;
+use duke_sheets_core::{SheetVisibility, WorkbookProtection};
+
+/// Parsed workbook properties from workbook.xml
+pub(super) struct WorkbookProps {
+    pub(super) sheets: Vec<SheetEntry>,
+    pub(super) date_1904: bool,
+    pub(super) workbook_protection: Option<WorkbookProtection>,
+    pub(super) named_ranges: Vec<duke_sheets_core::named_range::NamedRange>,
+}
+
+pub(super) struct WorkbookRels {
+    pub(super) sheet_paths: HashMap<String, String>,
+    pub(super) chartsheet_paths: HashMap<String, String>,
+    pub(super) theme_path: Option<String>,
+    pub(super) styles_path: Option<String>,
+    pub(super) shared_strings_path: Option<String>,
+    /// Relationship ids of valid but unmodeled sheet kinds
+    /// (dialog/macro sheets); their sheet entries are skipped.
+    pub(super) unmodeled_sheet_rels: std::collections::HashSet<String>,
+}
+
+pub(super) struct SheetEntry {
+    pub(super) name: String,
+    pub(super) r_id: String,
+    pub(super) visibility: SheetVisibility,
+}
+
+/// Read workbook.xml to get sheet names, rIds, workbook properties,
+/// and defined names.
+pub(super) fn read_workbook_xml<R: Read>(
+    reader: R,
+    policy: XlsxPackagePolicy,
+) -> XlsxResult<WorkbookProps> {
+    use duke_sheets_core::named_range::{NameScope, NamedRange};
+
+    let mut xml_reader = NsReader::from_reader(BufReader::new(reader));
+    xml_reader.config_mut().trim_text(true);
+
+    let mut buf = Vec::new();
+    // Compatible mode keeps the historical namespace-agnostic parse.
+    if policy == XlsxPackagePolicy::Strict {
+        loop {
+            match xml_reader.read_resolved_event_into(&mut buf) {
+                Ok((ResolveResult::Bound(namespace), Event::Start(element)))
+                    if element.name().local_name().as_ref() == b"workbook"
+                        && matches!(
+                            namespace.as_ref(),
+                            b"http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                                | b"http://purl.oclc.org/ooxml/spreadsheetml/main"
+                        ) =>
+                {
+                    break;
+                }
+                Ok((_, Event::Decl(_) | Event::Comment(_) | Event::PI(_))) => {}
+                Ok((_, Event::Text(text)))
+                    if text.unescape().is_ok_and(|value| value.trim().is_empty()) => {}
+                Ok((_, Event::Eof)) => {
+                    return Err(XlsxError::InvalidFormat(
+                        "Workbook part has no workbook root element".into(),
+                    ));
+                }
+                Ok(_) => {
+                    return Err(XlsxError::InvalidFormat(
+                        "Workbook part has an invalid root element or namespace".into(),
+                    ));
+                }
+                Err(error) => return Err(XlsxError::Xml(error)),
+            }
+            buf.clear();
+        }
+    }
+    buf.clear();
+    let mut sheets = Vec::new();
+    let mut date_1904 = false;
+    let mut workbook_protection = None;
+    let mut named_ranges = Vec::new();
+
+    loop {
+        match xml_reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(ref e)) => match e.name().local_name().as_ref() {
+                b"sheet" => {
+                    if !parse_sheet_element(e, &mut sheets) && policy == XlsxPackagePolicy::Strict {
+                        return Err(XlsxError::InvalidFormat(
+                            "Workbook sheet is missing name or relationship id".into(),
+                        ));
+                    }
+                }
+                b"workbookPr" => parse_workbook_pr(e, &mut date_1904),
+                b"workbookProtection" => {
+                    workbook_protection = parse_workbook_protection(e);
+                }
+                _ => {}
+            },
+            Ok(Event::Start(ref e)) => match e.name().local_name().as_ref() {
+                b"sheet" => {
+                    if !parse_sheet_element(e, &mut sheets) && policy == XlsxPackagePolicy::Strict {
+                        return Err(XlsxError::InvalidFormat(
+                            "Workbook sheet is missing name or relationship id".into(),
+                        ));
+                    }
+                }
+                b"workbookPr" => parse_workbook_pr(e, &mut date_1904),
+                b"workbookProtection" => {
+                    workbook_protection = parse_workbook_protection(e);
+                }
+                b"definedName" => {
+                    let mut dn_name = None;
+                    let mut local_sheet_id: Option<usize> = None;
+                    let mut comment = None;
+                    let mut hidden = false;
+
+                    for attr in e.attributes().flatten() {
+                        match attr.key.local_name().as_ref() {
+                            b"name" => {
+                                dn_name = attr.unescape_value().ok().map(|s| s.to_string());
+                            }
+                            b"localSheetId" => {
+                                local_sheet_id =
+                                    attr.unescape_value().ok().and_then(|s| s.parse().ok());
+                            }
+                            b"comment" => {
+                                comment = attr.unescape_value().ok().map(|s| s.to_string());
+                            }
+                            b"hidden" => {
+                                hidden = attr.unescape_value().ok().is_some_and(|v| {
+                                    v.as_ref() == "1" || v.eq_ignore_ascii_case("true")
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Read the text content (the refers_to expression)
+                    let mut text_buf = Vec::new();
+                    let refers_to = match xml_reader.read_event_into(&mut text_buf) {
+                        Ok(Event::Text(t)) => t.unescape().ok().map(|s| s.to_string()),
+                        _ => None,
+                    };
+
+                    if let (Some(name), Some(refers_to)) = (dn_name, refers_to) {
+                        let scope = match local_sheet_id {
+                            Some(idx) => NameScope::Sheet(idx),
+                            None => NameScope::Workbook,
+                        };
+                        let mut nr = NamedRange::new(name, refers_to, scope);
+                        nr.comment = comment;
+                        nr.hidden = hidden;
+                        named_ranges.push(nr);
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(XlsxError::Xml(e)),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(WorkbookProps {
+        sheets,
+        date_1904,
+        workbook_protection,
+        named_ranges,
+    })
+}
+
+fn parse_sheet_element(
+    e: &quick_xml::events::BytesStart<'_>,
+    sheets: &mut Vec<SheetEntry>,
+) -> bool {
+    let mut name = None;
+    let mut r_id = None;
+    let mut visibility = SheetVisibility::Visible;
+
+    for attr in e.attributes().flatten() {
+        match attr.key.local_name().as_ref() {
+            b"name" => name = attr.unescape_value().ok().map(|s| s.to_string()),
+            b"id" => r_id = attr.unescape_value().ok().map(|s| s.to_string()),
+            b"state" => {
+                if let Ok(val) = attr.unescape_value() {
+                    visibility = match val.as_ref() {
+                        "hidden" => SheetVisibility::Hidden,
+                        "veryHidden" => SheetVisibility::VeryHidden,
+                        _ => SheetVisibility::Visible,
+                    };
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let (Some(name), Some(r_id)) = (name, r_id) {
+        sheets.push(SheetEntry {
+            name,
+            r_id,
+            visibility,
+        });
+        true
+    } else {
+        false
+    }
+}
+
+fn parse_workbook_pr(e: &quick_xml::events::BytesStart<'_>, date_1904: &mut bool) {
+    for attr in e.attributes().flatten() {
+        match attr.key.local_name().as_ref() {
+            b"date1904" => {
+                if let Ok(val) = attr.unescape_value() {
+                    *date_1904 = val.as_ref() == "1" || val.eq_ignore_ascii_case("true");
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn parse_workbook_protection(e: &quick_xml::events::BytesStart<'_>) -> Option<WorkbookProtection> {
+    let mut protection = WorkbookProtection::default();
+
+    for attr in e.attributes().flatten() {
+        let Ok(value) = attr.unescape_value() else {
+            continue;
+        };
+        match attr.key.local_name().as_ref() {
+            b"lockStructure" => {
+                protection.structure =
+                    value.as_ref() == "1" || value.as_ref().eq_ignore_ascii_case("true");
+            }
+            b"lockWindows" => {
+                protection.windows =
+                    value.as_ref() == "1" || value.as_ref().eq_ignore_ascii_case("true");
+            }
+            b"workbookPassword" => {
+                if let Ok(h) = u16::from_str_radix(value.as_ref(), 16) {
+                    protection.password_hash = Some(h);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if protection.structure || protection.windows || protection.password_hash.is_some() {
+        Some(protection)
+    } else {
+        None
+    }
+}
+
+/// Read workbook.xml.rels to get sheet file paths and theme path.
+pub(super) fn read_workbook_rels<R: Read + Seek>(
+    package: &mut OpcPackage<R>,
+    workbook_path: &PartName,
+) -> XlsxResult<WorkbookRels> {
+    let source = RelationshipSource::Part(workbook_path.clone());
+    let relationships = package.relationships(&source, true)?;
+    let mut rels = HashMap::new();
+    let mut chartsheet_rels = HashMap::new();
+    let mut theme_path: Option<String> = None;
+    let mut styles_path: Option<String> = None;
+    let mut shared_strings_path: Option<String> = None;
+    let mut unmodeled_sheet_rels = std::collections::HashSet::new();
+    for relationship in relationships.iter() {
+        let Some(kind) = relationship.kind() else {
+            continue;
+        };
+        // Valid OOXML sheet kinds this library does not model yet; a
+        // capability limitation, never a conformance violation.
+        if let Some(label) = kind.unmodeled_sheet_label() {
+            if package.open_related_part(relationship)?.is_none() {
+                continue;
+            }
+            package.diagnostics_mut().warning(
+                crate::opc::XlsxDiagnosticCode::UnsupportedSheetType,
+                format!("{label} sheets are not supported by the workbook model"),
+                Some(workbook_path.as_str()),
+                Some(&relationship.id),
+                Some(&relationship.raw_target),
+            );
+            unmodeled_sheet_rels.insert(relationship.id.clone());
+            continue;
+        }
+        if !matches!(
+            kind,
+            RelationshipKind::Worksheet
+                | RelationshipKind::Chartsheet
+                | RelationshipKind::Theme
+                | RelationshipKind::Styles
+                | RelationshipKind::SharedStrings
+        ) {
+            continue;
+        }
+        let Some(path) = relationship.internal_path() else {
+            continue;
+        };
+        if package.open_related_part(relationship)?.is_none() {
+            continue;
+        }
+        if kind == RelationshipKind::Worksheet {
+            rels.insert(relationship.id.clone(), path.to_string());
+        } else if kind == RelationshipKind::Chartsheet {
+            chartsheet_rels.insert(relationship.id.clone(), path.to_string());
+        } else if kind == RelationshipKind::Theme {
+            theme_path = Some(path.to_string());
+        } else if kind == RelationshipKind::Styles {
+            styles_path = Some(path.to_string());
+        } else if kind == RelationshipKind::SharedStrings {
+            shared_strings_path = Some(path.to_string());
+        }
+    }
+
+    Ok(WorkbookRels {
+        sheet_paths: rels,
+        chartsheet_paths: chartsheet_rels,
+        theme_path,
+        styles_path,
+        shared_strings_path,
+        unmodeled_sheet_rels,
+    })
+}
+
+/// Read relationships owned by any package part.
+pub(super) fn read_part_rels<R: Read + Seek>(
+    package: &mut OpcPackage<R>,
+    part_path: &str,
+) -> XlsxResult<Arc<RelationshipSet>> {
+    let source = RelationshipSource::Part(PartName::from_zip_name(part_path)?);
+    package.relationships(&source, false)
+}

@@ -1,0 +1,946 @@
+//! End-to-end tests for XLSX data validation, conditional formatting, and comments roundtrip
+
+use duke_sheets::prelude::*;
+use std::io::{Cursor, Read};
+
+/// Test data validation list roundtrip
+#[test]
+fn test_roundtrip_data_validation_list() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Add some data
+    sheet.set_cell_value("A1", "Select:").unwrap();
+
+    // Add list validation to B1:B10
+    let validation = DataValidation::list("Yes,No,Maybe")
+        .with_range(CellRange::parse("B1:B10").unwrap())
+        .with_input_message("Choose", "Select a value from the list")
+        .with_error_message("Error", "Invalid selection");
+    sheet.add_data_validation(validation);
+
+    // Verify we have the validation
+    assert_eq!(sheet.data_validation_count(), 1);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    // Verify validation was read back
+    assert_eq!(
+        sheet2.data_validation_count(),
+        1,
+        "Should have 1 data validation"
+    );
+
+    let dv = sheet2.data_validation_at(0, 1); // B1
+    assert!(dv.is_some(), "B1 should have data validation");
+
+    if let Some(dv) = dv {
+        match &dv.validation_type {
+            ValidationType::List { source } => {
+                assert!(source.contains("Yes"), "List should contain 'Yes'");
+            }
+            _ => panic!("Expected List validation type"),
+        }
+    }
+}
+
+/// Test data validation whole number roundtrip
+#[test]
+fn test_roundtrip_data_validation_number() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Add number validation
+    let validation = DataValidation::whole_number_between(ValidationOperator::Between, "1", "100")
+        .with_range(CellRange::parse("A1:A5").unwrap())
+        .with_allow_blank(false);
+    sheet.add_data_validation(validation);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.data_validation_count(), 1);
+
+    let dv = sheet2.data_validation_at(0, 0); // A1
+    assert!(dv.is_some(), "A1 should have data validation");
+}
+
+/// Test conditional formatting cell is rule roundtrip
+#[test]
+fn test_roundtrip_conditional_format_cell_is() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Add some test data
+    for i in 0..5 {
+        sheet
+            .set_cell_value_at(i, 0, (i as f64 + 1.0) * 25.0)
+            .unwrap();
+    }
+
+    // Add conditional format: highlight cells > 50
+    let rule = ConditionalFormatRule::cell_is_greater_than("50")
+        .with_range(CellRange::parse("A1:A5").unwrap())
+        .with_priority(1);
+    sheet.add_conditional_format(rule);
+
+    // Verify we have the rule
+    assert_eq!(sheet.conditional_format_count(), 1);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    // Verify conditional format was read back
+    assert_eq!(
+        sheet2.conditional_format_count(),
+        1,
+        "Should have 1 conditional format"
+    );
+
+    let rules = sheet2.conditional_formats_at(0, 0); // A1
+    assert!(!rules.is_empty(), "A1 should have conditional formatting");
+
+    if let Some(rule) = rules.first() {
+        match &rule.rule_type {
+            CfRuleType::CellIs {
+                operator, formula1, ..
+            } => {
+                assert_eq!(*operator, CfOperator::GreaterThan);
+                assert_eq!(formula1, "50");
+            }
+            _ => panic!("Expected CellIs rule type"),
+        }
+    }
+}
+
+/// Test conditional formatting expression rule roundtrip
+#[test]
+fn test_roundtrip_conditional_format_expression() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Add conditional format with custom formula
+    let rule = ConditionalFormatRule::expression("MOD(A1,2)=0")
+        .with_range(CellRange::parse("A1:A10").unwrap())
+        .with_priority(1);
+    sheet.add_conditional_format(rule);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.conditional_format_count(), 1);
+
+    let rules = sheet2.conditional_formats_at(0, 0);
+    assert!(!rules.is_empty());
+
+    if let Some(rule) = rules.first() {
+        match &rule.rule_type {
+            CfRuleType::Expression { formula } => {
+                assert!(formula.contains("MOD"), "Formula should contain MOD");
+            }
+            _ => panic!("Expected Expression rule type"),
+        }
+    }
+}
+
+/// Test multiple validations and conditional formats
+#[test]
+fn test_roundtrip_multiple_rules() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Add multiple data validations
+    sheet.add_data_validation(
+        DataValidation::list("A,B,C").with_range(CellRange::parse("A1:A5").unwrap()),
+    );
+    sheet.add_data_validation(
+        DataValidation::whole_number(ValidationOperator::GreaterThan, "0")
+            .with_range(CellRange::parse("B1:B5").unwrap()),
+    );
+
+    // Add multiple conditional formats (use two CellIs rules for simplicity)
+    sheet.add_conditional_format(
+        ConditionalFormatRule::cell_is_greater_than("100")
+            .with_range(CellRange::parse("C1:C10").unwrap()),
+    );
+    sheet.add_conditional_format(
+        ConditionalFormatRule::cell_is_less_than("0")
+            .with_range(CellRange::parse("D1:D10").unwrap()),
+    );
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    // Verify counts
+    assert_eq!(
+        sheet2.data_validation_count(),
+        2,
+        "Should have 2 data validations"
+    );
+    assert_eq!(
+        sheet2.conditional_format_count(),
+        2,
+        "Should have 2 conditional formats"
+    );
+}
+
+/// Test cell comments roundtrip
+#[test]
+fn test_roundtrip_cell_comments() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Add some cell data
+    sheet.set_cell_value("A1", "Data with comment").unwrap();
+    sheet.set_cell_value("B2", 42.0).unwrap();
+
+    // Add comments to cells
+    sheet
+        .set_comment("A1", CellComment::new("John Doe", "This is a note"))
+        .unwrap();
+    sheet
+        .set_comment("B2", CellComment::new("Jane Smith", "Review this value"))
+        .unwrap();
+
+    // Verify we have comments
+    assert_eq!(sheet.comment_count(), 2);
+    assert_eq!(sheet.comment_authors().len(), 2);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    // Verify comments were read back
+    assert_eq!(sheet2.comment_count(), 2, "Should have 2 comments");
+
+    // Check A1 comment
+    let comment_a1 = sheet2.comment("A1").unwrap();
+    assert!(comment_a1.is_some(), "A1 should have a comment");
+    if let Some(c) = comment_a1 {
+        assert_eq!(c.author, "John Doe");
+        assert_eq!(c.plain_text(), "This is a note");
+    }
+
+    // Check B2 comment
+    let comment_b2 = sheet2.comment("B2").unwrap();
+    assert!(comment_b2.is_some(), "B2 should have a comment");
+    if let Some(c) = comment_b2 {
+        assert_eq!(c.author, "Jane Smith");
+        assert_eq!(c.plain_text(), "Review this value");
+    }
+}
+
+// features: Rich text in comments
+#[test]
+fn rich_comment_runs_round_trip_xlsx() {
+    use duke_sheets::{DrawingText, RichTextRun, RunFont};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let text = DrawingText {
+        runs: vec![
+            RichTextRun {
+                text: "Bold lead".to_string(),
+                font: Some(RunFont {
+                    bold: Some(true),
+                    ..RunFont::default()
+                }),
+            },
+            RichTextRun {
+                text: " then plain".to_string(),
+                font: None,
+            },
+        ],
+        ..DrawingText::default()
+    };
+    sheet
+        .set_comment(
+            "A1",
+            CellComment {
+                author: "Reviewer".to_string(),
+                text,
+            },
+        )
+        .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let comment = wb2
+        .worksheet(0)
+        .unwrap()
+        .comment("A1")
+        .unwrap()
+        .expect("comment survives");
+
+    assert_eq!(comment.plain_text(), "Bold lead then plain");
+    assert_eq!(comment.text.runs.len(), 2, "run boundaries survive");
+    assert_eq!(comment.text.runs[0].text, "Bold lead");
+    assert_eq!(
+        comment.text.runs[0]
+            .font
+            .as_ref()
+            .and_then(|font| font.bold),
+        Some(true),
+        "bold run formatting survives"
+    );
+    assert_eq!(comment.text.runs[1].text, " then plain");
+    assert!(comment.text.runs[1].font.is_none());
+}
+
+#[test]
+fn test_comments_emit_vml_and_legacy_drawing() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet
+        .set_comment("B2", CellComment::new("Jane Smith", "VML-backed comment"))
+        .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+
+    let mut vml = String::new();
+    zip.by_name("xl/drawings/vmlDrawing1.vml")
+        .unwrap()
+        .read_to_string(&mut vml)
+        .unwrap();
+    assert!(vml.contains("<x:Row>1</x:Row>"));
+    assert!(vml.contains("<x:Column>1</x:Column>"));
+
+    let mut sheet_xml = String::new();
+    zip.by_name("xl/worksheets/sheet1.xml")
+        .unwrap()
+        .read_to_string(&mut sheet_xml)
+        .unwrap();
+    assert!(sheet_xml.contains("<legacyDrawing"));
+
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+    let comment = sheet2.comment("B2").unwrap().unwrap();
+    assert_eq!(comment.plain_text(), "VML-backed comment");
+}
+
+/// Test cell comments without author
+#[test]
+fn test_roundtrip_cell_comments_no_author() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Add comment without author
+    sheet
+        .set_comment("A1", CellComment::text_only("Anonymous note"))
+        .unwrap();
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    // Verify comment was read back
+    assert_eq!(sheet2.comment_count(), 1, "Should have 1 comment");
+
+    let comment = sheet2.comment("A1").unwrap();
+    assert!(comment.is_some(), "A1 should have a comment");
+    if let Some(c) = comment {
+        assert!(c.author.is_empty(), "Author should be empty");
+        assert_eq!(c.plain_text(), "Anonymous note");
+    }
+}
+
+/// Test multiple sheets with comments
+#[test]
+fn test_roundtrip_comments_multiple_sheets() {
+    let mut wb = Workbook::new();
+
+    // Add comments to first sheet
+    let sheet1 = wb.worksheet_mut(0).unwrap();
+    sheet1.set_cell_value("A1", "Sheet1 data").unwrap();
+    sheet1
+        .set_comment("A1", CellComment::new("Author1", "Comment on sheet 1"))
+        .unwrap();
+
+    // Add second sheet with comments
+    wb.add_worksheet_with_name("Sheet2").unwrap();
+    let sheet2 = wb.worksheet_mut(1).unwrap();
+    sheet2.set_cell_value("B2", "Sheet2 data").unwrap();
+    sheet2
+        .set_comment("B2", CellComment::new("Author2", "Comment on sheet 2"))
+        .unwrap();
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+
+    // Verify sheet 1 comments
+    let sheet1 = wb2.worksheet(0).unwrap();
+    assert_eq!(sheet1.comment_count(), 1);
+    let c1 = sheet1.comment("A1").unwrap().unwrap();
+    assert_eq!(c1.author, "Author1");
+    assert_eq!(c1.plain_text(), "Comment on sheet 1");
+
+    // Verify sheet 2 comments
+    let sheet2 = wb2.worksheet(1).unwrap();
+    assert_eq!(sheet2.comment_count(), 1);
+    let c2 = sheet2.comment("B2").unwrap().unwrap();
+    assert_eq!(c2.author, "Author2");
+    assert_eq!(c2.plain_text(), "Comment on sheet 2");
+}
+
+/// Test color scale conditional formatting roundtrip
+#[test]
+fn test_roundtrip_color_scale() {
+    use duke_sheets::prelude::Color;
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Add some test data
+    for i in 0..10 {
+        sheet
+            .set_cell_value_at(i, 0, (i as f64 + 1.0) * 10.0)
+            .unwrap();
+    }
+
+    // Add a 2-color scale (red to green)
+    let rule = ConditionalFormatRule::color_scale_2(
+        Color::rgb(255, 0, 0), // Red for min
+        Color::rgb(0, 255, 0), // Green for max
+    )
+    .with_range(CellRange::parse("A1:A10").unwrap());
+    sheet.add_conditional_format(rule);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.conditional_format_count(), 1);
+
+    let rules = sheet2.conditional_formats_at(0, 0);
+    assert!(!rules.is_empty(), "A1 should have conditional formatting");
+
+    if let Some(rule) = rules.first() {
+        match &rule.rule_type {
+            CfRuleType::ColorScale { colors } => {
+                assert_eq!(colors.len(), 2, "Should have 2 colors");
+                // Check min color is red
+                assert_eq!(colors[0].color, Color::rgb(255, 0, 0));
+                // Check max color is green
+                assert_eq!(colors[1].color, Color::rgb(0, 255, 0));
+            }
+            _ => panic!("Expected ColorScale rule type, got {:?}", rule.rule_type),
+        }
+    }
+}
+
+/// Test data bar conditional formatting roundtrip
+#[test]
+fn test_roundtrip_data_bar() {
+    use duke_sheets::prelude::Color;
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Add some test data
+    for i in 0..5 {
+        sheet
+            .set_cell_value_at(i, 0, (i as f64 + 1.0) * 20.0)
+            .unwrap();
+    }
+
+    // Add a data bar (blue)
+    let rule = ConditionalFormatRule::data_bar(Color::rgb(99, 142, 198))
+        .with_range(CellRange::parse("A1:A5").unwrap());
+    sheet.add_conditional_format(rule);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.conditional_format_count(), 1);
+
+    let rules = sheet2.conditional_formats_at(0, 0);
+    assert!(!rules.is_empty(), "A1 should have conditional formatting");
+
+    if let Some(rule) = rules.first() {
+        match &rule.rule_type {
+            CfRuleType::DataBar { color, .. } => {
+                assert_eq!(*color, Color::rgb(99, 142, 198));
+            }
+            _ => panic!("Expected DataBar rule type, got {:?}", rule.rule_type),
+        }
+    }
+}
+
+/// Test icon set conditional formatting roundtrip
+#[test]
+fn test_roundtrip_icon_set() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Add some test data
+    for i in 0..5 {
+        sheet
+            .set_cell_value_at(i, 0, (i as f64 + 1.0) * 20.0)
+            .unwrap();
+    }
+
+    // Add a traffic light icon set
+    let rule = ConditionalFormatRule::icon_set(IconSetStyle::TrafficLights3)
+        .with_range(CellRange::parse("A1:A5").unwrap());
+    sheet.add_conditional_format(rule);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.conditional_format_count(), 1);
+
+    let rules = sheet2.conditional_formats_at(0, 0);
+    assert!(!rules.is_empty(), "A1 should have conditional formatting");
+
+    if let Some(rule) = rules.first() {
+        match &rule.rule_type {
+            CfRuleType::IconSet {
+                icon_style, values, ..
+            } => {
+                assert_eq!(*icon_style, IconSetStyle::TrafficLights3);
+                assert_eq!(values.len(), 3, "Should have 3 threshold values");
+            }
+            _ => panic!("Expected IconSet rule type, got {:?}", rule.rule_type),
+        }
+    }
+}
+
+/// Test DXF (differential format) roundtrip with conditional formatting styles
+#[test]
+fn test_roundtrip_dxf_styles() {
+    use duke_sheets::prelude::{Color, FillStyle, Style};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Add some test data
+    for i in 0..5 {
+        sheet
+            .set_cell_value_at(i, 0, (i as f64 + 1.0) * 30.0)
+            .unwrap();
+    }
+
+    // Create a style for the conditional format
+    let highlight_style = Style::new()
+        .fill_color(Color::rgb(255, 199, 206)) // Light red fill
+        .font_color(Color::rgb(156, 0, 6)) // Dark red text
+        .bold(true);
+
+    // Add conditional format with style: highlight cells > 100
+    let rule = ConditionalFormatRule::cell_is_greater_than("100")
+        .with_range(CellRange::parse("A1:A5").unwrap())
+        .with_format(highlight_style.clone());
+    sheet.add_conditional_format(rule);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.conditional_format_count(), 1);
+
+    let rules = sheet2.conditional_formats_at(0, 0);
+    assert!(!rules.is_empty(), "A1 should have conditional formatting");
+
+    if let Some(rule) = rules.first() {
+        // Check that the rule has a format (DXF style was preserved)
+        assert!(
+            rule.format.is_some(),
+            "Rule should have a format/style from DXF"
+        );
+
+        if let Some(ref format) = rule.format {
+            // Check that the fill color was preserved (may be Rgb or Argb)
+            match &format.fill {
+                FillStyle::Solid { color } => {
+                    // Colors may be stored as Rgb or Argb, so check the actual values
+                    let (r, g, b) = match color {
+                        Color::Rgb { r, g, b } => (*r, *g, *b),
+                        Color::Argb { r, g, b, .. } => (*r, *g, *b),
+                        _ => panic!("Expected Rgb or Argb color"),
+                    };
+                    assert_eq!((r, g, b), (255, 199, 206), "Fill color should be light red");
+                }
+                _ => panic!("Expected Solid fill style"),
+            }
+
+            // Check that font is bold
+            assert!(format.font.bold, "Font should be bold");
+
+            // Check font color (may be Rgb or Argb)
+            let (r, g, b) = match &format.font.color {
+                Color::Rgb { r, g, b } => (*r, *g, *b),
+                Color::Argb { r, g, b, .. } => (*r, *g, *b),
+                _ => panic!("Expected Rgb or Argb font color"),
+            };
+            assert_eq!((r, g, b), (156, 0, 6), "Font color should be dark red");
+        }
+    }
+}
+
+/// Test multiple rules with different DXF styles
+#[test]
+fn test_roundtrip_multiple_dxf_styles() {
+    use duke_sheets::prelude::{Color, Style};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Add test data
+    for i in 0..10 {
+        sheet.set_cell_value_at(i, 0, (i as f64) * 10.0).unwrap();
+    }
+
+    // Rule 1: Green for values >= 70
+    let green_style = Style::new()
+        .fill_color(Color::rgb(198, 239, 206)) // Light green
+        .font_color(Color::rgb(0, 97, 0)); // Dark green
+    let rule1 = ConditionalFormatRule::cell_is_greater_than("69")
+        .with_range(CellRange::parse("A1:A10").unwrap())
+        .with_format(green_style)
+        .with_priority(1);
+    sheet.add_conditional_format(rule1);
+
+    // Rule 2: Red for values < 30
+    let red_style = Style::new()
+        .fill_color(Color::rgb(255, 199, 206)) // Light red
+        .font_color(Color::rgb(156, 0, 6)); // Dark red
+    let rule2 = ConditionalFormatRule::cell_is_less_than("30")
+        .with_range(CellRange::parse("A1:A10").unwrap())
+        .with_format(red_style)
+        .with_priority(2);
+    sheet.add_conditional_format(rule2);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(
+        sheet2.conditional_format_count(),
+        2,
+        "Should have 2 conditional format rules"
+    );
+
+    // Check that both rules have formats
+    let rules = sheet2.conditional_formats();
+    for (i, rule) in rules.iter().enumerate() {
+        assert!(rule.format.is_some(), "Rule {} should have a format", i);
+    }
+}
+
+/// Test DXF border edges roundtrip (border reading was previously broken for DXF)
+#[test]
+fn test_roundtrip_dxf_border_edges() {
+    use duke_sheets::prelude::{BorderEdge, BorderLineStyle, Color, Style};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    for i in 0..5 {
+        sheet
+            .set_cell_value_at(i, 0, (i as f64 + 1.0) * 100.0)
+            .unwrap();
+    }
+
+    // Create style with specific border edges
+    let mut border_style = Style::new();
+    let border = border_style.border_mut();
+    border.left = Some(BorderEdge {
+        style: BorderLineStyle::Thin,
+        color: Color::rgb(0, 0, 0),
+    });
+    border.right = Some(BorderEdge {
+        style: BorderLineStyle::Thin,
+        color: Color::rgb(0, 0, 0),
+    });
+    border.top = Some(BorderEdge {
+        style: BorderLineStyle::Medium,
+        color: Color::rgb(0, 0, 255),
+    });
+    border.bottom = Some(BorderEdge {
+        style: BorderLineStyle::Medium,
+        color: Color::rgb(0, 0, 255),
+    });
+
+    let rule = ConditionalFormatRule::cell_is_greater_than("200")
+        .with_range(CellRange::parse("A1:A5").unwrap())
+        .with_format(border_style);
+    sheet.add_conditional_format(rule);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.conditional_format_count(), 1);
+    let rules = sheet2.conditional_formats_at(0, 0);
+    assert!(!rules.is_empty(), "A1 should have conditional formatting");
+
+    if let Some(rule) = rules.first() {
+        assert!(rule.format.is_some(), "Rule should have a format");
+        let format = rule.format.as_ref().unwrap();
+
+        // Check left border
+        assert!(format.border.left.is_some(), "Should have left border");
+        let left = format.border.left.as_ref().unwrap();
+        assert_eq!(left.style, BorderLineStyle::Thin, "Left should be thin");
+
+        // Check top border
+        assert!(format.border.top.is_some(), "Should have top border");
+        let top = format.border.top.as_ref().unwrap();
+        assert_eq!(top.style, BorderLineStyle::Medium, "Top should be medium");
+
+        // Check right border
+        assert!(format.border.right.is_some(), "Should have right border");
+
+        // Check bottom border
+        assert!(format.border.bottom.is_some(), "Should have bottom border");
+    }
+}
+
+/// Test DXF number format roundtrip
+#[test]
+fn test_roundtrip_dxf_number_format() {
+    use duke_sheets::prelude::{NumberFormat, Style};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    for i in 0..5 {
+        sheet
+            .set_cell_value_at(i, 0, (i as f64 + 1.0) * 0.123)
+            .unwrap();
+    }
+
+    // Create style with custom number format
+    let numfmt_style = Style::new().number_format("#,##0.00%");
+
+    let rule = ConditionalFormatRule::cell_is_greater_than("0.5")
+        .with_range(CellRange::parse("A1:A5").unwrap())
+        .with_format(numfmt_style);
+    sheet.add_conditional_format(rule);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.conditional_format_count(), 1);
+    let rules = sheet2.conditional_formats_at(0, 0);
+    assert!(!rules.is_empty(), "A1 should have conditional formatting");
+
+    if let Some(rule) = rules.first() {
+        assert!(rule.format.is_some(), "Rule should have a format");
+        let format = rule.format.as_ref().unwrap();
+
+        match &format.number_format {
+            NumberFormat::Custom(code) => {
+                assert_eq!(code, "#,##0.00%", "Number format should be #,##0.00%");
+            }
+            other => panic!("Expected Custom number format, got {:?}", other),
+        }
+    }
+}
+
+/// Test DXF alignment roundtrip
+#[test]
+fn test_roundtrip_dxf_alignment() {
+    use duke_sheets::prelude::{HorizontalAlignment, Style, VerticalAlignment};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    for i in 0..5 {
+        sheet
+            .set_cell_value_at(i, 0, format!("Text {}", i + 1))
+            .unwrap();
+    }
+
+    // Create style with alignment
+    let mut align_style = Style::new()
+        .horizontal_alignment(HorizontalAlignment::Center)
+        .vertical_alignment(VerticalAlignment::Center)
+        .wrap_text(true);
+    align_style.alignment.rotation = 45;
+
+    let rule = ConditionalFormatRule::cell_is_greater_than("0")
+        .with_range(CellRange::parse("A1:A5").unwrap())
+        .with_format(align_style);
+    sheet.add_conditional_format(rule);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.conditional_format_count(), 1);
+    let rules = sheet2.conditional_formats_at(0, 0);
+    assert!(!rules.is_empty(), "A1 should have conditional formatting");
+
+    if let Some(rule) = rules.first() {
+        assert!(rule.format.is_some(), "Rule should have a format");
+        let format = rule.format.as_ref().unwrap();
+
+        assert_eq!(
+            format.alignment.horizontal,
+            HorizontalAlignment::Center,
+            "Horizontal alignment should be Center"
+        );
+        assert_eq!(
+            format.alignment.vertical,
+            VerticalAlignment::Center,
+            "Vertical alignment should be Center"
+        );
+        assert!(format.alignment.wrap_text, "Wrap text should be true");
+        assert_eq!(format.alignment.rotation, 45, "Text rotation should be 45");
+    }
+}
+
+/// A currency format holds literal quotes, and quick-xml escapes attribute
+/// values itself, so escaping before handing it over produced `&amp;quot;`
+/// where `&quot;` belonged. The format then gained another `amp;` on every
+/// save, growing without bound while displaying the wrong thing.
+#[test]
+fn number_formats_and_font_names_are_escaped_exactly_once() {
+    let format_code = r##""$"#,##0.00_);[Red]\("$"#,##0.00\)"##;
+
+    let mut wb = Workbook::new();
+    {
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", 1234.5).unwrap();
+        // An ampersand and angle brackets in a font name exercise the
+        // same attribute path.
+        let font = duke_sheets::FontStyle {
+            name: "Ampersand & <Co>".to_string(),
+            ..duke_sheets::FontStyle::default()
+        };
+        let style = Style {
+            number_format: NumberFormat::Custom(format_code.to_string()),
+            font,
+            ..Style::default()
+        };
+        sheet.set_cell_style("A1", &style).unwrap();
+    }
+
+    let write = |wb: &Workbook| {
+        let mut buf = Vec::new();
+        XlsxWriter::write(wb, Cursor::new(&mut buf)).expect("write");
+        buf
+    };
+    let part = |bytes: &[u8], name: &str| {
+        let mut zip = zip::ZipArchive::new(Cursor::new(bytes.to_vec())).expect("zip");
+        let mut xml = String::new();
+        zip.by_name(name)
+            .expect("part")
+            .read_to_string(&mut xml)
+            .expect("read part");
+        xml
+    };
+
+    let first = write(&wb);
+    let styles = part(&first, "xl/styles.xml");
+    assert!(
+        !styles.contains("&amp;quot;") && !styles.contains("&amp;amp;"),
+        "attribute values were escaped twice: {}",
+        &styles[..styles.len().min(700)]
+    );
+    assert!(
+        styles.contains("Ampersand &amp; &lt;Co&gt;"),
+        "the font name must be escaped exactly once: {}",
+        &styles[..styles.len().min(700)]
+    );
+
+    // The value must survive, and a second save must not change it again.
+    let reread = XlsxReader::read(Cursor::new(first.clone())).expect("read");
+    let style = reread
+        .worksheet(0)
+        .unwrap()
+        .cell_style("A1")
+        .expect("cell style lookup")
+        .expect("cell style");
+    assert_eq!(
+        style.number_format,
+        NumberFormat::Custom(format_code.to_string()),
+        "the format code must come back exactly as written"
+    );
+    assert_eq!(style.font.name, "Ampersand & <Co>");
+
+    let second = write(&reread);
+    assert_eq!(
+        part(&second, "xl/styles.xml"),
+        styles,
+        "a second save must not re-escape anything"
+    );
+}
