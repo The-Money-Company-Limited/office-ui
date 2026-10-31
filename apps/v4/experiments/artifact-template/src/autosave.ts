@@ -111,12 +111,15 @@ export class Autosave {
       if (this.adapter === adapter) this.adapter = null
     }
   }
-  // Whether the open document has finished loading (useDocumentRevision).
-  ready = false
+  private loaded = false
+  // useDocumentRevision reports whether the open document has finished loading.
+  setLoaded(loaded: boolean) {
+    this.loaded = loaded
+  }
   // The open document's bytes as they are now, unsaved edits included; null
   // while it is still loading, when the editor holds an empty document.
   async documentBytes(): Promise<Uint8Array | null> {
-    if (!this.ready) return null
+    if (!this.loaded) return null
     const file = (await this.adapter?.serialize())?.files[0]
     return file ? new Uint8Array(file.bytes) : null
   }
