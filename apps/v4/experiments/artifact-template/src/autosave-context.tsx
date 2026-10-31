@@ -109,25 +109,39 @@ export function SaveStatus() {
         className="w-80 border-white/15 bg-background/80 shadow-xl backdrop-blur-xl"
       >
         <PopoverTitle className="text-sm font-medium">
-          This document changed somewhere else.
+          A newer version was saved while you were editing.
         </PopoverTitle>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Load latest replaces your unsaved changes. Download yours first to
+          keep them.
+        </p>
         <ConflictChoices save={save} />
       </PopoverPopup>
     </Popover>
   )
 }
 
-// Mounted while the conflict popover is open, so "Copy downloaded" resets each time.
+// Mounted while the conflict popover is open, so the download label resets each time.
 function ConflictChoices({ save }: { save: Autosave }) {
-  const [downloaded, setDownloaded] = React.useState(false)
+  const [download, setDownload] = React.useState<"idle" | "done" | "failed">(
+    "idle"
+  )
   return (
     <div className="mt-5 flex flex-wrap justify-end gap-2">
       <Button
         variant="ghost"
         size="sm"
-        onClick={() => void save.downloadCopy().then(setDownloaded)}
+        onClick={() =>
+          void save
+            .downloadCopy()
+            .then((started) => setDownload(started ? "done" : "failed"))
+        }
       >
-        {downloaded ? "Copy downloaded" : "Download mine"}
+        {download === "done"
+          ? "Copy downloaded"
+          : download === "failed"
+            ? "Download didn't start. Try again"
+            : "Download mine"}
       </Button>
       <Button size="sm" onClick={save.reloadTheirs}>
         Load latest

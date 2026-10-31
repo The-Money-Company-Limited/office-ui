@@ -211,13 +211,44 @@ test("an expired sign-in resumes saving when access returns", async (t) => {
   h.reply({ type: "save_failed", id: h.saves()[0].data.id, reason: "signed_out" })
   assert.equal(h.save.getSnapshot().canSave, false)
   assert.equal(h.save.getSnapshot().reason, "signed_out")
-  assert.match(h.save.getSnapshot().status, /Sign in again/)
+  assert.match(h.save.getSnapshot().status, /Sign in to keep saving/)
   await h.tick(60_000)
   assert.equal(h.saves().length, 1)
+  h.reply({ type: "access", canSave: false, reason: "signed_out", version: "v1" })
+  assert.equal(h.save.getSnapshot().reason, "signed_out")
   h.access()
   assert.equal(h.save.getSnapshot().canSave, true)
   await h.tick(0)
   assert.equal(h.save.getSnapshot().status, "Saving…")
+  assert.equal(h.saves().length, 2)
+})
+
+test("a refusal access keeps allowing is not retried on every answer", async (t) => {
+  const h = setup(t)
+  h.access()
+  h.set("mine")
+  await h.tick(2000)
+  h.reply({ type: "save_failed", id: h.saves()[0].data.id, reason: "forbidden" })
+  for (let i = 0; i < 3; i++) {
+    h.access()
+    await h.tick(5000)
+  }
+  assert.equal(h.saves().length, 1)
+  assert.equal(h.save.getSnapshot().canSave, false)
+  assert.equal(h.save.getSnapshot().reason, "read_only")
+})
+
+test("access lost during a retry resumes saving when it returns", async (t) => {
+  const h = setup(t)
+  h.access()
+  h.set("mine")
+  await h.tick(2000)
+  h.reply({ type: "save_failed", id: h.saves()[0].data.id, reason: "offline" })
+  h.reply({ type: "access", canSave: false, reason: "signed_out", version: "v1" })
+  await h.tick(60_000)
+  assert.equal(h.saves().length, 1)
+  h.access()
+  await h.tick(0)
   assert.equal(h.saves().length, 2)
 })
 
@@ -226,6 +257,13 @@ test("the access label waits for the first access answer", (t) => {
   assert.equal(h.save.getSnapshot().known, false)
   h.access()
   assert.equal(h.save.getSnapshot().known, true)
+})
+
+test("a bridge that never answers shows the page as view only", async (t) => {
+  const h = setup(t)
+  await h.tick(3000)
+  assert.equal(h.save.getSnapshot().known, true)
+  assert.equal(h.save.getSnapshot().reason, "unavailable")
 })
 
 test("timeout retry retains id, base and transferred bytes despite newer edits", async (t) => {

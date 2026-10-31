@@ -250,8 +250,8 @@ changes); on Excel, `sheet_read`, `sheet_comments` and `sheet_suggestions`.
 They wrap the agent libraries above, carry `readOnlyHint` and
 `untrustedContentHint` (document text can carry instructions), and wait until
 the document has loaded. A read serializes with `commit: false`: it sees a
-table cell's in-progress text but leaves it with the editor, so nothing on
-the page changes. A private page is served only to people with access, so its
+Word table cell's in-progress text but leaves it with the editor, so nothing
+on the page changes. On Excel a read leaves out a cell still being typed. A private page is served only to people with access, so its
 tools are too. Slides, PowerPoint and PDF register none yet.
 
 ### Saving edits made in the browser

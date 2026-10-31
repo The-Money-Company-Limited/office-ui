@@ -4454,12 +4454,9 @@ export interface DocxEditorController {
   hasOrderedList: boolean;
   canUndo: boolean;
   canRedo: boolean;
-  /**
-   * Registers what applies edits in progress before an export. With
-   * `consume: false` the transformer only reads them and keeps its drafts.
-   */
+  /** Registers what applies edits in progress before an export; see getDocumentBuffer. */
   registerPendingExportModelTransformer: (
-    transformer?: (model: DocModel, options: { consume: boolean }) => DocModel
+    transformer?: (model: DocModel, options: { commit: boolean }) => DocModel
   ) => void;
   setStatus: React.Dispatch<React.SetStateAction<string>>;
   setDocumentTheme: (theme: DocxDocumentTheme) => void;
@@ -30289,7 +30286,7 @@ export function useDocxEditor(
   const canUndo = history.past.length > 0;
   const canRedo = history.future.length > 0;
   const pendingExportModelTransformerRef = React.useRef<
-    ((model: DocModel, options: { consume: boolean }) => DocModel) | undefined
+    ((model: DocModel, options: { commit: boolean }) => DocModel) | undefined
   >(undefined);
   const setDocumentTheme = React.useCallback(
     (theme: DocxDocumentTheme): void => {
@@ -30317,7 +30314,7 @@ export function useDocxEditor(
   }, []);
   const registerPendingExportModelTransformer = React.useCallback(
     (
-      transformer?: (model: DocModel, options: { consume: boolean }) => DocModel
+      transformer?: (model: DocModel, options: { commit: boolean }) => DocModel
     ): void => {
       pendingExportModelTransformerRef.current = transformer;
     },
@@ -31322,7 +31319,7 @@ export function useDocxEditor(
   ): Promise<ArrayBuffer> => {
     const sourceModel = modelRef.current;
     const transformedModel = pendingExportModelTransformerRef.current
-      ? pendingExportModelTransformerRef.current(sourceModel, { consume: commit })
+      ? pendingExportModelTransformerRef.current(sourceModel, { commit })
       : sourceModel;
     if (commit && transformedModel !== sourceModel) {
       setModel(transformedModel);
@@ -50072,7 +50069,7 @@ export function DocxEditorViewer({
   React.useEffect(() => {
     const flushPendingDraftsForExport = (
       currentModel: DocModel,
-      { consume }: { consume: boolean }
+      { commit }: { commit: boolean }
     ): DocModel => {
       if (
         tableCellDraftsRef.current.size === 0 &&
@@ -50219,7 +50216,7 @@ export function DocxEditorViewer({
         );
       });
 
-      if (!consume) {
+      if (!commit) {
         return nextModel;
       }
       consumedTableDraftKeys.forEach((draftKey) => {

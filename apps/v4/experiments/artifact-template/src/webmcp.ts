@@ -38,7 +38,7 @@ function wordTools(bytes: () => Promise<Uint8Array>): Tool[] {
       name: "doc_read",
       title: "Read the document",
       description:
-        "Returns the document as it is on the page now: the body's paragraphs in order, each with its id, body index and text; the body's tables, each with its body index and its rows of cell text; and the headers and footers, each with the pages it is on (default, first or even).",
+        "Returns the document as it is on the page now: the body's paragraphs in order, each with its id, body index and text; the body's tables, each with its body index and its rows of cell text; and the headers and footers, each with the pages it is on (default, first, even).",
       inputSchema: noInput,
       annotations,
       execute: async () => {
@@ -54,7 +54,7 @@ function wordTools(bytes: () => Promise<Uint8Array>): Tool[] {
       name: "doc_find",
       title: "Find text in the document",
       description:
-        "Finds the text everywhere in the document. Matches in body paragraphs come back as a paragraph id with start and end offsets into its text; matches in tables as the table's body index with the cell's row and column; matches in headers and footers as the header or footer and the pages it is on.",
+        "Finds the text everywhere in the document; matching is exact and case-sensitive. Matches in body paragraphs come back as a paragraph id with start and end offsets into its text; matches in tables as the table's body index with the cell's row and column; matches in headers and footers as `part`, the index into doc_read's headersFooters.",
       inputSchema: {
         type: "object",
         properties: { text: { type: "string", minLength: 1 } },
@@ -76,8 +76,9 @@ function wordTools(bytes: () => Promise<Uint8Array>): Tool[] {
           ),
           headersFooters: doc
             .headersFooters()
-            .filter((part) => part.text.includes(text))
-            .map(({ kind, type }) => ({ kind, type })),
+            .flatMap(({ kind, pages, text: partText }, part) =>
+              partText.includes(text) ? [{ part, kind, pages }] : []
+            ),
         }
       },
     },
@@ -85,7 +86,7 @@ function wordTools(bytes: () => Promise<Uint8Array>): Tool[] {
       name: "doc_comments",
       title: "Read the document's comments",
       description:
-        "Lists the Word comments saved in the document, replies included: each with its id, author, date, text, whether it is resolved, the comment it replies to, and the paragraph and text it covers. Comments left on the page itself are not included.",
+        "Lists the Word comments saved in the document, replies included: each with its id, author, date, text, whether it is resolved, the comment it replies to, and, for a comment on a body paragraph, that paragraph's id and the text it covers. Comments left on the page itself are not included.",
       inputSchema: noInput,
       annotations,
       execute: async () => ({ comments: (await open()).comments() }),
@@ -133,7 +134,7 @@ function sheetTools(bytes: () => Promise<Uint8Array>): Tool[] {
       name: "sheet_comments",
       title: "Read the workbook's comments",
       description:
-        "Lists the comment threads saved in the workbook, notes included: each with its id, sheet, cell ref, whether it is resolved, and its comments with author, date and text. Suggestions are threads too, and sheet_suggestions reads them as proposed values.",
+        "Lists the comment threads saved in the workbook: each with its id, sheet, cell ref, whether it is resolved, whether it is a legacy note (`legacy`), and its comments with author, date and text. Suggestions are threads too, and sheet_suggestions reads them as proposed values.",
       inputSchema: noInput,
       annotations,
       execute: async () => ({ comments: (await open()).comments() }),

@@ -50,10 +50,12 @@ export interface DocTable {
   rows: string[][];
 }
 
+export type HeaderFooterPages = "default" | "first" | "even";
+
 export interface DocHeaderFooter {
   kind: "header" | "footer";
-  /** The pages it is on: `default`, `first` or `even`. */
-  type: string;
+  /** The pages it is on, from every section that uses it. */
+  pages: HeaderFooterPages[];
   text: string;
 }
 
@@ -248,18 +250,22 @@ export class Doc {
     );
   }
 
-  /** Every section's headers and footers, each part once. */
+  /**
+   * Every section's headers and footers, each part once. (doc-model's
+   * `extractDocumentBlocks` walks the same parts, but asynchronously, without
+   * the page types, and with columns counted across merged cells.)
+   */
   headersFooters(): DocHeaderFooter[] {
     const { metadata } = this.model;
     const parts = new Map<string, DocHeaderFooter>();
     const add = (kind: DocHeaderFooter["kind"], sections: Array<HeaderSection | FooterSection>) => {
       for (const section of sections) {
-        if (!parts.has(section.partName)) {
-          parts.set(section.partName, {
-            kind,
-            type: section.referenceType ?? "default",
-            text: section.nodes.map(blockText).join("\n"),
-          });
+        const pages = (section.referenceType ?? "default") as HeaderFooterPages;
+        const part = parts.get(section.partName);
+        if (!part) {
+          parts.set(section.partName, { kind, pages: [pages], text: section.nodes.map(blockText).join("\n") });
+        } else if (!part.pages.includes(pages)) {
+          part.pages.push(pages);
         }
       }
     };

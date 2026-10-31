@@ -561,7 +561,7 @@ async function run(kind, scenario) {
       }
       if (scenario === "conflict") {
         await page
-          .getByText("This document changed somewhere else.", {
+          .getByText("A newer version was saved while you were editing.", {
             exact: true,
           })
           .waitFor()
@@ -582,7 +582,7 @@ async function run(kind, scenario) {
         await ready(page, kind)
         assert.equal(
           await page
-            .getByText("This document changed somewhere else.", {
+            .getByText("A newer version was saved while you were editing.", {
               exact: true,
             })
             .count(),

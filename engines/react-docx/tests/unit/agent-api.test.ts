@@ -315,8 +315,8 @@ describe("agent document API", () => {
 
     expect(doc.tables()).toEqual([{ index: 1, rows: [["Name", "Total"], ["Ada", "3\n4"]] }]);
     expect(doc.headersFooters()).toEqual([
-      { kind: "header", type: "default", text: "Quarterly report" },
-      { kind: "footer", type: "first", text: "Confidential" },
+      { kind: "header", pages: ["default"], text: "Quarterly report" },
+      { kind: "footer", pages: ["first"], text: "Confidential" },
     ]);
   });
 
