@@ -288,6 +288,38 @@ describe("agent document API", () => {
     expect(doc.accept("all")).toEqual({ revisions: [], unlisted });
   });
 
+  it("reads body tables and each header and footer once", async () => {
+    const R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    const part = (tag: string, text: string) =>
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:${tag} xmlns:w="${W_NS}"><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:${tag}>`;
+    const cell = (text: string) => `<w:tc><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:tc>`;
+    const sectionParts =
+      `<w:headerReference w:type="default" r:id="rId1"/><w:footerReference w:type="first" r:id="rId2"/>`;
+    let pkg = createMinimalDocxPackage(
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"><w:body>` +
+        `<w:p><w:pPr><w:sectPr>${sectionParts}</w:sectPr></w:pPr><w:r><w:t>Before</w:t></w:r></w:p>` +
+        `<w:tbl><w:tr>${cell("Name")}${cell("Total")}</w:tr><w:tr>${cell("Ada")}` +
+        `<w:tc><w:p><w:r><w:t>3</w:t></w:r></w:p><w:p><w:r><w:t>4</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
+        `<w:sectPr>${sectionParts}</w:sectPr></w:body></w:document>`
+    );
+    pkg = withPart(pkg, { name: "word/header1.xml", content: part("hdr", "Quarterly report") });
+    pkg = withPart(pkg, { name: "word/footer1.xml", content: part("ftr", "Confidential") });
+    pkg = withPart(pkg, {
+      name: "word/_rels/document.xml.rels",
+      content:
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+        `<Relationship Id="rId1" Type="${R_NS}/header" Target="header1.xml"/>` +
+        `<Relationship Id="rId2" Type="${R_NS}/footer" Target="footer1.xml"/></Relationships>`,
+    });
+    const doc = await openDocx(await packageToArrayBuffer(pkg));
+
+    expect(doc.tables()).toEqual([{ index: 1, rows: [["Name", "Total"], ["Ada", "3\n4"]] }]);
+    expect(doc.headersFooters()).toEqual([
+      { kind: "header", pages: ["default"], text: "Quarterly report" },
+      { kind: "footer", pages: ["first"], text: "Confidential" },
+    ]);
+  });
+
   it("explains a target it cannot find", async () => {
     const doc = await fixture();
     expect(() =>

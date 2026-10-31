@@ -4454,8 +4454,9 @@ export interface DocxEditorController {
   hasOrderedList: boolean;
   canUndo: boolean;
   canRedo: boolean;
+  /** Registers what applies edits in progress before an export; see getDocumentBuffer. */
   registerPendingExportModelTransformer: (
-    transformer?: (model: DocModel) => DocModel
+    transformer?: (model: DocModel, options: { commit: boolean }) => DocModel
   ) => void;
   setStatus: React.Dispatch<React.SetStateAction<string>>;
   setDocumentTheme: (theme: DocxDocumentTheme) => void;
@@ -4509,7 +4510,12 @@ export interface DocxEditorController {
   suggestionRefusalNonce: number;
   importDocxFile: (file: File) => Promise<void>;
   newDocument: () => void;
-  getDocumentBuffer: () => Promise<ArrayBuffer>;
+  /**
+   * The document as DOCX bytes, including a table cell's in-progress text.
+   * Saving commits that text to the model; `{ commit: false }` leaves the
+   * editor untouched, for a read.
+   */
+  getDocumentBuffer: (options?: { commit?: boolean }) => Promise<ArrayBuffer>;
   exportDocx: () => void;
   undo: () => void;
   redo: () => void;
@@ -30280,7 +30286,7 @@ export function useDocxEditor(
   const canUndo = history.past.length > 0;
   const canRedo = history.future.length > 0;
   const pendingExportModelTransformerRef = React.useRef<
-    ((model: DocModel) => DocModel) | undefined
+    ((model: DocModel, options: { commit: boolean }) => DocModel) | undefined
   >(undefined);
   const setDocumentTheme = React.useCallback(
     (theme: DocxDocumentTheme): void => {
@@ -30307,7 +30313,9 @@ export function useDocxEditor(
     setShowCommentsState((current) => !current);
   }, []);
   const registerPendingExportModelTransformer = React.useCallback(
-    (transformer?: (model: DocModel) => DocModel): void => {
+    (
+      transformer?: (model: DocModel, options: { commit: boolean }) => DocModel
+    ): void => {
       pendingExportModelTransformerRef.current = transformer;
     },
     []
@@ -31306,12 +31314,14 @@ export function useDocxEditor(
     setStatus("Created new document");
   }, [advanceDocumentLoadNonce, unloadEmbeddedFonts]);
 
-  const getDocumentBuffer = React.useCallback(async (): Promise<ArrayBuffer> => {
+  const getDocumentBuffer = React.useCallback(async (
+    { commit = true }: { commit?: boolean } = {}
+  ): Promise<ArrayBuffer> => {
     const sourceModel = modelRef.current;
     const transformedModel = pendingExportModelTransformerRef.current
-      ? pendingExportModelTransformerRef.current(sourceModel)
+      ? pendingExportModelTransformerRef.current(sourceModel, { commit })
       : sourceModel;
-    if (transformedModel !== sourceModel) {
+    if (commit && transformedModel !== sourceModel) {
       setModel(transformedModel);
     }
 
@@ -50057,7 +50067,10 @@ export function DocxEditorViewer({
   }
 
   React.useEffect(() => {
-    const flushPendingDraftsForExport = (currentModel: DocModel): DocModel => {
+    const flushPendingDraftsForExport = (
+      currentModel: DocModel,
+      { commit }: { commit: boolean }
+    ): DocModel => {
       if (
         tableCellDraftsRef.current.size === 0 &&
         tableCellParagraphDraftsRef.current.size === 0 &&
@@ -50203,6 +50216,9 @@ export function DocxEditorViewer({
         );
       });
 
+      if (!commit) {
+        return nextModel;
+      }
       consumedTableDraftKeys.forEach((draftKey) => {
         tableCellDraftsRef.current.delete(draftKey);
       });

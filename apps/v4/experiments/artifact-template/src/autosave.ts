@@ -1,27 +1,72 @@
 export type DocumentFile = { path: string; bytes: ArrayBuffer }
 export type DocumentSnapshot = { files: DocumentFile[]; saved?: () => void }
+// A read passes `commit: false` and the editor must stay as it is; a save
+// commits edits in progress, such as a table cell's text.
+export type SerializeOptions = { commit: boolean }
 export type DocumentAdapter = {
-  serialize: () => DocumentSnapshot | Promise<DocumentSnapshot>
+  serialize: (
+    options?: SerializeOptions
+  ) => DocumentSnapshot | Promise<DocumentSnapshot>
   download: () => void | Promise<void>
 }
+// Why the page can't edit: shown instead of edit controls.
+export type SaveReason = "read_only" | "signed_out" | "not_document" | "unavailable"
 export type SaveState = {
+  // False until access is known (an answer, or the bridge timing out), so an
+  // editor never flashes "View only".
+  known: boolean
   canSave: boolean
-  reason?: string
+  reason?: SaveReason
   status: string
   conflict: boolean
 }
 
-const failures: Record<string, string> = {
-  forbidden: "You no longer have permission to edit. Keep a copy or reload.",
-  path_not_allowed:
-    "This save includes a path outside the document. Keep a copy and reload.",
-  not_document: "This page is no longer a document",
-  too_large: "The document is too large. Download a copy.",
-  error: "Please try again when the connection returns.",
+// A save the bridge refused for good: what the person reads (what happened,
+// then how to keep their work), why editing ends, and whether it comes back
+// when the bridge's access answer turns from no to yes.
+type Refusal = { message: string; reason: SaveReason; resumes?: true }
+const keep = "Download a copy to keep your changes."
+const refusals: Record<string, Refusal> = {
+  forbidden: {
+    message: `You can no longer edit this. ${keep}`,
+    reason: "read_only",
+    resumes: true,
+  },
+  read_only: {
+    message: `This document can't be edited here any more. ${keep}`,
+    reason: "read_only",
+    resumes: true,
+  },
+  signed_out: {
+    message: "Your sign-in expired. Sign in to keep saving.",
+    reason: "signed_out",
+    resumes: true,
+  },
+  path_not_allowed: {
+    message: `Changes to this document can't be saved. ${keep}`,
+    reason: "read_only",
+  },
+  not_document: {
+    message: `This page is no longer a document. ${keep}`,
+    reason: "not_document",
+  },
+  too_large: {
+    message: `This document is too large to save here. ${keep}`,
+    reason: "read_only",
+  },
+}
+const unknownRefusal: Refusal = {
+  message: `Couldn't save. ${keep}`,
+  reason: "read_only",
 }
 
 export class Autosave {
-  private state: SaveState = { canSave: false, status: "", conflict: false }
+  private state: SaveState = {
+    known: false,
+    canSave: false,
+    status: "",
+    conflict: false,
+  }
   private listeners = new Set<() => void>()
   private version = ""
   private liveVersion = ""
@@ -51,7 +96,11 @@ export class Autosave {
     offset: number
   } | null = null
   private receivedAccess = false
-  private blocked = false
+  // The refusal or conflict that stopped saving; undefined while saving works.
+  private blockedBy?: Refusal | "conflict"
+  // A refusal resumes only after the bridge has said no since it, so a save
+  // the bridge's access answer disagrees with isn't retried on every answer.
+  private refusedSinceBlock = false
 
   constructor(
     private page: Window,
@@ -101,7 +150,7 @@ export class Autosave {
     this.send({ type: "hello" })
     this.helloTimer = setTimeout(() => {
       if (this.receivedAccess) return
-      this.update({ reason: "unavailable" })
+      this.update({ known: true, reason: "unavailable" })
       this.hello()
     }, 3000)
   }
@@ -116,11 +165,12 @@ export class Autosave {
   setLoaded(loaded: boolean) {
     this.loaded = loaded
   }
-  // The open document's bytes as they are now, unsaved edits included; null
-  // while it is still loading, when the editor holds an empty document.
+  // The open document's bytes as they are now, unsaved edits included, read
+  // without changing the editor; null while it is still loading, when the
+  // editor holds an empty document.
   async documentBytes(): Promise<Uint8Array | null> {
     if (!this.loaded) return null
-    const file = (await this.adapter?.serialize())?.files[0]
+    const file = (await this.adapter?.serialize({ commit: false }))?.files[0]
     return file ? new Uint8Array(file.bytes) : null
   }
   dirty = () => {
@@ -129,7 +179,7 @@ export class Autosave {
     this.page.addEventListener("beforeunload", this.beforeUnload)
     clearTimeout(this.fadeTimer)
     if (this.state.status === "Saved") this.update({ status: "" })
-    if (!this.blocked && !this.retry) this.schedule(2000)
+    if (!this.blockedBy && !this.retry) this.schedule(2000)
   }
   private schedule(delay: number) {
     clearTimeout(this.timer)
@@ -147,12 +197,14 @@ export class Autosave {
   }
   private visibility = () => {
     if (this.page.document.visibilityState === "hidden") this.hide()
+    // Coming back, e.g. from signing in in another tab: ask for access again.
+    else this.send({ type: "hello" })
   }
   flush = async () => {
     if (
       this.stopped ||
       !this.state.canSave ||
-      this.blocked ||
+      this.blockedBy ||
       this.inFlight ||
       this.retryWaiting ||
       !this.adapter ||
@@ -206,14 +258,14 @@ export class Autosave {
     this.inFlight = false
     if (version) this.liveVersion = version
     if (reason === "conflict") {
-      this.blocked = true
+      this.blockedBy = "conflict"
       this.update({ conflict: true, status: "Couldn't save" })
     } else if (reason === "offline" || reason === "error") {
       this.update({
         status:
           reason === "offline"
             ? "Offline, will retry"
-            : `Couldn't save. ${failures.error}`,
+            : "Couldn't save yet. Retrying…",
       })
       this.retryWaiting = true
       const delay = Math.min(30_000, 2000 * 2 ** this.retry++)
@@ -224,18 +276,14 @@ export class Autosave {
         )
       this.schedule(Math.max(delay, this.retryNotBefore - Date.now()))
     } else {
-      this.blocked = true
+      const refusal = refusals[reason]
+      if (!refusal) console.warn(`Save refused: ${reason}`)
+      this.blockedBy = refusal ?? unknownRefusal
+      this.refusedSinceBlock = false
       this.update({
-        canSave: ["forbidden", "not_document"].includes(reason)
-          ? false
-          : this.state.canSave,
-        reason:
-          reason === "not_document"
-            ? reason
-            : reason === "forbidden"
-              ? "read_only"
-              : this.state.reason,
-        status: `Couldn't save. ${failures[reason] ?? reason}`,
+        canSave: false,
+        reason: this.blockedBy.reason,
+        status: this.blockedBy.message,
       })
     }
   }
@@ -256,13 +304,40 @@ export class Autosave {
       clearTimeout(this.helloTimer)
       if (!this.version) this.version = data.version
       this.liveVersion = data.version
+      const refusal =
+        this.blockedBy === "conflict" ? undefined : this.blockedBy
+      if (refusal && !data.canSave) this.refusedSinceBlock = true
+      if (refusal?.resumes && data.canSave && this.refusedSinceBlock) {
+        this.blockedBy = undefined
+        this.update({ status: "" })
+      }
+      const stuck = this.blockedBy !== "conflict" && this.blockedBy
+      const regained = data.canSave && !this.state.canSave
       this.update({
-        canSave: data.canSave,
-        reason: data.reason,
+        known: true,
+        canSave: data.canSave && !stuck,
+        // Access refusals follow the bridge, which knows the current reason.
+        reason:
+          stuck && (!stuck.resumes || data.canSave)
+            ? stuck.reason
+            : data.reason,
         ...(data.reason === "not_document"
-          ? { status: failures.not_document }
+          ? {
+              status:
+                this.revision === this.savedRevision
+                  ? "This page is no longer a document."
+                  : refusals.not_document.message,
+            }
           : {}),
       })
+      // Saving can resume with unsaved work waiting: after a refusal, or when
+      // access came back during a retry or a save that was cut short.
+      if (
+        regained &&
+        !this.blockedBy &&
+        this.revision !== this.savedRevision
+      )
+        this.schedule(0)
     } else if (
       data.type === "saved" &&
       this.pending &&
@@ -317,7 +392,7 @@ export class Autosave {
     this.changedDuringSave = null
     this.savedRevision = this.revision
     this.version = this.liveVersion
-    this.blocked = false
+    this.blockedBy = undefined
     this.retry = 0
     this.update({ conflict: false, status: "" })
     const selection = this.page.getSelection()
@@ -349,13 +424,13 @@ export class Autosave {
       })
     )
   }
+  // True when the download started; the caller says so where it was asked.
   downloadCopy = async () => {
     try {
       await this.adapter?.download()
+      return true
     } catch {
-      this.update({
-        status: "Couldn't save. Download failed; please try again.",
-      })
+      return false
     }
   }
 }
