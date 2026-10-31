@@ -2281,7 +2281,7 @@ function PdfEditorInner({
   showToolbar,
   showUpload,
   showDownload,
-  isDark,
+  isDark = false,
   onIsDarkChange,
   toolbarActions,
   selectionActions,
@@ -3685,7 +3685,7 @@ function PdfEditorInner({
                         <>
                           {onIsDarkChange ? (
                             <AppearanceToggle
-                              isDark={isDark ?? false}
+                              isDark={isDark}
                               onIsDarkChange={onIsDarkChange}
                             />
                           ) : null}

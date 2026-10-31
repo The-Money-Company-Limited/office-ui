@@ -135,6 +135,7 @@ import {
   resolveEditingIntent,
   shouldCoalesceTextCommit,
   type TextCommitBurst,
+  type TextCommitCoalesce,
 } from "./editing-intents";
 import {
   collectParagraphExplicitPageBreakOffsets,
@@ -4654,7 +4655,7 @@ export interface DocxEditorController {
     location: ParagraphLocation,
     text: string,
     caret: { start: number; end: number },
-    options?: { insertionOffset?: number; coalesceKey?: string }
+    options?: { insertionOffset?: number; coalesce?: TextCommitCoalesce }
   ) => DocxParagraphTextCommit | undefined;
   commitTableCellTextAtRange: (
     tableIndex: number,
@@ -35229,7 +35230,7 @@ export function useDocxEditor(
       location: ParagraphLocation,
       text: string,
       caret: { start: number; end: number },
-      options?: { insertionOffset?: number; coalesceKey?: string }
+      options?: { insertionOffset?: number; coalesce?: TextCommitCoalesce }
     ): DocxParagraphTextCommit | undefined => {
       const now = Date.now();
       dispatchEditorTransaction((current) => {
@@ -35252,21 +35253,18 @@ export function useDocxEditor(
                 insertedStyle,
               });
 
-        const before = paragraphText(paragraph);
+        const burst = options?.coalesce;
         const coalesce =
-          options?.coalesceKey !== undefined &&
+          burst !== undefined &&
           shouldCoalesceTextCommit(textCommitBurstRef.current, {
-            key: options.coalesceKey,
-            caretBefore: insertionOffset,
+            key: burst.key,
+            caretBefore: burst.caretBefore ?? insertionOffset,
             at: now,
-            startsWord:
-              options.coalesceKey.endsWith(":insert") &&
-              /\s/.test(before.charAt(insertionOffset - 1)) &&
-              /\S/.test(text.charAt(insertionOffset)),
+            insertedInto: burst.editClass === "insert" ? text : undefined,
           });
         textCommitBurstRef.current =
-          options?.coalesceKey !== undefined
-            ? { key: options.coalesceKey, caretAfter: caret.end, at: now }
+          burst !== undefined
+            ? { key: burst.key, caretAfter: caret.end, at: now }
             : undefined;
 
         return {
@@ -46646,10 +46644,10 @@ export function DocxEditorViewer({
       start: number,
       end = start,
       insertionOffset = start,
-      coalesceKey?: string
+      coalesce?: TextCommitCoalesce
     ): void => {
       editor.suppressNextDomSelectionRestore();
-      const committed = editor.commitParagraphTextAtRange(location, text, { start, end }, { insertionOffset, coalesceKey });
+      const committed = editor.commitParagraphTextAtRange(location, text, { start, end }, { insertionOffset, coalesce });
       if (!committed) return;
       syncWrappedParagraphRange(location, committed.start, committed.end, {
         textOverride: committed.text,
@@ -50566,16 +50564,14 @@ export function DocxEditorViewer({
           return;
         }
 
-        const coalesceClass = editingIntentCoalesceClass(intent);
+        const editClass = editingIntentCoalesceClass(intent);
         const committed = editor.commitParagraphTextAtRange(
           location,
           applied.text,
           { start: applied.caret, end: applied.caret },
           {
             insertionOffset: rangeOffsets.start,
-            ...(coalesceClass
-              ? { coalesceKey: `p:${nodeIndex}:${coalesceClass}` }
-              : undefined),
+            coalesce: editClass && { key: `p:${nodeIndex}:${editClass}`, editClass },
           }
         );
         if (!committed) return;
@@ -50826,18 +50822,14 @@ export function DocxEditorViewer({
         return;
       }
 
-      const coalesceClass = editingIntentCoalesceClass(effectiveIntent);
+      const editClass = editingIntentCoalesceClass(effectiveIntent);
       const committed = editor.commitParagraphTextAtRange(
         cellLocation,
         applied.text,
         { start: applied.caret, end: applied.caret },
         {
           insertionOffset: rangeOffsets.start,
-          ...(coalesceClass
-            ? {
-                coalesceKey: `${continuationPrefix}${paragraphIndex}:${coalesceClass}`,
-              }
-            : undefined),
+          coalesce: editClass && { key: `${continuationPrefix}${paragraphIndex}:${editClass}`, editClass },
         }
       );
       if (!committed) return;
@@ -54021,20 +54013,6 @@ export function DocxEditorViewer({
                 cancelPendingPointerSelectionReconcile();
                 const edit = wrappedTextareaEdit(event.currentTarget);
                 wrappedParagraphInputHintRef.current = undefined;
-                // One typed or deleted character joins the open undo step, as in the other editing hosts.
-                const replaced = edit.replacement;
-                const coalesceClass = !replaced
-                  ? undefined
-                  : replaced.sourceStart === replaced.sourceEnd && replaced.inserted.length === 1
-                  ? "insert"
-                  : replaced.inserted === "" && replaced.sourceEnd - replaced.sourceStart === 1
-                  ? "delete"
-                  : undefined;
-                // A burst continues from the caret before the edit; after Backspace that is the deleted character's end.
-                const range = editor.activeTextRange;
-                const caretBefore = range && sameParagraphLocation(range.end.location, location)
-                  ? range.end.offset
-                  : replaced?.sourceStart;
                 const nextText = edit.source;
                 const nextStart = edit.sourceSelectionStart;
                 const nextEnd = edit.sourceSelectionEnd;
@@ -54057,13 +54035,18 @@ export function DocxEditorViewer({
                 editor.beginSelectionSession("keyboard", {
                   settleAfterMs: 220,
                 });
+                // One typed or deleted character joins the open undo step, as in the other editing hosts.
                 commitWrappedParagraphTextAtLocation(
                   location,
                   nextText,
                   nextStart,
                   nextEnd,
-                  coalesceClass === "delete" ? caretBefore : edit.replacement?.sourceStart,
-                  coalesceClass ? `w:${locationKey}:${coalesceClass}` : undefined
+                  edit.replacement?.sourceStart,
+                  edit.editClass && {
+                    key: `w:${locationKey}:${edit.editClass}`,
+                    editClass: edit.editClass,
+                    caretBefore: edit.sourceCaretBefore,
+                  }
                 );
                 schedulePaginationMeasurementResume();
               }}

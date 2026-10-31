@@ -70,7 +70,7 @@ const cellLocation: DocxTextRangeLocation = {
 const paths = [
   { name: "body beforeinput", inCell: false, commit: (e: DocxEditorController, text: string) =>
     e.commitParagraphTextAtRange(bodyLocation, text, { start: text.length, end: text.length },
-      { insertionOffset: text.length - 1, coalesceKey: "body:typing" }) },
+      { insertionOffset: text.length - 1, coalesce: { key: "body:typing", editClass: "insert" } }) },
   { name: "wrapped body", inCell: false, commit: (e: DocxEditorController, text: string) =>
     e.commitParagraphText(0, text) },
   { name: "cell beforeinput", inCell: true, commit: (e: DocxEditorController, text: string) =>
@@ -373,7 +373,10 @@ it.each(["- ", "* ", "1. ", "1) "])("keeps character-by-character %j typing and 
       const committed = editor.commitParagraphTextAtRange(location, applied.text,
         { start: applied.caret, end: applied.caret }, {
           insertionOffset: continuation.start,
-          coalesceKey: `p:${location.kind === "paragraph" ? location.nodeIndex : 0}:${editingIntentCoalesceClass(intent)}`,
+          coalesce: {
+            key: `p:${location.kind === "paragraph" ? location.nodeIndex : 0}:${editingIntentCoalesceClass(intent)}`,
+            editClass: editingIntentCoalesceClass(intent)!,
+          },
         });
       expect(committed).toEqual({
         text: applied.text === prefix ? "" : applied.text,
@@ -455,7 +458,7 @@ it.each([false, true])("keeps character-by-character list typing and caret conti
       })!;
       const committed = editor.commitParagraphTextAtRange(location, applied.text,
         { start: applied.caret, end: applied.caret },
-        { insertionOffset: before, coalesceKey: `${JSON.stringify(location)}:insertText` });
+        { insertionOffset: before, coalesce: { key: `${JSON.stringify(location)}:insertText`, editClass: "insert" } });
       expect(committed).toEqual({
         text: applied.text === "- " ? "" : applied.text,
         start: applied.text === "- " ? 0 : applied.caret,

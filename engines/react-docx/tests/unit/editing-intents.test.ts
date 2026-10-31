@@ -5,6 +5,7 @@ import {
   mergeCellParagraphTexts,
   resolveEditingIntent,
   shouldCoalesceTextCommit,
+  startsNewWord,
   type EditingIntent
 } from "../../packages/react-viewer/src/editing-intents";
 
@@ -376,15 +377,33 @@ describe("shouldCoalesceTextCommit", () => {
     ).toBe(true);
   });
 
-  it("starts a new entry at the start of a word", () => {
+  it("starts a new entry when an insert begins a word", () => {
+    // "abcd " + "e": the e follows whitespace.
     expect(
       shouldCoalesceTextCommit(burst, {
         key: "p:3:insert",
         caretBefore: 5,
         at: 1400,
-        startsWord: true
+        insertedInto: "abcd e"
       })
     ).toBe(false);
+    // "abcde" + "f" continues the word; "abcd" + " " ends it in the same entry.
+    expect(
+      shouldCoalesceTextCommit(burst, {
+        key: "p:3:insert",
+        caretBefore: 5,
+        at: 1400,
+        insertedInto: "abcdef"
+      })
+    ).toBe(true);
+    expect(
+      shouldCoalesceTextCommit(burst, {
+        key: "p:3:insert",
+        caretBefore: 5,
+        at: 1400,
+        insertedInto: "abcde "
+      })
+    ).toBe(true);
   });
 
   it("does not coalesce without a previous burst", () => {
@@ -449,6 +468,19 @@ describe("shouldCoalesceTextCommit", () => {
         at: 900
       })
     ).toBe(false);
+  });
+});
+
+describe("startsNewWord", () => {
+  it("is true only for a non-space right after whitespace", () => {
+    expect(startsNewWord("ab c", 3)).toBe(true);
+    expect(startsNewWord("ab\tc", 3)).toBe(true);
+    expect(startsNewWord("ab\nc", 3)).toBe(true);
+    expect(startsNewWord("ab\u00a0c", 3)).toBe(true);
+    expect(startsNewWord("abc", 2)).toBe(false);
+    expect(startsNewWord("ab  ", 3)).toBe(false);
+    expect(startsNewWord("c", 0)).toBe(false);
+    expect(startsNewWord("ab ", 3)).toBe(false);
   });
 });
 

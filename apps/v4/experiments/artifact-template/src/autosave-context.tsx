@@ -56,6 +56,7 @@ export function useDocumentRevision(revision: unknown, ready: boolean) {
     )
       save?.dirty()
     previous.current = { revision, ready }
+    if (save) save.ready = ready
     if (ready) save?.documentReady()
   }, [ready, revision, save])
 }

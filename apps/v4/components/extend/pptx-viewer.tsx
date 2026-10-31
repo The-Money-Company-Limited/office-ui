@@ -373,7 +373,7 @@ function PptxToolbar({
   activeSlideIndex,
   controlsDisabled,
   fileName,
-  isDark,
+  isDark = false,
   isPreparingDownload,
   onDownload,
   onIsDarkChange,
@@ -575,7 +575,7 @@ function PptxToolbar({
           </div>
           {onIsDarkChange ? (
             <AppearanceToggle
-              isDark={isDark ?? false}
+              isDark={isDark}
               onIsDarkChange={onIsDarkChange}
             />
           ) : null}

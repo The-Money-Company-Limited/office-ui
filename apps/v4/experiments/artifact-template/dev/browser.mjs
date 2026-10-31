@@ -22,6 +22,14 @@ const browser = await chromium.launch({
 })
 const outcomes = []
 const negative = process.argv.includes("--negative")
+// Scenarios for some kinds only; every other scenario runs on each editable kind (not pptx).
+const scenarioKinds = {
+  alignment: ["xlsx"],
+  "slide-ids": ["slides"],
+  header: ["pptx", "pdf"],
+  undo: ["docx", "xlsx"],
+  webmcp: ["docx", "xlsx", "pdf"],
+}
 const kinds = process.env.AUTOSAVE_KINDS?.split(",") ?? [
   "docx",
   "xlsx",
@@ -250,11 +258,20 @@ async function run(kind, scenario) {
         : "Autosave original"
     if (scenario === "webmcp") {
       // An agent in the browser reads the open document, unsaved edits included; nothing writes.
-      const call = (name, input = {}) =>
-        page.evaluate(
-          async ([name, input]) => window.webmcpTools.get(name).execute(input),
-          [name, input]
-        )
+      // Tools register on mount and answer "still opening" until the document has loaded.
+      const call = async (name, input = {}) => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            return await page.evaluate(
+              async ([name, input]) => window.webmcpTools.get(name).execute(input),
+              [name, input]
+            )
+          } catch (error) {
+            if (attempt > 100 || !String(error).includes("still opening")) throw error
+            await page.waitForTimeout(100)
+          }
+        }
+      }
       const tools = () =>
         page.evaluate(() =>
           [...window.webmcpTools.values()].map((tool) => ({
@@ -724,14 +741,7 @@ try {
       "undo",
       "webmcp",
     ])
-      if (
-        (scenario !== "alignment" || kind === "xlsx") &&
-        (scenario !== "slide-ids" || kind === "slides") &&
-        (scenario !== "header" || kind === "pptx" || kind === "pdf") &&
-        (scenario !== "undo" || kind === "docx" || kind === "xlsx") &&
-        (scenario !== "webmcp" || ["docx", "xlsx", "pdf"].includes(kind)) &&
-        (kind !== "pptx" || scenario === "header")
-      )
+      if (scenarioKinds[scenario]?.includes(kind) ?? kind !== "pptx")
         await run(kind, scenario)
 } finally {
   await browser.close()
