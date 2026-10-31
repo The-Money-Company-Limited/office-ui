@@ -1,7 +1,7 @@
 # Slides verification
 
 Run builds, typechecks and browser tests on Modal from
-`~/Desktop/Code/office-ui/tools/modal`. The browser runner uses the existing `.cod1460`
+`tools/modal` (`cd tools/modal`; `office-ui` below is the main checkout). The browser runner uses the existing `.cod1460`
 Playwright, Chromium and shared-library setup inside `/work/office-ui`.
 JSZip resolves from `apps/v4/package.json`; there is no nested slides package.
 
@@ -86,7 +86,7 @@ Keep `validate.js` and `slides.css` beside the command. In the shared Modal sand
 reuse the already-installed browser and libraries, without touching other repos:
 
 ```sh
-cd ~/Desktop/Code/office-ui/tools/modal
+cd tools/modal
 ./r up
 ./r sync office-ui
 ./r run office-ui 'mkdir -p apps/v4/components/extend/slides/node_modules && ln -sfn /work/office-ui/.cod1460/node_modules/playwright apps/v4/components/extend/slides/node_modules/playwright'
@@ -146,7 +146,7 @@ the safe area. The preview HTML lives in `results/checker-margin/sample-preview`
 
 ## Editable charts (COD-1474)
 
-From `~/Desktop/Code/office-ui/tools/modal`, run:
+From `tools/modal`, run:
 
 ```sh
 ./r up
@@ -199,7 +199,7 @@ against the preceding bundle (expected failure: controls never open), then
 rebuilding and rerunning the full release browser suite. The existing editing
 case also caught a delayed-focus race (the value was inserted into the header);
 Data now focuses on mount, with no animation-frame callback. Exact follow-up
-commands from `~/Desktop/Code/office-ui/tools/modal`:
+commands from `tools/modal`:
 
 ```sh
 ./r run office-ui 'cd apps/v4 && node node_modules/eslint/bin/eslint.js components/extend/slides/*.js components/extend/slides/*.ts components/extend/slides/*.tsx components/extend/slides/tests/*.mjs components/extend/slides/tests/*.ts && node node_modules/typescript/bin/tsc --noEmit -p . && pnpm artifact-template:build > components/extend/slides/tests/results/chart-artifact-build.log 2>&1'

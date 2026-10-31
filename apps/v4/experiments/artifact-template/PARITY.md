@@ -23,8 +23,8 @@ against the published demos. Status: ✅ works, 🔧 fixed (commit), ❌ missing
 | Cmd+F find in the sheet | 🔧 react-xlsx + office-ui |
 | Name box shows the selection; typing a reference jumps there | 🔧 office-ui |
 | A sheet opens with its saved active cell (or A1) selected | 🔧 react-xlsx |
-| Rename, reorder sheets | ⛔ duke-sheets has no rename/move |
-| Insert / delete rows and columns | ⛔ duke-sheets has no insert/delete |
+| Rename, reorder sheets | 🔧 duke-sheets + react-xlsx (5cee3c5), not rechecked by hand since |
+| Insert / delete rows and columns | 🔧 duke-sheets + react-xlsx (5cee3c5), not rechecked by hand since |
 
 ## Docs (DOCX)
 

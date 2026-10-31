@@ -246,13 +246,14 @@ apps are excluded from the workspace. After building, `pnpm v4:dev` serves
 the site at `http://localhost:4000`. The existing v4 scripts also work,
 including `pnpm --filter v4 build` after the engines have been built.
 
-Builds, tests, and Rust/wasm rebuilds run on Modal, not on the laptop. With the
-helper at `tools/modal/r`, use a repo path relative to `~/Desktop/Code`
-(`office-ui` for the main checkout, `worktrees/office-ui/<name>` for a worktree):
+Builds, tests, and Rust/wasm rebuilds run on Modal, not on the laptop, through
+`tools/modal/r`. From the root of the checkout (main or worktree), `.` names it.
+In a worktree `.git` is a file and is not uploaded, so builds that stamp
+`git describe` need a `git init` in the sandbox copy first:
 
 ```bash
-r=~/Desktop/Code/office-ui/tools/modal/r
-repo=office-ui
+r=tools/modal/r
+repo=.
 "$r" up
 "$r" sync "$repo"
 "$r" run "$repo" 'pnpm install --frozen-lockfile && pnpm build'

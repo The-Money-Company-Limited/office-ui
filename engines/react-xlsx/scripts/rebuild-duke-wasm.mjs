@@ -1,18 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = fileURLToPath(new URL("../", import.meta.url));
 const source = fileURLToPath(new URL("../../duke-sheets/", import.meta.url));
 const remote = fileURLToPath(new URL("../../../tools/modal/r", import.meta.url));
-// The Modal helper names a directory relative to ~/Desktop/Code.
-const repo = path.relative(path.join(homedir(), "Desktop/Code"), source);
 const vendor = new URL("../packages/react-xlsx/vendor/sheets-wasm/", import.meta.url);
 const git = (...args) => execFileSync("git", ["-C", source, ...args], { encoding: "utf8" });
-const run = (...args) => execFileSync(remote, args, { cwd: root, stdio: "inherit" });
+const run = (...args) => execFileSync(remote, args, { stdio: "inherit" });
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const allowDirty = process.argv.slice(2).join(" ") === "--allow-dirty";
 if (process.argv.length > 2 && !allowDirty) throw new Error("Usage: sh scripts/rebuild-duke-wasm.sh [--allow-dirty]");
@@ -24,7 +19,6 @@ function sourceState() {
     hash.update(file).update("\0").update(sha256(readFileSync(`${source}/${file}`))).update("\n");
   }
   return {
-    commit: git("rev-parse", "HEAD").trim(),
     dirty: git("status", "--porcelain", "--untracked-files=all", "--", ".").length > 0,
     sourceSha256: hash.digest("hex"),
   };
@@ -36,9 +30,9 @@ if (before.dirty && !allowDirty) {
 }
 const command = "wasm-pack build bindings/wasm --target web --release --out-dir pkg -- --locked";
 run("up");
-run("sync", repo);
-run("run", repo, command);
-run("pull", repo, "bindings/wasm/pkg");
+run("sync", source);
+run("run", source, command);
+run("pull", source, "bindings/wasm/pkg");
 if (JSON.stringify(before) !== JSON.stringify(sourceState())) {
   throw new Error("duke-sheets source changed during the build; rerun before installing the artifact.");
 }
