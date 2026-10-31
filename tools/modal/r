@@ -1,0 +1,2 @@
+#!/bin/sh
+exec uv run -q --with modal python "$(dirname "$0")/remote.py" "$@"

@@ -51,3 +51,5 @@ test-results/
 shadcn-workspace
 .codex-artifacts
 .claude/
+
+__pycache__/

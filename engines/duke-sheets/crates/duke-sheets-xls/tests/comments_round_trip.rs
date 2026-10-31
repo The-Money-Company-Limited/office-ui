@@ -1,0 +1,344 @@
+//! Round-trip tests for the XLS writer's comment emission:
+//! `MSODRAWINGGROUP`, `MSODRAWING`, `OBJ`, `TXO`, and `NOTE` records.
+//!
+//! These tests exercise the in-process loop:
+//!
+//! 1. Build a workbook with one or more `CellComment`s via the core
+//!    model.
+//! 2. Serialise with [`XlsWriter`].
+//! 3. Read the resulting bytes back with [`XlsReader`].
+//! 4. Confirm the comment is present at the expected cell with the
+//!    expected text + author.
+//!
+//! In-process round-trip is the cheapest layer — it asserts the
+//! writer + reader agree on the encoding. It does not catch
+//! spec-noncompliant output that our permissive reader still parses;
+//! that needs the Excel COM parity layer (writing_xls.rs).
+
+use std::io::Cursor;
+
+use duke_sheets_chart::{CellMarker, DrawingAnchor};
+use duke_sheets_core::{CellComment, DrawingObject, Workbook};
+use duke_sheets_xls::{XlsReader, XlsWriter};
+
+const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
+
+fn write_then_read(wb: &Workbook) -> Workbook {
+    let bytes = XlsWriter::write_to_bytes(wb).expect("serialize");
+    XlsReader::read(Cursor::new(&bytes)).expect("read back")
+}
+
+// features: Rich text in comments
+#[test]
+fn rich_comment_runs_round_trip_xls() {
+    use duke_sheets_core::rich_text::{RichTextRun, RunFont};
+    use duke_sheets_core::DrawingText;
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let text = DrawingText {
+        runs: vec![
+            RichTextRun {
+                text: "Bold lead".to_string(),
+                font: Some(RunFont {
+                    bold: Some(true),
+                    ..RunFont::default()
+                }),
+            },
+            RichTextRun {
+                text: " then plain".to_string(),
+                font: None,
+            },
+        ],
+        ..DrawingText::default()
+    };
+    ws.set_comment_at(
+        0,
+        0,
+        CellComment {
+            author: "Reviewer".to_string(),
+            text,
+        },
+    )
+    .expect("set comment");
+
+    let parsed = write_then_read(&wb);
+    let comment = parsed
+        .worksheet(0)
+        .unwrap()
+        .comment_at(0, 0)
+        .expect("comment survives");
+    assert_eq!(comment.plain_text(), "Bold lead then plain");
+    assert_eq!(comment.text.runs.len(), 2, "run boundaries survive");
+    assert_eq!(comment.text.runs[0].text, "Bold lead");
+    assert_eq!(
+        comment.text.runs[0]
+            .font
+            .as_ref()
+            .and_then(|font| font.bold),
+        Some(true),
+        "bold run formatting survives"
+    );
+    assert_eq!(comment.text.runs[1].text, " then plain");
+}
+
+#[test]
+fn single_comment_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").expect("set A1");
+    ws.set_comment_at(0, 0, CellComment::new("Alice", "This is a note"))
+        .expect("set comment");
+
+    let parsed = write_then_read(&wb);
+    let ws_in = parsed.worksheet(0).unwrap();
+    let c = ws_in
+        .comment_at(0, 0)
+        .expect("comment must survive round-trip");
+    assert_eq!(c.plain_text(), "This is a note");
+    assert_eq!(c.author, "Alice");
+}
+
+#[test]
+fn comment_without_anchor_cell_value_round_trips() {
+    // Cell value is optional: a comment can sit on an otherwise-empty
+    // cell. The OBJ/TXO/NOTE chain must still link correctly.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_comment_at(5, 3, CellComment::new("Bob", "Empty-cell note"))
+        .expect("set comment");
+
+    let parsed = write_then_read(&wb);
+    let ws_in = parsed.worksheet(0).unwrap();
+    let c = ws_in
+        .comment_at(5, 3)
+        .expect("comment on empty cell must survive");
+    assert_eq!(c.plain_text(), "Empty-cell note");
+    assert_eq!(c.author, "Bob");
+}
+
+// features: Comment positioning (anchor)
+#[test]
+fn custom_comment_anchor_round_trips() {
+    // A user-moved comment popup must keep its anchor instead of
+    // being reset to Excel's default placement. Offsets are exact
+    // under the ClientAnchor quantisation (multiples of 9,525 EMU for
+    // dx at the 609,600 EMU default column, 47,625 EMU for dy at the
+    // 190,500 EMU default row), so the round-trip is exact.
+    let custom = DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: 8,
+            col_offset_emu: 19_050, // 32/1024 of 609,600
+            row: 2,
+            row_offset_emu: 47_625, // 64/256 of 190,500
+        },
+        to: CellMarker {
+            col: 12,
+            col_offset_emu: 295_275, // 496/1024 of 609,600
+            row: 9,
+            row_offset_emu: 142_875, // 192/256 of 190,500
+        },
+        edit_as: None,
+    };
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0).unwrap().add_drawing(
+        DrawingObject::comment(1, 1, CellComment::new("Alice", "moved popup"))
+            .with_anchor(custom.clone()),
+    ).unwrap();
+
+    let parsed = write_then_read(&wb);
+    let ws_in = parsed.worksheet(0).unwrap();
+    let comment = ws_in.comments_drawn().next().expect("comment survives");
+    assert_eq!((comment.row, comment.col), (1, 1));
+    assert_eq!(comment.comment.plain_text(), "moved popup");
+    assert_eq!(comment.object.anchor, custom);
+}
+
+#[test]
+fn multiple_comments_on_same_sheet_round_trip() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_comment_at(0, 0, CellComment::new("Alice", "First")).expect("set comment");
+    ws.set_comment_at(2, 1, CellComment::new("Alice", "Second")).expect("set comment");
+    ws.set_comment_at(10, 5, CellComment::new("Charlie", "Third"))
+        .expect("set comment");
+
+    let parsed = write_then_read(&wb);
+    let ws_in = parsed.worksheet(0).unwrap();
+    assert_eq!(ws_in.comment_count(), 3);
+    assert_eq!(ws_in.comment_at(0, 0).unwrap().plain_text(), "First");
+    assert_eq!(ws_in.comment_at(2, 1).unwrap().plain_text(), "Second");
+    assert_eq!(ws_in.comment_at(10, 5).unwrap().plain_text(), "Third");
+    assert_eq!(ws_in.comment_at(10, 5).unwrap().author, "Charlie");
+}
+
+#[test]
+fn unicode_comment_text_round_trips() {
+    // Japanese + emoji forces the writer onto the UTF-16LE path
+    // (high-byte flag in the TXO CONTINUE).
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_comment_at(0, 0, CellComment::new("作者", "こんにちは 🌸"))
+        .expect("set comment");
+
+    let parsed = write_then_read(&wb);
+    let c = parsed.worksheet(0).unwrap().comment_at(0, 0).unwrap();
+    assert_eq!(c.plain_text(), "こんにちは 🌸");
+    assert_eq!(c.author, "作者");
+}
+
+#[test]
+fn comments_on_multiple_sheets_round_trip() {
+    let mut wb = Workbook::new();
+    wb.rename_worksheet(0, "First").expect("rename");
+    wb.add_worksheet_with_name("Second").expect("add second");
+    wb.add_worksheet_with_name("Third").expect("add third");
+
+    wb.worksheet_mut(0)
+        .unwrap()
+        .set_comment_at(0, 0, CellComment::new("a", "sheet 1 comment")).expect("set comment");
+    wb.worksheet_mut(2)
+        .unwrap()
+        .set_comment_at(4, 4, CellComment::new("c", "sheet 3 comment")).expect("set comment");
+
+    let parsed = write_then_read(&wb);
+    assert_eq!(
+        parsed.worksheet(0).unwrap().comment_at(0, 0).unwrap().plain_text(),
+        "sheet 1 comment"
+    );
+    assert_eq!(parsed.worksheet(1).unwrap().comment_count(), 0);
+    assert_eq!(
+        parsed.worksheet(2).unwrap().comment_at(4, 4).unwrap().plain_text(),
+        "sheet 3 comment"
+    );
+}
+
+/// LibreOffice envelope check: write an XLS with one comment, push to
+/// the LO shared dir, open via URP, read the anchor cell's value back.
+///
+/// This is a smoke test — if the OBJ/TXO/NOTE chain or the Escher
+/// tree is malformed, LO refuses to open the file and the bridge
+/// `open_workbook` call errors. Deeper inspection of the comment's
+/// text via UNO is fragile across LO versions, so we settle for
+/// confirming the file is well-formed enough to load.
+#[test]
+fn lo_can_open_xls_with_comments_we_emit() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 42.0).expect("A1");
+    ws.set_comment_at(0, 0, CellComment::new("Alice", "Loadable note"))
+        .expect("set comment");
+    ws.set_cell_value("B2", "hello").expect("B2");
+    ws.set_comment_at(1, 1, CellComment::new("Bob", "Second note"))
+        .expect("set comment");
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+    std::fs::create_dir_all(SHARED_DIR).expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("{SHARED_DIR}/duke_comments_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<f64, String> = rt.block_on(async {
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
+        let mut wb_in = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let a1 = wb_in
+            .get_cell_value("A1")
+            .await
+            .map_err(|e| format!("A1: {e}"))?;
+        Ok(a1)
+    });
+    let _ = std::fs::remove_file(&path);
+    let a1 = outcome.expect("LO must open our XLS with comments without error");
+    assert!(
+        (a1 - 42.0).abs() < 1e-9,
+        "A1 must round-trip; got {a1} (expected 42)"
+    );
+}
+
+#[test]
+fn visible_comment_flag_round_trips() {
+    // The comment's popup visibility must survive: writer sets NOTE
+    // flags bit 1 (0x0002), reader pulls it back out.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "v").unwrap();
+    ws.set_comment_at(0, 0, CellComment::new("Alice", "Visible note"))
+        .expect("set comment");
+    ws.set_comment_visible(0, 0, true);
+    ws.set_comment_at(1, 0, CellComment::new("Alice", "Hidden note"))
+        .expect("set comment");
+
+    let parsed = write_then_read(&wb);
+    let ws_in = parsed.worksheet(0).unwrap();
+    assert_eq!(
+        ws_in.comment_visible(0, 0),
+        Some(true),
+        "visible=true must round-trip"
+    );
+    assert_eq!(
+        ws_in.comment_visible(1, 0),
+        Some(false),
+        "visible=false must round-trip"
+    );
+}
+
+#[test]
+fn empty_workbook_emits_no_drawing_records() {
+    // A workbook with zero comments must not emit MSODRAWINGGROUP or
+    // MSODRAWING records.
+    //
+    // To make this a precise check (not just "reader sees no
+    // comments"), we walk the CFB envelope, extract the /Workbook
+    // stream, then scan BIFF record headers within that stream for
+    // record types 0xEB or 0xEC. Any hit is a writer bug.
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .set_cell_value("A1", "value")
+        .expect("A1");
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+
+    let parsed = XlsReader::read(Cursor::new(&bytes)).expect("read back");
+    assert_eq!(parsed.worksheet(0).unwrap().comment_count(), 0);
+
+    // Walk the workbook stream as a series of BIFF records and
+    // verify no MSODRAWINGGROUP (0x00EB) or MSODRAWING (0x00EC)
+    // appears. We re-use the reader's CFB extractor by going
+    // through the public Cursor path: the workbook stream is the
+    // contents of /Workbook in the CFB envelope.
+    let stream = extract_workbook_stream(&bytes);
+    let mut off = 0usize;
+    while off + 4 <= stream.len() {
+        let rt = u16::from_le_bytes([stream[off], stream[off + 1]]);
+        let body_len = u16::from_le_bytes([stream[off + 2], stream[off + 3]]) as usize;
+        assert!(
+            rt != 0x00EB && rt != 0x00EC,
+            "no-comment workbook emitted drawing record 0x{rt:04X} at offset {off}"
+        );
+        off += 4 + body_len;
+        if off + 4 > stream.len() {
+            break;
+        }
+    }
+}
+
+/// Extract the `/Workbook` stream from a CFB envelope using the
+/// crate's own CFB reader.
+fn extract_workbook_stream(cfb_bytes: &[u8]) -> Vec<u8> {
+    let comp = duke_sheets_xls::cfb::CompoundFile::open(Cursor::new(cfb_bytes))
+        .expect("CFB open");
+    comp.read_stream("/Workbook").expect("Workbook stream")
+}

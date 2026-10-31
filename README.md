@@ -229,6 +229,9 @@ The app and the three engine forks share one pnpm 9.15.0 workspace and one
 root lockfile. The forks live in `engines/react-docx`, `engines/react-xlsx`,
 and `engines/react-pptx`, imported with full history using Git subtrees.
 `apps/v4` consumes their packages with `workspace:*` dependencies.
+`engines/duke-sheets` is the Rust spreadsheet engine behind XLSX, also a
+subtree with full history; it is not a pnpm package, and react-xlsx vendors
+its wasm build.
 
 From the repository root, on Modal:
 
@@ -243,13 +246,14 @@ apps are excluded from the workspace. After building, `pnpm v4:dev` serves
 the site at `http://localhost:4000`. The existing v4 scripts also work,
 including `pnpm --filter v4 build` after the engines have been built.
 
-Builds, tests, and Rust/wasm rebuilds run on Modal, not on the laptop. With the
-helper at `~/Desktop/Code/office-remote/r`, use a repo path relative to
-`~/Desktop/Code` (for this worktree, `worktrees/office-ui/one-repo`):
+Builds, tests, and Rust/wasm rebuilds run on Modal, not on the laptop, through
+`tools/modal/r`. From the root of the checkout (main or worktree), `.` names it.
+In a worktree `.git` is a file and is not uploaded, so builds that stamp
+`git describe` need a `git init` in the sandbox copy first:
 
 ```bash
-r=~/Desktop/Code/office-remote/r
-repo=worktrees/office-ui/one-repo
+r=tools/modal/r
+repo=.
 "$r" up
 "$r" sync "$repo"
 "$r" run "$repo" 'pnpm install --frozen-lockfile && pnpm build'
@@ -295,6 +299,7 @@ From the office-ui root, pull upstream changes (replace `<name>` with
 
 ```bash
 git subtree pull --prefix=engines/<name> https://github.com/extend-hq/<name>.git main
+git subtree pull --prefix=engines/duke-sheets https://github.com/guseggert/duke-sheets.git main
 ```
 
 Keep full history: do not add `--squash`. Resolve workspace/configuration
@@ -303,11 +308,12 @@ pnpm settings into the root, and removing any reintroduced engine lockfiles
 or workspace files. Install/build/test on Modal and bring the root lockfile
 back before committing the update.
 
-If a fix needs to go back to a fork, push its subtree to a dedicated branch
-and open a PR there:
+Engine changes are made here; the old The-Money-Company-Limited forks are
+archived. To offer a fix upstream, push its subtree to a branch of a fork of
+the upstream repo and open a PR there:
 
 ```bash
-git subtree push --prefix=engines/<name> https://github.com/The-Money-Company-Limited/<name>.git <fix-branch>
+git subtree push --prefix=engines/<name> <your-fork-url> <fix-branch>
 ```
 
 ### Shared pnpm settings

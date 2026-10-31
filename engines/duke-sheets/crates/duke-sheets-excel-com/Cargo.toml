@@ -1,0 +1,25 @@
+[package]
+name = "duke-sheets-excel-com"
+version = "0.1.0"
+edition = "2021"
+description = "Excel COM automation via C# bridge in Windows VM - native Linux client library"
+
+[dependencies]
+base64 = "0.22.1"
+excel-com-protocol = { path = "../excel-com-protocol" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+
+[dev-dependencies]
+# Parity assertion modules read fixtures back through the full facade
+# (XlsxReader + the formula engine), next to the generators that build them.
+duke-sheets = { path = "../duke-sheets" }
+duke-sheets-core = { path = "../duke-sheets-core" }
+duke-sheets-chart = { path = "../duke-sheets-chart" }
+duke-sheets-crypto = { path = "../duke-sheets-crypto" }
+duke-sheets-test-harness.workspace = true
+duke-sheets-xls = { path = "../duke-sheets-xls" }
+duke-sheets-xlsb = { path = "../duke-sheets-xlsb" }
+duke-sheets-xlsx = { path = "../duke-sheets-xlsx" }
+zip.workspace = true

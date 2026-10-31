@@ -1,0 +1,364 @@
+//! Duke Sheets CLI - spreadsheet conversion tool
+
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+use duke_sheets::prelude::*;
+use duke_sheets::{CalculationOptions, WorkbookCalculationExt};
+use std::io::{self, Write};
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(name = "duke")]
+#[command(
+    author,
+    version,
+    about = "Spreadsheet conversion and manipulation tool"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Convert a spreadsheet to CSV and output to stdout or file
+    #[command(alias = "csv")]
+    ToCsv {
+        /// Input spreadsheet file (xlsx, xls, csv)
+        input: PathBuf,
+
+        /// Output CSV file (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Sheet index to convert (0-based, default: 0)
+        #[arg(short, long, default_value = "0")]
+        sheet: usize,
+
+        /// Calculate formulas before export
+        #[arg(short, long)]
+        calculate: bool,
+
+        /// Apply Excel number formats (dates, percentages, currencies, etc.)
+        /// By default, raw values are emitted (better for data processing).
+        #[arg(short, long)]
+        formatted: bool,
+
+        /// Field delimiter (default: comma)
+        #[arg(short, long, default_value = ",")]
+        delimiter: char,
+    },
+
+    /// Show information about a spreadsheet
+    Info {
+        /// Input spreadsheet file
+        input: PathBuf,
+    },
+
+    /// List all sheets in a workbook
+    Sheets {
+        /// Input spreadsheet file
+        input: PathBuf,
+    },
+
+    /// Convert a spreadsheet to HTML and output to stdout or file
+    #[command(alias = "html")]
+    ToHtml {
+        /// Input spreadsheet file (xlsx, xls, csv)
+        input: PathBuf,
+
+        /// Output HTML file (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Sheet index to convert (0-based, default: 0)
+        #[arg(short, long, default_value = "0")]
+        sheet: usize,
+
+        /// Skip formula calculation (formulas are calculated by default
+        /// so that cells show values instead of blanks).
+        #[arg(long)]
+        no_calculate: bool,
+
+        /// Emit raw values instead of formatted (by default, Excel number
+        /// formats are applied so dates, percentages, etc. render properly).
+        #[arg(long)]
+        raw: bool,
+
+        /// Output only the <table> element (no full HTML document wrapper)
+        #[arg(long)]
+        fragment: bool,
+
+        /// Custom document title
+        #[arg(short, long)]
+        title: Option<String>,
+    },
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::ToCsv {
+            input,
+            output,
+            sheet,
+            calculate,
+            formatted,
+            delimiter,
+        } => to_csv(
+            &input,
+            output.as_deref(),
+            sheet,
+            calculate,
+            formatted,
+            delimiter,
+        ),
+        Commands::Info { input } => show_info(&input),
+        Commands::Sheets { input } => list_sheets(&input),
+        Commands::ToHtml {
+            input,
+            output,
+            sheet,
+            no_calculate,
+            raw,
+            fragment,
+            title,
+        } => to_html(
+            &input,
+            output.as_deref(),
+            sheet,
+            !no_calculate,
+            raw,
+            fragment,
+            title,
+        ),
+    }
+}
+
+fn to_csv(
+    input: &PathBuf,
+    output: Option<&std::path::Path>,
+    sheet_idx: usize,
+    calculate: bool,
+    formatted: bool,
+    delimiter: char,
+) -> Result<()> {
+    // Load the workbook
+    let mut workbook =
+        Workbook::open(input).with_context(|| format!("Failed to open '{}'", input.display()))?;
+
+    // Calculate formulas if requested (only for the target sheet + its dependencies)
+    if calculate {
+        let stats = workbook
+            .calculate_with_options(&CalculationOptions {
+                force_full_calculation: true,
+                sheets: vec![sheet_idx],
+                ..Default::default()
+            })
+            .context("Failed to calculate formulas")?;
+
+        eprintln!(
+            "Calculated {} formulas in {} pass{} ({} errors{})",
+            stats.formula_count,
+            stats.iterations,
+            if stats.iterations == 1 { "" } else { "es" },
+            stats.errors,
+            if stats.converged { "" } else { ", did not converge" },
+        );
+    }
+
+    // Get the worksheet
+    let sheet = workbook
+        .worksheet(sheet_idx)
+        .with_context(|| format!("Sheet index {} not found", sheet_idx))?;
+
+    // Get the used range
+    let Some(used_range) = sheet.used_range() else {
+        eprintln!("Warning: Sheet appears to be empty");
+        return Ok(());
+    };
+
+    let max_row = used_range.end.row;
+    let max_col = used_range.end.col;
+
+    // Build CSV output
+    let mut csv_output = String::new();
+
+    for row in 0..=max_row {
+        let mut first = true;
+        for col in 0..=max_col {
+            if !first {
+                csv_output.push(delimiter);
+            }
+            first = false;
+
+            let text = if formatted {
+                // Apply Excel number formats (dates, percentages, etc.)
+                csv_escape(&sheet.formatted_value_at(row, col), delimiter)
+            } else {
+                // Raw value (better for data pipelines)
+                let value = if calculate {
+                    sheet.get_calculated_value_at(row, col)
+                } else {
+                    Some(&sheet.get_value_at(row, col))
+                };
+                value
+                    .map(|val| cell_value_to_csv_string(val, delimiter))
+                    .unwrap_or_default()
+            };
+            csv_output.push_str(&text);
+        }
+        csv_output.push('\n');
+    }
+
+    // Output
+    if let Some(output_path) = output {
+        std::fs::write(output_path, &csv_output)
+            .with_context(|| format!("Failed to write '{}'", output_path.display()))?;
+        eprintln!("Wrote {} rows to '{}'", max_row + 1, output_path.display());
+    } else {
+        io::stdout()
+            .write_all(csv_output.as_bytes())
+            .context("Failed to write to stdout")?;
+    }
+
+    Ok(())
+}
+
+/// Quote a string for CSV if it contains the delimiter, quotes, or newlines.
+fn csv_escape(text: &str, delimiter: char) -> String {
+    if text.contains(delimiter) || text.contains('"') || text.contains('\n') || text.contains('\r')
+    {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    } else {
+        text.to_string()
+    }
+}
+
+/// Convert a CellValue to a CSV-safe string
+fn cell_value_to_csv_string(value: &CellValue, delimiter: char) -> String {
+    let text = match value {
+        CellValue::Empty => String::new(),
+        CellValue::Number(n) => {
+            if n.fract() == 0.0 && n.abs() < 1e15 {
+                format!("{}", *n as i64)
+            } else {
+                format!("{}", n)
+            }
+        }
+        CellValue::String(s) => s.to_string(),
+        CellValue::RichText(runs) => duke_sheets::rich_text_to_plain(runs),
+        CellValue::Boolean(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+        CellValue::Error(e) => e.to_string(),
+        CellValue::SpillTarget { .. } => {
+            // SpillTarget cells would need to look up the source formula's array result
+            // For CSV export, we output empty for now
+            String::new()
+        }
+    };
+
+    // Quote if necessary
+    if text.contains(delimiter) || text.contains('"') || text.contains('\n') || text.contains('\r')
+    {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    } else {
+        text
+    }
+}
+
+fn show_info(input: &PathBuf) -> Result<()> {
+    let workbook =
+        Workbook::open(input).with_context(|| format!("Failed to open '{}'", input.display()))?;
+
+    println!("File: {}", input.display());
+    println!("Sheets: {}", workbook.sheet_count());
+
+    for i in 0..workbook.sheet_count() {
+        if let Some(sheet) = workbook.worksheet(i) {
+            let formula_count = sheet.formula_cells().count();
+
+            println!();
+            println!("  Sheet {}: \"{}\"", i, sheet.name());
+
+            if let Some(range) = sheet.used_range() {
+                println!(
+                    "    Used range: {} rows x {} columns",
+                    range.end.row + 1,
+                    range.end.col + 1
+                );
+            } else {
+                println!("    Used range: empty");
+            }
+            println!("    Formulas: {}", formula_count);
+        }
+    }
+
+    Ok(())
+}
+
+fn list_sheets(input: &PathBuf) -> Result<()> {
+    let workbook =
+        Workbook::open(input).with_context(|| format!("Failed to open '{}'", input.display()))?;
+
+    for i in 0..workbook.sheet_count() {
+        if let Some(sheet) = workbook.worksheet(i) {
+            println!("{}\t{}", i, sheet.name());
+        }
+    }
+
+    Ok(())
+}
+
+fn to_html(
+    input: &PathBuf,
+    output: Option<&std::path::Path>,
+    sheet_idx: usize,
+    calculate: bool,
+    raw: bool,
+    fragment: bool,
+    title: Option<String>,
+) -> Result<()> {
+    let mut workbook =
+        Workbook::open(input).with_context(|| format!("Failed to open '{}'", input.display()))?;
+
+    if calculate {
+        let stats = workbook
+            .calculate_with_options(&CalculationOptions {
+                force_full_calculation: true,
+                sheets: vec![sheet_idx],
+                ..Default::default()
+            })
+            .context("Failed to calculate formulas")?;
+
+        eprintln!(
+            "Calculated {} formulas ({} errors)",
+            stats.cells_calculated, stats.errors
+        );
+    }
+
+    let sheet = workbook
+        .worksheet(sheet_idx)
+        .with_context(|| format!("Sheet index {} not found", sheet_idx))?;
+
+    let options = duke_sheets_html::HtmlOptions {
+        full_document: !fragment,
+        title,
+        formatted: !raw,
+        theme_palette: workbook.theme_palette(),
+    };
+
+    let html = duke_sheets_html::worksheet_to_html(sheet, &options);
+
+    if let Some(output_path) = output {
+        std::fs::write(output_path, &html)
+            .with_context(|| format!("Failed to write '{}'", output_path.display()))?;
+        eprintln!("Wrote HTML to '{}'", output_path.display());
+    } else {
+        io::stdout()
+            .write_all(html.as_bytes())
+            .context("Failed to write to stdout")?;
+    }
+
+    Ok(())
+}

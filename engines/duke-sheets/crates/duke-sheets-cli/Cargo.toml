@@ -1,0 +1,18 @@
+[package]
+name = "duke-sheets-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Command-line tool for spreadsheet conversion"
+
+[[bin]]
+name = "duke"
+path = "src/main.rs"
+
+[dependencies]
+duke-sheets = { path = "../duke-sheets", features = ["full"] }
+duke-sheets-html.workspace = true
+anyhow.workspace = true
+clap.workspace = true
