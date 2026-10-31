@@ -266,16 +266,32 @@ export interface TextCommitBurst {
   at: number;
 }
 
+// How a host asks for a commit to join the open undo step. caretBefore
+// defaults to the insertion offset.
+export interface TextCommitCoalesce {
+  key: string;
+  editClass: "insert" | "delete";
+  caretBefore?: number;
+}
+
+// A character typed at offset starts a new word when it follows whitespace.
+export function startsNewWord(text: string, offset: number): boolean {
+  return offset > 0 && isWhitespaceChar(text.charAt(offset - 1)) && /\S/.test(text.charAt(offset));
+}
+
 // Per-keystroke commits coalesce into one history entry while the burst is
 // unbroken: same paragraph and intent class, caret continuity (each edit
-// starts where the previous one left the caret), and no long pause.
+// starts where the previous one left the caret), and no long pause. An insert
+// passes the paragraph text after it; a new word starts a new entry, so undo
+// takes back typing word by word, as in Google Docs.
 export function shouldCoalesceTextCommit(
   previous: TextCommitBurst | undefined,
-  next: { key: string; caretBefore: number; at: number },
+  next: { key: string; caretBefore: number; at: number; insertedInto?: string },
   windowMs = 1000
 ): boolean {
   return Boolean(
     previous &&
+      !(next.insertedInto !== undefined && startsNewWord(next.insertedInto, next.caretBefore)) &&
       previous.key === next.key &&
       next.at >= previous.at &&
       next.at - previous.at <= windowMs &&

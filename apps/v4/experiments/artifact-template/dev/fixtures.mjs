@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import JSZip from "jszip"
+import PptxGenJS from "pptxgenjs"
 import { PDFDocument } from "pdf-lib"
 
 export async function fixtures(folder) {
@@ -50,4 +51,10 @@ export async function fixtures(folder) {
   pdf.addPage().drawText("Autosave original")
   pdf.setTitle("Autosave original")
   await writeFile(`${folder}/sample.pdf`, await pdf.save())
+  const pptx = new PptxGenJS()
+  pptx.addSlide().addText("Autosave original", { x: 1, y: 1, w: 8, h: 1 })
+  await writeFile(
+    `${folder}/sample.pptx`,
+    await pptx.write({ outputType: "nodebuffer" })
+  )
 }

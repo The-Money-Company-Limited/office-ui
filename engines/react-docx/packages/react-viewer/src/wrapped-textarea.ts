@@ -16,6 +16,10 @@ export interface TextareaTextEdit {
   sourceSelectionEnd: number;
   changed: boolean;
   replacement?: { sourceStart: number; sourceEnd: number; inserted: string };
+  // A single typed or deleted character can join the open undo step.
+  editClass?: "insert" | "delete";
+  // The caret before the edit, from the beforeinput hint, in source offsets.
+  sourceCaretBefore?: number;
 }
 
 export function normalizeTextareaText(text: string): string {
@@ -74,6 +78,7 @@ export function applyTextareaTextEdit(previousSource: string, nextTextareaText: 
     };
   }
   let edit = validatedHint(previous, next, hint);
+  const caretBefore = edit && hint ? clampOffset(hint.end, previous.length) : undefined;
   if (!edit) {
     let start = 0;
     while (start < previous.length && start < next.length && previous[start] === next[start]) start += 1;
@@ -91,5 +96,13 @@ export function applyTextareaTextEdit(previousSource: string, nextTextareaText: 
     sourceSelectionEnd: textareaOffsetToSourceOffset(source, selectionEnd),
     changed: true,
     replacement: { sourceStart, sourceEnd, inserted: edit.inserted },
+    editClass: replacementEditClass(edit),
+    sourceCaretBefore: caretBefore === undefined ? undefined : textareaOffsetToSourceOffset(previousSource, caretBefore),
   };
+}
+
+function replacementEditClass(edit: TextareaReplacement): "insert" | "delete" | undefined {
+  if (edit.start === edit.end && edit.inserted.length === 1) return "insert";
+  if (edit.inserted === "" && edit.end - edit.start === 1) return "delete";
+  return undefined;
 }

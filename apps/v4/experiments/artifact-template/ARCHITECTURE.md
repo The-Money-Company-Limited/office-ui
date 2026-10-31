@@ -239,6 +239,19 @@ was located by the agent, answered with a tracked change and a reply comment,
 and published as the next release, where Suggesting mode shows it for
 accept or reject.
 
+### WebMCP tools in the browser
+
+Where the browser has `document.modelContext` (WebMCP, a Chrome origin
+trial), the page registers read-only tools over the open document as it is
+now, unsaved edits included (`src/webmcp.ts`, COD-1456): `doc_read` and
+`doc_find` on Word (body paragraphs; not tables, headers or footers),
+`sheet_read` on Excel. They wrap the agent libraries above, carry
+`readOnlyHint` and `untrustedContentHint` (document text can carry
+instructions), wait until the document has loaded, and make no edits, so
+changes stay with the people on the page. A read serializes the document as
+an autosave tick does, which commits a table cell's in-progress text. A private page is served only to people with access, so its tools
+are too. Slides, PowerPoint and PDF register none yet.
+
 ### Saving edits made in the browser
 
 The four editors share the `cool: "doc"` page bridge. Access enables editing;

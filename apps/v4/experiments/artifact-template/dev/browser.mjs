@@ -22,11 +22,20 @@ const browser = await chromium.launch({
 })
 const outcomes = []
 const negative = process.argv.includes("--negative")
+// Scenarios for some kinds only; every other scenario runs on each editable kind (not pptx).
+const scenarioKinds = {
+  alignment: ["xlsx"],
+  "slide-ids": ["slides"],
+  header: ["pptx", "pdf"],
+  undo: ["docx", "xlsx"],
+  webmcp: ["docx", "xlsx", "pdf"],
+}
 const kinds = process.env.AUTOSAVE_KINDS?.split(",") ?? [
   "docx",
   "xlsx",
   "slides",
   "pdf",
+  "pptx",
 ]
 
 async function properties(page) {
@@ -49,6 +58,7 @@ async function ready(page, kind, readOnly = false) {
   if (kind === "xlsx")
     await page.locator('[data-cell-ref="A1"], #c-A1').first().waitFor()
   if (kind === "slides") await page.locator("#welcome-title").waitFor()
+  if (kind === "pptx") await page.getByText("of 1", { exact: true }).waitFor()
   if (kind === "pdf")
     await page
       .getByRole("button", { name: "More actions", exact: true })
@@ -195,6 +205,21 @@ async function run(kind, scenario) {
         )
     })
   }
+  if (scenario === "webmcp")
+    await page.addInitScript(() => {
+      // Stands in for the browser's WebMCP host: it keeps what the page registers.
+      const tools = new Map()
+      window.webmcpTools = tools
+      Object.defineProperty(Document.prototype, "modelContext", {
+        configurable: true,
+        value: {
+          registerTool: async (tool, { signal }) => {
+            tools.set(tool.name, tool)
+            signal.addEventListener("abort", () => tools.delete(tool.name))
+          },
+        },
+      })
+    })
   await page.addInitScript(() => {
     window.cellDraws = []
     const fillText = CanvasRenderingContext2D.prototype.fillText
@@ -231,7 +256,135 @@ async function run(kind, scenario) {
       kind === "slides" && scenario !== "slide-ids"
         ? await page.locator("#welcome-title").innerText()
         : "Autosave original"
-    if (scenario === "slide-ids") {
+    if (scenario === "webmcp") {
+      // An agent in the browser reads the open document, unsaved edits included; nothing writes.
+      // Tools register on mount and answer "still opening" until the document has loaded.
+      const call = async (name, input = {}) => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            return await page.evaluate(
+              async ([name, input]) => window.webmcpTools.get(name).execute(input),
+              [name, input]
+            )
+          } catch (error) {
+            if (attempt > 100 || !String(error).includes("still opening")) throw error
+            await page.waitForTimeout(100)
+          }
+        }
+      }
+      const tools = () =>
+        page.evaluate(() =>
+          [...window.webmcpTools.values()].map((tool) => ({
+            name: tool.name,
+            annotations: tool.annotations,
+          }))
+        )
+      const readOnly = { readOnlyHint: true, untrustedContentHint: true }
+      if (kind === "docx") {
+        await page.waitForFunction(() => window.webmcpTools.size === 2)
+        assert.deepEqual(await tools(), [
+          { name: "doc_read", annotations: readOnly },
+          { name: "doc_find", annotations: readOnly },
+        ])
+        const found = await call("doc_find", { text: "original" })
+        assert.deepEqual(
+          found.matches.map(({ start, end }) => [start, end]),
+          [[9, 17]]
+        )
+        await edit(page, kind, "Unsaved")
+        const { paragraphs } = await call("doc_read")
+        assert.equal(paragraphs[0].text, "Unsaved Autosave original")
+      } else if (kind === "xlsx") {
+        await page.waitForFunction(() => window.webmcpTools.size === 1)
+        assert.deepEqual(await tools(), [
+          { name: "sheet_read", annotations: readOnly },
+        ])
+        const all = await call("sheet_read")
+        assert.deepEqual(all.sheets, ["Sheet1"])
+        assert.deepEqual(
+          all.cells.find((cell) => cell.ref === "A1")?.value,
+          "Autosave original"
+        )
+        assert.deepEqual((await call("sheet_read", { range: "B1" })).cells, [
+          { ref: "B1", value: 42 },
+        ])
+      } else {
+        await page.waitForTimeout(1000)
+        assert.deepEqual(await tools(), [])
+      }
+    } else if (scenario === "undo" && kind === "docx") {
+      // Undo takes back the last word typed, as in Google Docs, not one key or the whole burst.
+      const mode = page.getByRole("button", { name: /Mode: Viewing/ })
+      if (await mode.count()) {
+        await mode.click()
+        await page.getByRole("menuitem", { name: "Editing", exact: true }).click()
+      }
+      const paragraph = page
+        .locator('[data-docx-paragraph-node-index="0"]')
+        .first()
+      await paragraph.click()
+      await page.keyboard.press("End")
+      await page.keyboard.type(" alpha beta", { delay: 40 })
+      const text = async () => (await paragraph.innerText()).trimEnd()
+      await page.waitForFunction(
+        () => document.body.innerText.includes("alpha beta")
+      )
+      await page.keyboard.press("ControlOrMeta+z")
+      assert.equal(await text(), "Autosave original alpha")
+      await page.keyboard.press("ControlOrMeta+z")
+      assert.equal(await text(), "Autosave original")
+      await page.keyboard.press("ControlOrMeta+Shift+z")
+      assert.equal(await text(), "Autosave original alpha")
+      // Held-down Backspace is one step too.
+      await page.keyboard.press("End")
+      for (let i = 0; i < 3; i++) await page.keyboard.press("Backspace")
+      assert.equal(await text(), "Autosave original alp")
+      await page.keyboard.press("ControlOrMeta+z")
+      assert.equal(await text(), "Autosave original alpha")
+    } else if (scenario === "undo" && kind === "xlsx") {
+      // One undo takes back one committed cell edit.
+      const name = page.getByRole("textbox", { name: "Name box", exact: true })
+      const formula = page.getByRole("textbox", {
+        name: "Formula bar",
+        exact: true,
+      })
+      const cell = async (ref) => {
+        await name.fill(ref)
+        await name.press("Enter")
+        return formula.inputValue()
+      }
+      for (const [ref, value] of [
+        ["A3", "first"],
+        ["A4", "second"],
+      ]) {
+        await name.fill(ref)
+        await name.press("Enter")
+        await page.keyboard.type(value, { delay: 30 })
+        await page.keyboard.press("Enter")
+      }
+      await page.keyboard.press("ControlOrMeta+z")
+      assert.equal(await cell("A4"), "")
+      assert.equal(await cell("A3"), "first")
+      await page.locator('[data-cell-ref="B3"], #c-B3').first().click()
+      await page.keyboard.press("ControlOrMeta+z")
+      assert.equal(await cell("A3"), "")
+    } else if (scenario === "header") {
+      // The header names the file and switches the page's theme, which a reload keeps.
+      await page.getByText(`sample.${kind}`, { exact: true }).first().waitFor()
+      const dark = () =>
+        page.evaluate(() => document.documentElement.classList.contains("dark"))
+      const wasDark = await dark()
+      await page
+        .getByRole("button", {
+          name: wasDark ? "Use light appearance" : "Use dark appearance",
+          exact: true,
+        })
+        .click()
+      assert.equal(await dark(), !wasDark)
+      await page.reload()
+      await ready(page, kind)
+      assert.equal(await dark(), !wasDark)
+    } else if (scenario === "slide-ids") {
       const title = page.locator('[id="9-title"]')
       await title.dblclick()
       await title.fill("Numeric ID edited")
@@ -584,11 +737,11 @@ try {
       "not-document-access",
       "alignment",
       "slide-ids",
+      "header",
+      "undo",
+      "webmcp",
     ])
-      if (
-        (scenario !== "alignment" || kind === "xlsx") &&
-        (scenario !== "slide-ids" || kind === "slides")
-      )
+      if (scenarioKinds[scenario]?.includes(kind) ?? kind !== "pptx")
         await run(kind, scenario)
 } finally {
   await browser.close()

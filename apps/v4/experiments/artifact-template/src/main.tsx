@@ -6,6 +6,7 @@ import "./theme.css"
 
 import { Autosave } from "./autosave"
 import { AutosaveContext } from "./autosave-context"
+import { registerDocumentTools, type DocumentKind } from "./webmcp"
 
 const DocxEditor = React.lazy(() =>
   import("@/components/extend/docx-editor").then((module) => ({
@@ -30,7 +31,7 @@ const PdfEditor = React.lazy(() =>
 )
 
 type Artifact = {
-  kind: "docx" | "xlsx" | "pptx" | "pdf" | "slides"
+  kind: DocumentKind
   title: string
   file: string
 }
@@ -111,8 +112,20 @@ function App() {
     }
   }, [])
 
+  const kind = artifact?.kind
+  React.useEffect(
+    () =>
+      kind ? registerDocumentTools(kind, () => save.documentBytes()) : undefined,
+    [kind, save]
+  )
+
+  const appearance = {
+    isDark,
+    onIsDarkChange: (value: boolean) => setTheme(value ? "dark" : "light"),
+  }
   const documentProps = artifact
     ? {
+        ...appearance,
         className: `artifact-${artifact.kind} h-full min-h-0`,
         fileName: artifact.file.split("/").at(-1),
         src: `./${artifact.file}${reloadVersion ? `?version=${encodeURIComponent(reloadVersion)}` : ""}`,
@@ -141,8 +154,6 @@ function App() {
                 defaultMode="editing"
                 scrollsWindow
                 showUpload={false}
-                isDark={isDark}
-                onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
               />
             ) : artifact?.kind === "xlsx" ? (
               <XlsxEditor
@@ -150,16 +161,13 @@ function App() {
                 cellAnchorIdPrefix=""
                 scrollsWindow
                 syncSheetToUrl
-                isDark={isDark}
-                onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
               />
             ) : artifact?.kind === "slides" ? (
               <SlidesEditor
                 key={documentProps.src}
                 src={documentProps.src}
                 title={artifact.title}
-                isDark={isDark}
-                onIsDarkChange={(value) => setTheme(value ? "dark" : "light")}
+                {...appearance}
               />
             ) : artifact?.kind === "pptx" ? (
               <PptxViewer
