@@ -56,10 +56,14 @@ impl Default for RegionalSettings {
 
 impl RegionalSettings {
     /// The settings for a language tag such as `en-GB`, `es-ES`, `sv` or `de_CH`. Languages without
-    /// their own month names here use English ones; an empty or unreadable tag gives en-US.
+    /// their own month names here use English ones; a tag that doesn't start with a two- or
+    /// three-letter language gives en-US.
     pub fn from_tag(tag: &str) -> Self {
         let mut parts = tag.trim().split(['-', '_']);
         let language_code = parts.next().unwrap_or("").to_ascii_lowercase();
+        if !(2..=3).contains(&language_code.len()) || !language_code.bytes().all(|b| b.is_ascii_lowercase()) {
+            return Self::default();
+        }
         // The region is the first two-letter (or three-digit, as in es-419) subtag after the
         // language, before any extension (en-u-hc-h12 has none).
         let region = parts
@@ -94,7 +98,7 @@ impl RegionalSettings {
             _ => ('.', ','),
         };
         let date_separator = match (language_code.as_str(), region.as_str()) {
-            ("de" | "fi" | "nb" | "no" | "da" | "pl" | "ru" | "tr" | "cs" | "sk" | "uk" | "ro" | "hr" | "sl" | "lv" | "et" | "bg", _) => '.',
+            ("de" | "fi" | "nb" | "no" | "da" | "pl" | "ru" | "tr" | "cs" | "sk" | "uk" | "ro" | "hr" | "sl" | "lv" | "et" | "bg" | "hu", _) => '.',
             ("fr", "CH") | ("it", "CH") => '.',
             ("nl" | "sv", _) => '-',
             _ => '/',
@@ -183,6 +187,8 @@ mod tests {
         assert_eq!((ch.decimal_separator, ch.thousands_separator, ch.date_separator), ('.', '\'', '.'));
         assert_eq!(RegionalSettings::from_tag("en-GB").date_separator, '/');
         assert_eq!(RegionalSettings::from_tag("en-u-hc-h12"), RegionalSettings::default());
+        assert_eq!(RegionalSettings::from_tag("not a tag"), RegionalSettings::default());
+        assert_eq!(RegionalSettings::from_tag("*"), RegionalSettings::default());
         assert_eq!(RegionalSettings::from_tag("ru-RU").thousands_separator, '\u{a0}');
         assert_eq!(RegionalSettings::from_tag("cs-CZ").decimal_separator, ',');
         assert_eq!(RegionalSettings::from_tag("es-ES").format_locale().month_names_full[0], "enero");

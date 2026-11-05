@@ -44,7 +44,7 @@ The run fails when there are more mismatches than `--max`, or any workbook fails
 calculate (none does now).
 
 Excel takes regional settings (day-first dates, month names, decimal commas) from the computer, and
-a file doesn't record them. Cases set them with a `locale` field; `parity.mjs` lists the four
+a file doesn't record them. Cases set them with a trailing `locale` element (`inLocale` in `cases.mjs`); `parity.mjs` lists the four
 workbooks that weren't computed in en-US, which their saved results show.
 
 Baseline (2026-11-05, COD-1793): 68,264 formulas compared, 75 mismatches in 15 of 800 files, down

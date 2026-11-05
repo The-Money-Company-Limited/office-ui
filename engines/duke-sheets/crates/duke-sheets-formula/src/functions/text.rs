@@ -71,6 +71,18 @@ fn format_fixed_number(number: f64, decimals: i64, with_commas: bool) -> String 
     if with_commas {
         out = add_thousands_separators(&out);
     }
+    // FIXED and DOLLAR write the regional separators, so VALUE reads them back.
+    let regional = crate::regional::current();
+    if (regional.decimal_separator, regional.thousands_separator) != ('.', ',') {
+        out = out
+            .chars()
+            .map(|c| match c {
+                '.' => regional.decimal_separator,
+                ',' => regional.thousands_separator,
+                c => c,
+            })
+            .collect();
+    }
     out
 }
 
@@ -791,7 +803,6 @@ pub fn fn_numbervalue(
     };
 
     let group_separator = match args.get(2) {
-        None if regional.thousands_separator == '\u{a0}' => " ".to_string(),
         None => regional.thousands_separator.to_string(),
         Some(v) => {
             if let FormulaValue::Error(e) = v {

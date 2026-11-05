@@ -75,10 +75,12 @@ fn english_code(language: Language, c: char, run: usize) -> Option<char> {
     })
 }
 
-/// A piece of a format section: codes to translate, or text kept as written.
+/// A piece of a format section: codes to translate, or text the number-format engine reads as
+/// it is.
 enum Piece<'a> {
     Code(String),
     Kept(&'a str),
+    Ready(String),
 }
 
 /// A `TEXT` format written for the current settings, in the codes the number-format engine reads.
@@ -151,6 +153,18 @@ fn translate(section: &str, settings: RegionalSettings) -> String {
             rest = &rest[word.len()..];
             continue;
         }
+        // A condition, [>=1,5], with its number written the way the engine reads it.
+        if rest.starts_with(['[']) && rest[1..].starts_with(['<', '>', '=']) {
+            let end = rest.find(']').map_or(rest.len(), |p| p + 1);
+            let condition = rest[..end]
+                .chars()
+                .filter(|&c| c != settings.thousands_separator || us_separators(settings))
+                .map(|c| if c == settings.decimal_separator { '.' } else { c })
+                .collect();
+            pieces.push(Piece::Ready(condition));
+            rest = &rest[end..];
+            continue;
+        }
         let kept = match c {
             '"' => rest[1..].find('"').map_or(rest.len(), |p| p + 2),
             '[' => rest.find(']').map_or(rest.len(), |p| p + 1),
@@ -180,6 +194,7 @@ fn translate(section: &str, settings: RegionalSettings) -> String {
     for piece in pieces {
         match piece {
             Piece::Kept(text) => out.push_str(text),
+            Piece::Ready(text) => out.push_str(&text),
             Piece::Code(text) if us_separators(settings) => out.push_str(&text),
             Piece::Code(text) if is_date => {
                 // The number-format engine would write a period or comma as a regional separator,
@@ -197,11 +212,24 @@ fn translate(section: &str, settings: RegionalSettings) -> String {
                     out.push(c);
                 }
             }
-            Piece::Code(text) => out.extend(text.chars().map(|c| match c {
-                c if c == settings.decimal_separator => '.',
-                c if c == settings.thousands_separator && !c.is_whitespace() => ',',
-                c => c,
-            })),
+            Piece::Code(text) => {
+                // Where numbers group with spaces (1 234,5), a space between digit placeholders
+                // is the grouping separator.
+                let chars: Vec<char> = text.chars().collect();
+                let placeholder = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|c| matches!(c, '#' | '0' | '?'));
+                for (i, &c) in chars.iter().enumerate() {
+                    out.push(match c {
+                        c if c == settings.decimal_separator => '.',
+                        c if c == settings.thousands_separator && !c.is_whitespace() => ',',
+                        ' ' | '\u{a0}' | '\u{202f}'
+                            if settings.thousands_separator == '\u{a0}' && placeholder(i.checked_sub(1)) && placeholder(Some(i + 1)) =>
+                        {
+                            ','
+                        }
+                        c => c,
+                    });
+                }
+            }
         }
     }
     out
@@ -237,6 +265,9 @@ mod tests {
         with_settings("de-CH", || assert_eq!(format_code("TTTT, TT.MM.JJJJ"), r"dddd\, dd\.MM\.yyyy"));
         with_settings("de-CH", || assert_eq!(format_code("#'##0.00"), "#,##0.00"));
         with_settings("de-DE", || assert_eq!(format_code("Standard"), "General"));
+        with_settings("de-DE", || assert_eq!(format_code("[>=1,5]0,00;0"), "[>=1.5]0.00;0"));
+        with_settings("fr-FR", || assert_eq!(format_code("# ##0,00"), "#,##0.00"));
+        with_settings("fr-FR", || assert_eq!(format_code("0 \"h\""), "0 \"h\""));
     }
 
     #[test]
