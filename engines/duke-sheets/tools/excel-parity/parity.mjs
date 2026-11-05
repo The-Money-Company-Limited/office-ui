@@ -79,3 +79,8 @@ if (report.mismatches.length > max) {
   console.log(`more mismatches than the baseline (${max})`)
   process.exitCode = 1
 }
+// No workbook fails now, so one that does is a regression even if it lowers the mismatch count.
+if (report.failedToOpen.length) {
+  console.log(`failed: ${report.failedToOpen.map((f) => f.file).join(", ")}`)
+  process.exitCode = 1
+}

@@ -22,7 +22,7 @@ export class Builder extends DurableObject<Env> {
       container.start({ image: container.images.base, instance: "standard-4", enableInternet: true });
       // start() returns before the box can run commands.
       for (let second = 0; ; second++) {
-        const ready = await container.exec(["true"]).then((p) => p.exitCode, () => null);
+        const ready = await container.exec(["true"]).then((p) => p.exitCode).catch(() => null);
         if (ready === 0) break;
         if (second >= START_SECONDS) throw new Error(`the box did not start within ${START_SECONDS} s; try again`);
         await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -50,6 +50,8 @@ export class Builder extends DurableObject<Env> {
       try {
         if (process.stdout) await process.stdout.pipeTo(writable, { preventClose: true });
         code = await process.exitCode;
+      } catch {
+        // The finally below still ends the stream, reporting the failure as exit code 1.
       } finally {
         // A command killed (out of memory) or a broken pipe still ends the stream, as a failure.
         const writer = writable.getWriter();

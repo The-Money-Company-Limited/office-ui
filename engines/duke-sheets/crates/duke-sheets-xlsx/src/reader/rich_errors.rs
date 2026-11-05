@@ -32,8 +32,8 @@ pub(crate) fn value_errors(metadata: &[u8], rich_values: &[u8], structures: &[u8
 }
 
 /// metadata.xml: for each `<valueMetadata>` block (one per `vm`), the rich value it points at.
-/// Its `<rc t v>` names a `<metadataType>` (`t`, 1-based) and, for XLRICHVALUE, a block of that
-/// `<futureMetadata>` (`v`, 0-based) whose `<xlrd:rvb i>` is the rich value.
+/// Each of its `<rc t v>` records names a `<metadataType>` (`t`, 1-based) and, for XLRICHVALUE, a
+/// block of that `<futureMetadata>` (`v`, 0-based) whose `<xlrd:rvb i>` is the rich value.
 fn value_metadata(xml: &[u8]) -> Vec<Option<usize>> {
     #[derive(PartialEq)]
     enum Section {
@@ -43,7 +43,7 @@ fn value_metadata(xml: &[u8]) -> Vec<Option<usize>> {
     }
     let mut types = Vec::new();
     let mut rich_value_of_block = Vec::new();
-    let mut blocks: Vec<Option<(usize, usize)>> = Vec::new();
+    let mut blocks: Vec<Vec<(usize, usize)>> = Vec::new();
     let mut section = Section::Other;
     each_element(xml, |name, e| match name {
         b"metadataType" => types.push(attr(e, b"name").unwrap_or_default()),
@@ -51,10 +51,10 @@ fn value_metadata(xml: &[u8]) -> Vec<Option<usize>> {
         b"futureMetadata" | b"cellMetadata" => section = Section::Other,
         b"valueMetadata" => section = Section::ValueMetadata,
         b"rvb" if section == Section::RichValues => rich_value_of_block.push(number(e, b"i")),
-        b"bk" if section == Section::ValueMetadata => blocks.push(None),
+        b"bk" if section == Section::ValueMetadata => blocks.push(Vec::new()),
         b"rc" if section == Section::ValueMetadata => {
             if let (Some(block), Some(t), Some(v)) = (blocks.last_mut(), number(e, b"t"), number(e, b"v")) {
-                *block = Some((t, v));
+                block.push((t, v));
             }
         }
         _ => {}
@@ -62,9 +62,9 @@ fn value_metadata(xml: &[u8]) -> Vec<Option<usize>> {
     let rich_type = types.iter().position(|t| t == "XLRICHVALUE").map(|i| i + 1);
     blocks
         .into_iter()
-        .map(|block| match block {
-            Some((t, v)) if Some(t) == rich_type => rich_value_of_block.get(v).copied().flatten(),
-            _ => None,
+        .map(|records| {
+            let (_, v) = records.into_iter().find(|&(t, _)| Some(t) == rich_type)?;
+            rich_value_of_block.get(v).copied().flatten()
         })
         .collect()
 }
@@ -162,6 +162,13 @@ mod tests {
     fn an_empty_field_keeps_the_others_in_place() {
         let values = r#"<rvData count="1"><rv s="0"><v/><v>8</v><v></v><v>3</v></rv></rvData>"#;
         let errors = value_errors(METADATA.as_bytes(), values.as_bytes(), STRUCTURES.as_bytes());
+        assert_eq!(errors.get(&1), Some(&CellError::Spill));
+    }
+
+    #[test]
+    fn the_rich_value_record_need_not_be_last() {
+        let metadata = METADATA.replace(r#"<valueMetadata count="1"><bk><rc t="2" v="0"/></bk>"#, r#"<valueMetadata count="1"><bk><rc t="2" v="0"/><rc t="1" v="0"/></bk>"#);
+        let errors = value_errors(metadata.as_bytes(), VALUES.as_bytes(), STRUCTURES.as_bytes());
         assert_eq!(errors.get(&1), Some(&CellError::Spill));
     }
 

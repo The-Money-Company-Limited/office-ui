@@ -37,8 +37,11 @@ $r run ~/Desktop/Code/office-ui/engines/duke-sheets \
 read it with `$r run … 'cat /tmp/parity.json'`. The corpus and results go when the box stops, so
 download the corpus again on a fresh box.
 
-Excel saves a formula's text result without trailing spaces, so text that differs only there
-counts as the same.
+Excel saves a formula's text result without trailing spaces, so an engine result that has extra
+trailing spaces counts as the same. One missing a trailing space still counts as a mismatch.
+
+The run fails when there are more mismatches than `--max`, or any workbook fails to open or
+calculate (none does now).
 
 Baseline (2026-11-05, COD-1769): 68,264 formulas compared, 328 mismatches in 19 of 800 files,
 down from 7,245 in 191. 291 of them are locale: the engine reads and writes dates and month

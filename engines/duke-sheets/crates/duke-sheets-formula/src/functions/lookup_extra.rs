@@ -1478,7 +1478,12 @@ fn evaluate_xpath(root: &XmlNode, steps: &[XPathStep]) -> Option<Vec<String>> {
                 for node in sources {
                     let mut matches = Vec::new();
                     node.descendant_elements_named(name, &mut matches);
-                    next.extend(pick_index(matches, *index));
+                    // Nested sources share descendants; each node is one match.
+                    for found in pick_index(matches, *index) {
+                        if !next.iter().any(|seen: &&XmlNode| std::ptr::eq(*seen, found)) {
+                            next.push(found);
+                        }
+                    }
                 }
                 if next.is_empty() {
                     return None;

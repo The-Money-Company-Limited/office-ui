@@ -156,8 +156,17 @@ impl CriteriaMatcher {
             CriteriaType::TextComparison(op, pattern) => {
                 let text = match value {
                     FormulaValue::String(s) => s.to_lowercase(),
-                    // "<>#N/A" passes over #N/A and keeps every other error.
-                    FormulaValue::Error(e) => e.as_str().to_lowercase(),
+                    // An error is compared as written, without wildcards or ordering: "<>#N/A"
+                    // passes over #N/A and keeps every other error, "<>*" keeps them all, and
+                    // "<m" counts none.
+                    FormulaValue::Error(e) => {
+                        let same = e.as_str().eq_ignore_ascii_case(pattern);
+                        return match op {
+                            ComparisonOp::Equal => same,
+                            ComparisonOp::NotEqual => !same,
+                            _ => false,
+                        };
+                    }
                     FormulaValue::Empty if pattern.is_empty() => String::new(),
                     _ => return matches!(op, ComparisonOp::NotEqual),
                 };
@@ -207,6 +216,10 @@ mod tests {
             assert!(matcher.matches(&FormulaValue::Error(CellError::Na)));
             assert!(!matcher.matches(&FormulaValue::Error(CellError::Value)));
             assert!(!matcher.matches(&FormulaValue::Empty));
+        }
+        let na = FormulaValue::Error(CellError::Na);
+        for (criteria, expected) in [("<>#N/A", false), ("<>#REF!", true), ("<>*", true), ("*", false), ("<m", false), ("=#n/a", true)] {
+            assert_eq!(CriteriaMatcher::new(&FormulaValue::String(criteria.into())).matches(&na), expected, "{criteria}");
         }
     }
 

@@ -123,6 +123,8 @@ fn collect_numbers(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), Formu
             }
             Ok(())
         }
+        // A blank cell passed on its own (NPV(0.1,A1,100) with A1 empty) is passed over too.
+        FormulaValue::Empty => Ok(()),
         _ => {
             let n = value
                 .as_number()

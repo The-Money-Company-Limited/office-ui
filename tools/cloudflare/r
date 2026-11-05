@@ -14,16 +14,18 @@ or relative to ~/Desktop/Code (`office-ui`). It lives on the box at /work/<path 
 One box is shared by everyone with the token. It stops 30 minutes after the last request, and
 its files go with it: a fresh box needs `r sync` again and rebuilds node_modules and target
 from scratch. Pull what you need before then. Files deleted locally stay on the box until it
-stops.
+stops. The first start after a deploy pulls the new image and can take several minutes.
+Commands travel in the request URL, which the Worker's logs record: keep secrets out of them.
 
 Setup, once per laptop:
   1. The office-builds workflow (.github/workflows/office-builds.yml) deploys the Worker and
      its image from main, or on demand (workflow_dispatch). Its token is the Worker's
-     RUNNER_TOKEN secret: set it once with `cf workers secrets update RUNNER_TOKEN --worker
-     office-builds --text <token>`, or ask whoever did.
+     RUNNER_TOKEN secret. Set it once, or ask whoever did:
+       cd tools/cloudflare && npm ci && npx cf workers secrets update RUNNER_TOKEN --worker office-builds --text <token>
   2. Write the Worker's URL (https://office-builds.<subdomain>.workers.dev) to
      ~/.config/office-builds/url and the token to ~/.config/office-builds/token.
 """
+import http.client
 import io
 import os
 import shlex
@@ -74,12 +76,15 @@ def request(path, query, data=None):
 def run(command, cwd="/work", data=None):
     """Runs a command on the box, printing its output as it arrives; returns its exit code."""
     code = None
-    for line in request("/run", {"command": command, "cwd": cwd}, data):
-        text = line.decode(errors="replace")
-        if text.startswith("__EXIT__ "):
-            code = int(text.split()[1])
-        else:
-            print(text, end="", flush=True)
+    try:
+        for line in request("/run", {"command": command, "cwd": cwd}, data):
+            text = line.decode(errors="replace")
+            if text.startswith("__EXIT__ "):
+                code = int(text.split()[1])
+            else:
+                print(text, end="", flush=True)
+    except (OSError, http.client.HTTPException):
+        pass  # reported below, as no exit line
     if code is None:
         print("Lost the connection before the command finished; it may still be running on the box.", file=sys.stderr)
         return 255

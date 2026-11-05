@@ -85,7 +85,7 @@ impl FormulaValue {
         match self {
             FormulaValue::Boolean(b) => Some(*b),
             FormulaValue::Number(n) => Some(*n != 0.0),
-            // A left-out argument, as in IF(A1,,1), is FALSE
+            // A blank, or a left-out condition as in IF(,1,2), is FALSE
             FormulaValue::Empty => Some(false),
             FormulaValue::String(s) => {
                 let upper = s.to_uppercase();

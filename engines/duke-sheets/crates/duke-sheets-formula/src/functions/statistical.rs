@@ -92,7 +92,8 @@ pub fn fn_countif(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
     // Get the range (first argument)
     let range = match args.first() {
         Some(FormulaValue::Array { data: arr, .. }) => arr,
-        Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
+        // A broken reference is an error; a cell holding an error is a value the criteria can match.
+        Some(FormulaValue::Error(CellError::Ref)) => return Ok(FormulaValue::Error(CellError::Ref)),
         Some(v) => {
             // Single value - check if it matches criteria
             let criteria = match args.get(1) {
@@ -921,8 +922,8 @@ fn fn_maxifs_single(
         let range_value = &criteria_args[range_idx];
         let criteria = &criteria_args[criteria_idx];
 
-        if let FormulaValue::Error(e) = range_value {
-            return Ok(FormulaValue::Error(*e));
+        if let FormulaValue::Error(CellError::Ref) = range_value {
+            return Ok(FormulaValue::Error(CellError::Ref));
         }
 
         let matcher = CriteriaMatcher::new(criteria);
@@ -951,8 +952,8 @@ fn fn_minifs_single(
         let range_value = &criteria_args[range_idx];
         let criteria = &criteria_args[criteria_idx];
 
-        if let FormulaValue::Error(e) = range_value {
-            return Ok(FormulaValue::Error(*e));
+        if let FormulaValue::Error(CellError::Ref) = range_value {
+            return Ok(FormulaValue::Error(CellError::Ref));
         }
 
         let matcher = CriteriaMatcher::new(criteria);
@@ -1106,7 +1107,8 @@ pub fn fn_countifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
     // Get first criteria range to establish dimensions
     let first_range = match &args[0] {
         FormulaValue::Array { data: arr, .. } => arr,
-        FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
+        // As in COUNTIF, only a broken reference is an error here.
+        FormulaValue::Error(CellError::Ref) => return Ok(FormulaValue::Error(CellError::Ref)),
         v => {
             // Single value
             return fn_countifs_single(v, &args[1..]);
@@ -1182,10 +1184,6 @@ fn fn_countifs_single(
 ) -> FormulaResult<FormulaValue> {
     // First pair: first_value is the range, remaining_args[0] is criteria
     let first_criteria = &remaining_args[0];
-    if let FormulaValue::Error(e) = first_criteria {
-        return Ok(FormulaValue::Error(*e));
-    }
-
     let first_matcher = CriteriaMatcher::new(first_criteria);
     if !first_matcher.matches(first_value) {
         return Ok(FormulaValue::Number(0.0));
@@ -1200,8 +1198,8 @@ fn fn_countifs_single(
         let range_value = &remaining_args[range_idx];
         let criteria = &remaining_args[criteria_idx];
 
-        if let FormulaValue::Error(e) = range_value {
-            return Ok(FormulaValue::Error(*e));
+        if let FormulaValue::Error(CellError::Ref) = range_value {
+            return Ok(FormulaValue::Error(CellError::Ref));
         }
 
         let matcher = CriteriaMatcher::new(criteria);
@@ -1331,8 +1329,8 @@ fn fn_averageifs_single(
         let range_value = &criteria_args[range_idx];
         let criteria = &criteria_args[criteria_idx];
 
-        if let FormulaValue::Error(e) = range_value {
-            return Ok(FormulaValue::Error(*e));
+        if let FormulaValue::Error(CellError::Ref) = range_value {
+            return Ok(FormulaValue::Error(CellError::Ref));
         }
 
         let matcher = CriteriaMatcher::new(criteria);
