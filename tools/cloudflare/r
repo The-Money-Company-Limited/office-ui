@@ -37,7 +37,8 @@ def request(method, path, body=None, query=None, data=None):
     url = config("url").rstrip("/") + path
     if query:
         url += "?" + urllib.parse.urlencode(query)
-    headers = {"authorization": f"Bearer {config('token')}"}
+    # Cloudflare's bot protection turns away Python's default user agent.
+    headers = {"authorization": f"Bearer {config('token')}", "user-agent": "office-builds-r/1"}
     if body is not None:
         data = json.dumps(body).encode()
         headers["content-type"] = "application/json"
