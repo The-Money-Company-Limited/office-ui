@@ -1,7 +1,8 @@
 //! The regional settings formulas compute with, as Excel takes them from the computer it runs
 //! on: whether `5/11/2026` is 5 November or May 11, the language `TEXT` names months and days in,
 //! and the decimal separator in text such as `"1,5"`. A file doesn't record them, so the host sets
-//! them (the editor, from the browser's language).
+//! them (the editor, from the browser's language). The grid's own number display doesn't follow
+//! them yet (COD-1800).
 
 /// The language of month and day names, and of the date codes in a `TEXT` format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -34,6 +35,9 @@ pub enum DateOrder {
 pub struct RegionalSettings {
     pub language: Language,
     pub date_order: DateOrder,
+    /// The separator a date written as numbers uses besides `/`, `-` and spaces (`.` in
+    /// `5.11.2026`).
+    pub date_separator: char,
     pub decimal_separator: char,
     pub thousands_separator: char,
 }
@@ -41,8 +45,9 @@ pub struct RegionalSettings {
 impl Default for RegionalSettings {
     fn default() -> Self {
         Self {
-            language: Language::English,
-            date_order: DateOrder::MonthFirst,
+            language: Language::default(),
+            date_order: DateOrder::default(),
+            date_separator: '/',
             decimal_separator: '.',
             thousands_separator: ',',
         }
@@ -55,8 +60,10 @@ impl RegionalSettings {
     pub fn from_tag(tag: &str) -> Self {
         let mut parts = tag.trim().split(['-', '_']);
         let language_code = parts.next().unwrap_or("").to_ascii_lowercase();
-        // The region is the first two-letter (or three-digit, as in es-419) subtag after the language.
+        // The region is the first two-letter (or three-digit, as in es-419) subtag after the
+        // language, before any extension (en-u-hc-h12 has none).
         let region = parts
+            .take_while(|p| p.len() > 1)
             .find(|p| p.len() == 2 || (p.len() == 3 && p.bytes().all(|b| b.is_ascii_digit())))
             .unwrap_or("")
             .to_ascii_uppercase();
@@ -76,14 +83,82 @@ impl RegionalSettings {
             _ => DateOrder::DayFirst,
         };
         let (decimal_separator, thousands_separator) = match (language_code.as_str(), region.as_str()) {
-            // Spanish in the Americas north of the equator, and Swiss German, write 1,234.5.
+            // Spanish in the Americas north of the equator writes 1,234.5, and Switzerland 1'234.5.
             ("es", "MX" | "US" | "PR" | "GT" | "DO" | "HN" | "NI" | "SV" | "PA" | "419") => ('.', ','),
-            ("de", "CH" | "LI") => ('.', '\''),
-            ("fr" | "sv", _) => (',', '\u{a0}'),
-            ("es" | "de" | "it" | "pt" | "nl" | "da" | "nb" | "no" | "fi" | "pl" | "tr" | "ru" | "id", _) => (',', '.'),
+            ("de" | "it", "CH" | "LI") => ('.', '\''),
+            // 1 234,5
+            ("fr" | "sv" | "ru" | "pl" | "fi" | "nb" | "no" | "cs" | "sk" | "uk" | "bg" | "hu" | "lt" | "lv" | "et", _)
+            | ("pt", "PT") => (',', '\u{a0}'),
+            // 1.234,5
+            ("es" | "de" | "it" | "pt" | "nl" | "da" | "tr" | "id" | "ro" | "hr" | "sl" | "ca" | "el", _) => (',', '.'),
             _ => ('.', ','),
         };
-        Self { language, date_order, decimal_separator, thousands_separator }
+        let date_separator = match (language_code.as_str(), region.as_str()) {
+            ("de" | "fi" | "nb" | "no" | "da" | "pl" | "ru" | "tr" | "cs" | "sk" | "uk" | "ro" | "hr" | "sl" | "lv" | "et" | "bg", _) => '.',
+            ("fr", "CH") | ("it", "CH") => '.',
+            ("nl" | "sv", _) => '-',
+            _ => '/',
+        };
+        Self { language, date_order, date_separator, decimal_separator, thousands_separator }
+    }
+
+    /// The number-format engine's locale: these separators, and month and day names as Excel
+    /// writes them in this language.
+    pub fn format_locale(&self) -> ssfmt::Locale {
+        let english = ssfmt::Locale::en_us();
+        let names = |month_names_full, month_names_short, day_names_full, day_names_short| ssfmt::Locale {
+            month_names_full,
+            month_names_short,
+            day_names_full,
+            day_names_short,
+            ..ssfmt::Locale::en_us()
+        };
+        let named = match self.language {
+            Language::English => english,
+            Language::Spanish => names(
+                ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"],
+                ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"],
+                ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"],
+                ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"],
+            ),
+            Language::French => names(
+                ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"],
+                ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."],
+                ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"],
+                ["dim.", "lun.", "mar.", "mer.", "jeu.", "ven.", "sam."],
+            ),
+            Language::German => names(
+                ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"],
+                ["Jan", "Feb", "Mrz", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"],
+                ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"],
+                ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"],
+            ),
+            Language::Italian => names(
+                ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"],
+                ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"],
+                ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"],
+                ["dom", "lun", "mar", "mer", "gio", "ven", "sab"],
+            ),
+            Language::Portuguese => names(
+                ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"],
+                ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"],
+                ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"],
+                ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"],
+            ),
+            Language::Dutch => names(
+                ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"],
+                ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"],
+                ["zondag", "maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag"],
+                ["zo", "ma", "di", "wo", "do", "vr", "za"],
+            ),
+            Language::Swedish => names(
+                ["januari", "februari", "mars", "april", "maj", "juni", "juli", "augusti", "september", "oktober", "november", "december"],
+                ["jan", "feb", "mar", "apr", "maj", "jun", "jul", "aug", "sep", "okt", "nov", "dec"],
+                ["söndag", "måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag"],
+                ["sön", "mån", "tis", "ons", "tor", "fre", "lör"],
+            ),
+        };
+        ssfmt::Locale { decimal_separator: self.decimal_separator, thousands_separator: self.thousands_separator, ..named }
     }
 }
 
@@ -104,7 +179,13 @@ mod tests {
         assert_eq!(RegionalSettings::from_tag("es-419").decimal_separator, '.');
         let sv = RegionalSettings::from_tag("sv_SE");
         assert_eq!((sv.language, sv.date_order, sv.decimal_separator), (Language::Swedish, DateOrder::YearFirst, ','));
-        assert_eq!(RegionalSettings::from_tag("de-CH").thousands_separator, '\'');
+        let ch = RegionalSettings::from_tag("de-CH");
+        assert_eq!((ch.decimal_separator, ch.thousands_separator, ch.date_separator), ('.', '\'', '.'));
+        assert_eq!(RegionalSettings::from_tag("en-GB").date_separator, '/');
+        assert_eq!(RegionalSettings::from_tag("en-u-hc-h12"), RegionalSettings::default());
+        assert_eq!(RegionalSettings::from_tag("ru-RU").thousands_separator, '\u{a0}');
+        assert_eq!(RegionalSettings::from_tag("cs-CZ").decimal_separator, ',');
+        assert_eq!(RegionalSettings::from_tag("es-ES").format_locale().month_names_full[0], "enero");
         assert_eq!(RegionalSettings::from_tag("zh-Hans-CN").date_order, DateOrder::YearFirst);
     }
 }

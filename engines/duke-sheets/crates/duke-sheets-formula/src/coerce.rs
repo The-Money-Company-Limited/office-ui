@@ -4,6 +4,8 @@
 //! times. Dates are 1900-system serials. The workbook's regional settings (crate::regional) decide
 //! the order of day and month, the month names besides English ones, and the decimal separator.
 
+use std::borrow::Cow;
+
 use chrono::{Datelike, NaiveDate};
 use duke_sheets_core::DateOrder;
 
@@ -36,24 +38,24 @@ fn plain_number(text: &str) -> Option<f64> {
         _ => (1.0, text),
     };
     let text = text.strip_prefix('$').map(str::trim_start).unwrap_or(text);
+    // Text written with the regional separators (1.234,5 or 1'234.5), read as 1,234.5. The other
+    // separator in it, where it isn't one of the regional ones, makes it not a number.
     let settings = crate::regional::current();
-    let local: String;
-    let text = if settings.decimal_separator == '.' {
-        text
+    let text: Cow<str> = if (settings.decimal_separator, settings.thousands_separator) == ('.', ',') {
+        text.into()
     } else {
-        // Where 1.234,5 (or 1 234,5) is 1234.5, read it as 1,234.5.
         let space_grouped = settings.thousands_separator == '\u{a0}';
-        local = text
-            .chars()
+        text.chars()
             .map(|c| match c {
-                c if c == settings.decimal_separator => '.',
-                c if c == settings.thousands_separator || (space_grouped && matches!(c, ' ' | '\u{202f}')) => ',',
-                '.' | ',' => '\0',
-                c => c,
+                c if c == settings.decimal_separator => Some('.'),
+                c if c == settings.thousands_separator || (space_grouped && matches!(c, ' ' | '\u{202f}')) => Some(','),
+                '.' | ',' => None,
+                c => Some(c),
             })
-            .collect();
-        &local
+            .collect::<Option<String>>()?
+            .into()
     };
+    let text = text.as_ref();
     if text.is_empty() || !text.starts_with(|c: char| c.is_ascii_digit() || c == '.') {
         return None;
     }
@@ -166,12 +168,11 @@ fn time_of_day(text: &str) -> Option<f64> {
 
 /// `2024-03-15`, `2024/3/15`, `3/15/2024`, `3-15-24`, `15-Mar-2024`, `15 March 2024`,
 /// `Mar 15, 2024`, `March 15 2024`, `Mar-2024` (the 1st), `1Jan2016` (a month name needs no separators).
-/// Three numbers are month first, day first (`15/3/2024`, and `15.3.2024` where the decimal
-/// separator is a comma) or year first, as the regional settings order them; a four-digit first
+/// Three numbers are month first, day first or year first, as the regional settings order them,
+/// and may also be separated by the regional date separator (`15.3.2024`); a four-digit first
 /// number is always the year.
 fn date(text: &str) -> Option<f64> {
     let settings = crate::regional::current();
-    let dotted = settings.date_order == DateOrder::DayFirst && settings.decimal_separator == ',';
     let boundary = |a: u8, b: u8| a.is_ascii_alphanumeric() && b.is_ascii_alphanumeric() && a.is_ascii_digit() != b.is_ascii_digit();
     let spaced: std::borrow::Cow<str> = if text.as_bytes().windows(2).any(|w| boundary(w[0], w[1])) {
         let mut spaced = String::with_capacity(text.len() + 4);
@@ -188,7 +189,7 @@ fn date(text: &str) -> Option<f64> {
         text.into()
     };
     let parts: Vec<&str> = spaced
-        .split(|c: char| c == '/' || c == '-' || c == ' ' || c == ',' || (dotted && c == '.'))
+        .split(|c: char| matches!(c, '/' | '-' | ' ' | ',') || c == settings.date_separator)
         .filter(|p| !p.is_empty())
         .collect();
     let numeric = |s: &str| (s.chars().all(|c| c.is_ascii_digit()) && !s.is_empty()).then(|| s.parse::<i32>().ok()).flatten();
@@ -332,7 +333,6 @@ mod tests {
             assert_eq!(text_to_number("13.3.2024"), Some(45364.0));
             assert_eq!(text_to_number("1.234,5"), Some(1234.5));
             assert_eq!(text_to_number("1,5"), Some(1.5));
-            assert_eq!(text_to_number("1.5"), None);
             assert_eq!(super::number_text(1.5), "1,5");
         });
         with_settings("sv-SE", || {
@@ -340,5 +340,10 @@ mod tests {
             assert_eq!(text_to_number("1 234,5"), Some(1234.5));
         });
         with_settings("es-ES", || assert_eq!(text_to_number("13 marzo 2024"), Some(45364.0)));
+        with_settings("de-CH", || {
+            assert_eq!(text_to_number("1'234.5"), Some(1234.5));
+            assert_eq!(text_to_number("13.3.2024"), Some(45364.0));
+            assert_eq!(text_to_number("1,5"), None);
+        });
     }
 }

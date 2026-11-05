@@ -683,7 +683,13 @@ fn required_complex(
         Some(v) => v,
         None => return Err(FormulaValue::Error(CellError::Value)),
     };
+    // A number is the real part. Text is read with the regional decimal separator.
+    if let FormulaValue::Number(n) = value {
+        return Ok((*n, 0.0, "i"));
+    }
     let s = scalar_text(value)?;
+    let decimal = crate::regional::current().decimal_separator;
+    let s = if decimal == '.' { s } else { s.replace(decimal, ".") };
     match parse_complex(&s) {
         Some((real, imag, suffix)) => Ok((real, imag, if suffix == "j" { "j" } else { "i" })),
         None => Err(FormulaValue::Error(CellError::Value)),
@@ -772,7 +778,16 @@ fn parse_complex(s: &str) -> Option<(f64, f64, &str)> {
     }
 }
 
+/// A complex number as text, with the regional decimal separator.
 fn format_complex(real: f64, imag: f64, suffix: &str) -> String {
+    let text = format_complex_with_point(real, imag, suffix);
+    match crate::regional::current().decimal_separator {
+        '.' => text,
+        decimal => text.replace('.', &decimal.to_string()),
+    }
+}
+
+fn format_complex_with_point(real: f64, imag: f64, suffix: &str) -> String {
     let real = clean_zero(real);
     let imag = clean_zero(imag);
 

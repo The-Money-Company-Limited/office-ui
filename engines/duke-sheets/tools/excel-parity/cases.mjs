@@ -6,6 +6,8 @@
 const xs = { A1: "x", A2: "y", A3: "x", A4: "y", A5: "z", B1: 1, B2: 2, B3: 3, B4: 4, B5: 5 }
 const n3 = { A1: 1, A2: 2, A3: 3 }
 const n4 = { A1: 1, A2: 2, A3: 3, A4: 4 }
+// A case computed with another computer's regional settings.
+const inLocale = (locale, name, f, want) => [name, {}, f, want, "Z1", undefined, locale]
 const d = (y, m, day) => (Date.UTC(y, m - 1, day) - Date.UTC(1899, 11, 30)) / 86400000
 
 // Cases the engine doesn't handle yet; run-cases.mjs reports them but doesn't fail on them.
@@ -13,22 +15,31 @@ export const known = new Set([])
 
 export const cases = [
   // Regional settings (COD-1793): day-first dates, local month names, TEXT codes and decimal commas
-  ["en-GB reads day first", {}, '=DATEVALUE("13/03/2021")', d(2021, 3, 13), "Z1", undefined, "en-GB"],
-  ["en-GB date text in +", {}, '="5/11/2026"+0', d(2026, 11, 5), "Z1", undefined, "en-GB"],
-  ["en-GB month-first text isn't a date", {}, '=DATEVALUE("3/13/2021")', "#VALUE!", "Z1", undefined, "en-GB"],
-  ["en-GB TEXT of date-time text", {}, '=TEXT("21/11/21 14:28","mmm")', "Nov", "Z1", undefined, "en-GB"],
+  inLocale("en-GB", "en-GB reads day first", '=DATEVALUE("13/03/2021")', d(2021, 3, 13)),
+  inLocale("en-GB", "en-GB date text in +", '="5/11/2026"+0', d(2026, 11, 5)),
+  inLocale("en-GB", "en-GB month-first text isn't a date", '=DATEVALUE("3/13/2021")', "#VALUE!"),
+  inLocale("en-GB", "en-GB TEXT of date-time text", '=TEXT("21/11/21 14:28","mmm")', "Nov"),
   ["en-US day-first text isn't a date", {}, '=DATEVALUE("13/03/2021")', "#VALUE!"],
-  ["es-ES TEXT month name", {}, '=TEXT(DATE(2024,1,15),"mmmm")', "enero", "Z1", undefined, "es-ES"],
-  ["es-ES TEXT year code", {}, '=TEXT(DATE(2024,1,15),"dd/mm/aaaa")', "15/01/2024", "Z1", undefined, "es-ES"],
-  ["es-ES VALUE with decimal comma", {}, '=VALUE("1,5")', 1.5, "Z1", undefined, "es-ES"],
-  ["es-ES number as text", {}, '=1.5&""', "1,5", "Z1", undefined, "es-ES"],
-  ["sv-SE TEXT year code", {}, '=TEXT(DATE(2022,12,31),"ÅÅÅÅ-MM-DD")', "2022-12-31", "Z1", undefined, "sv-SE"],
-  ["de-DE TEXT date codes", {}, '=TEXT(DATE(2026,11,5),"TT.MM.JJJJ")', "05.11.2026", "Z1", undefined, "de-DE"],
-  ["de-DE TEXT number separators", {}, '=TEXT(1234.5,"#.##0,00")', "1.234,50", "Z1", undefined, "de-DE"],
-  ["de-DE TEXT month name", {}, '=TEXT(DATE(2026,3,1),"MMMM")', "März", "Z1", undefined, "de-DE"],
-  ["de-DE VALUE with grouping", {}, '=VALUE("1.234,5")', 1234.5, "Z1", undefined, "de-DE"],
-  ["de-DE dotted date", {}, '=DATEVALUE("5.11.2026")', d(2026, 11, 5), "Z1", undefined, "de-DE"],
-  ["fr-FR TEXT short month", {}, '=TEXT(DATE(2026,2,1),"mmm")', "févr.", "Z1", undefined, "fr-FR"],
+  inLocale("es-ES", "es-ES TEXT month name", '=TEXT(DATE(2024,1,15),"mmmm")', "enero"),
+  inLocale("es-ES", "es-ES TEXT year code", '=TEXT(DATE(2024,1,15),"dd/mm/aaaa")', "15/01/2024"),
+  inLocale("es-ES", "es-ES VALUE with decimal comma", '=VALUE("1,5")', 1.5),
+  inLocale("es-ES", "es-ES number as text", '=1.5&""', "1,5"),
+  inLocale("sv-SE", "sv-SE TEXT year code", '=TEXT(DATE(2022,12,31),"ÅÅÅÅ-MM-DD")', "2022-12-31"),
+  inLocale("de-DE", "de-DE TEXT date codes", '=TEXT(DATE(2026,11,5),"TT.MM.JJJJ")', "05.11.2026"),
+  inLocale("de-DE", "de-DE TEXT number separators", '=TEXT(1234.5,"#.##0,00")', "1.234,50"),
+  inLocale("de-DE", "de-DE TEXT number and date sections", '=TEXT(1234.5,"#.##0,00;TT.MM.JJJJ")', "1.234,50"),
+  inLocale("de-DE", "de-DE NUMBERVALUE of a number", "=NUMBERVALUE(1.5)", 1.5),
+  inLocale("de-DE", "de-DE NUMBERVALUE with regional separators", '=NUMBERVALUE("1.234,5")', 1234.5),
+  inLocale("de-DE", "de-DE IMREAL of a number", "=IMREAL(1.5)", 1.5),
+  inLocale("de-DE", "de-DE COMPLEX writes a decimal comma", "=COMPLEX(1.5,2)", "1,5+2i"),
+  inLocale("cs-CZ", "cs-CZ VALUE with decimal comma", '=VALUE("1,5")', 1.5),
+  inLocale("ru-RU", "ru-RU VALUE with space grouping", '=VALUE("1 234,5")', 1234.5),
+  inLocale("sv-SE", "sv-SE TEXT elapsed hours", '=TEXT(1.5,"[tt]:mm")', "36:00"),
+  inLocale("de-CH", "de-CH VALUE with apostrophe grouping", '=VALUE("1\'234.5")', 1234.5),
+  inLocale("de-DE", "de-DE TEXT month name", '=TEXT(DATE(2026,3,1),"MMMM")', "März"),
+  inLocale("de-DE", "de-DE VALUE with grouping", '=VALUE("1.234,5")', 1234.5),
+  inLocale("de-DE", "de-DE dotted date", '=DATEVALUE("5.11.2026")', d(2026, 11, 5)),
+  inLocale("fr-FR", "fr-FR TEXT short month", '=TEXT(DATE(2026,2,1),"mmm")', "févr."),
 
   // Coercion, blanks and empty strings
   ["text number in +", {}, '=1+"2"', 3],

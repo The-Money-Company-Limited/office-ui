@@ -30,7 +30,7 @@ pub mod functions;
 pub mod lambda;
 pub mod parser;
 mod reference;
-pub mod regional;
+mod regional;
 
 pub use ast::{
     BinaryOperator, CellReference, ExternalReference, FormulaExpr, RangeReference,

@@ -1,7 +1,7 @@
-//! The workbook's regional settings while a formula evaluates, and the month and day names of
-//! each language. Text coercion runs deep inside values that carry no context, so `evaluate`
-//! makes the workbook's settings current on its thread (rayon calculates on several) and puts
-//! back the previous ones when it returns.
+//! The workbook's regional settings while a formula evaluates. Text coercion runs deep inside
+//! values that carry no context, so `evaluate` makes the workbook's settings current on its
+//! thread (rayon calculates on several) and puts back the previous ones when it returns. Doing
+//! it there covers every way into a calculation: cells, lambdas and single formulas.
 
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -15,16 +15,19 @@ thread_local! {
 }
 
 /// The regional settings of the workbook being calculated on this thread (en-US outside one).
-pub fn current() -> RegionalSettings {
+pub(crate) fn current() -> RegionalSettings {
     CURRENT.with(Cell::get)
 }
 
-/// Makes the context's workbook settings current until the guard drops. Nested evaluations of
-/// the same workbook find them current already and do nothing.
+/// Makes the context's workbook settings current until the guard drops. A nested evaluation of
+/// the same workbook finds them current already and changes nothing.
 pub(crate) fn enter(ctx: &EvaluationContext) -> Option<Restore> {
     let settings = ctx.workbook?.settings().regional;
-    let previous = CURRENT.with(|c| c.replace(settings));
-    (previous != settings).then_some(Restore(previous))
+    (current() != settings).then(|| make_current(settings))
+}
+
+fn make_current(settings: RegionalSettings) -> Restore {
+    Restore(CURRENT.with(|c| c.replace(settings)))
 }
 
 pub(crate) struct Restore(RegionalSettings);
@@ -35,187 +38,178 @@ impl Drop for Restore {
     }
 }
 
-/// Month and day names in one language, as Excel writes them.
-pub struct Names {
-    pub months: [&'static str; 12],
-    pub months_short: [&'static str; 12],
-    pub days: [&'static str; 7],
-    pub days_short: [&'static str; 7],
-}
-
-pub fn names(language: Language) -> &'static Names {
-    match language {
-        Language::English => &ENGLISH,
-        Language::Spanish => &Names {
-            months: ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"],
-            months_short: ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"],
-            days: ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"],
-            days_short: ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"],
-        },
-        Language::French => &Names {
-            months: ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"],
-            months_short: ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."],
-            days: ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"],
-            days_short: ["dim.", "lun.", "mar.", "mer.", "jeu.", "ven.", "sam."],
-        },
-        Language::German => &Names {
-            months: ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"],
-            months_short: ["Jan", "Feb", "Mrz", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"],
-            days: ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"],
-            days_short: ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"],
-        },
-        Language::Italian => &Names {
-            months: ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"],
-            months_short: ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"],
-            days: ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"],
-            days_short: ["dom", "lun", "mar", "mer", "gio", "ven", "sab"],
-        },
-        Language::Portuguese => &Names {
-            months: ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"],
-            months_short: ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"],
-            days: ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"],
-            days_short: ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"],
-        },
-        Language::Dutch => &Names {
-            months: ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"],
-            months_short: ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"],
-            days: ["zondag", "maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag"],
-            days_short: ["zo", "ma", "di", "wo", "do", "vr", "za"],
-        },
-        Language::Swedish => &Names {
-            months: ["januari", "februari", "mars", "april", "maj", "juni", "juli", "augusti", "september", "oktober", "november", "december"],
-            months_short: ["jan", "feb", "mar", "apr", "maj", "jun", "jul", "aug", "sep", "okt", "nov", "dec"],
-            days: ["söndag", "måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag"],
-            days_short: ["sön", "mån", "tis", "ons", "tor", "fre", "lör"],
-        },
-    }
-}
-
-static ENGLISH: Names = Names {
-    months: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
-    months_short: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
-    days: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
-    days_short: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
-};
-
-/// The month a name stands for (1-12): the full name or its three-letter start in English, or the
+/// The month a name stands for (1-12): the full English name or its first three letters, or the
 /// full or short name in the current language. A trailing period is optional.
-pub fn month_named(word: &str) -> Option<u32> {
-    let word = word.trim_end_matches('.').to_lowercase();
+pub(crate) fn month_named(word: &str) -> Option<u32> {
+    let word = word.trim_end_matches('.');
     if word.chars().count() < 3 {
         return None;
     }
-    let english = ENGLISH.months.iter().position(|m| {
-        let m = m.to_ascii_lowercase();
-        m == word || (word.len() == 3 && m.starts_with(&word))
-    });
-    let local = || {
-        let names = names(current().language);
-        (0..12).find(|&i| {
-            names.months[i].to_lowercase() == word || names.months_short[i].trim_end_matches('.').to_lowercase() == word
+    let english = ssfmt::Locale::en_us();
+    let local = current().format_locale();
+    let lower = word.to_lowercase();
+    let same = |name: &str| name.trim_end_matches('.').to_lowercase() == lower;
+    (0..12)
+        .find(|&i| {
+            let full = english.month_names_full[i];
+            full.eq_ignore_ascii_case(word) || (word.len() == 3 && full[..3].eq_ignore_ascii_case(word))
         })
-    };
-    english.or_else(local).map(|i| i as u32 + 1)
+        .or_else(|| (0..12).find(|&i| same(local.month_names_full[i]) || same(local.month_names_short[i])))
+        .map(|i| i as u32 + 1)
 }
 
-/// The number-format engine's locale for `TEXT` in the current settings.
-pub fn format_locale() -> ssfmt::Locale {
-    let settings = current();
-    let names = names(settings.language);
-    ssfmt::Locale {
-        decimal_separator: settings.decimal_separator,
-        thousands_separator: settings.thousands_separator,
-        month_names_short: names.months_short,
-        month_names_full: names.months,
-        day_names_short: names.days_short,
-        day_names_full: names.days,
-        ..ssfmt::Locale::en_us()
-    }
+/// The English code letter for a letter of a TEXT format in `language`, given how many times it
+/// repeats.
+fn english_code(language: Language, c: char, run: usize) -> Option<char> {
+    Some(match (language, c.to_lowercase().next()?) {
+        (Language::Swedish, 'å') => 'y',
+        (Language::Swedish, 't') => 'h',
+        (Language::German | Language::Dutch, 'j') => 'y',
+        (Language::German, 't') => 'd',
+        (Language::Dutch, 'u') => 'h',
+        (Language::French, 'j') => 'd',
+        (Language::Italian, 'g') => 'd',
+        // `a` is the year in these languages, written aa or aaaa; a lone one is A/P.
+        (Language::Spanish | Language::French | Language::Italian | Language::Portuguese, 'a') if run >= 2 => 'y',
+        _ => return None,
+    })
+}
+
+/// A piece of a format section: codes to translate, or text kept as written.
+enum Piece<'a> {
+    Code(String),
+    Kept(&'a str),
 }
 
 /// A `TEXT` format written for the current settings, in the codes the number-format engine reads.
 /// Excel reads a TEXT format in the computer's language: a Swedish one writes the year as `ÅÅÅÅ`,
 /// and a German one writes `#.##0,00` for a number but `TT.MM.JJJJ` for a date, where the periods
-/// are just periods. English codes still work. Quoted text, escaped characters, `[…]` sections,
-/// `General`, and AM/PM markers stay as they are.
-pub fn format_code(code: &str) -> Cow<'_, str> {
+/// are just periods. Each `;` section is a number or a date on its own. English codes still work.
+/// Quoted text, escaped characters, colours and conditions, and AM/PM markers stay as they are,
+/// and the language's name for General (`Standard`) is General.
+pub(crate) fn format_code(code: &str) -> Cow<'_, str> {
     let settings = current();
-    let swap_separators = settings.decimal_separator == ',';
-    if settings.language == Language::English && !swap_separators {
+    if settings.language == Language::English && us_separators(settings) {
         return Cow::Borrowed(code);
     }
-    let letter = |c: char, run: usize| -> Option<char> {
-        let lower = c.to_lowercase().next().unwrap_or(c);
-        Some(match (settings.language, lower) {
-            (Language::Swedish, 'å') => 'y',
-            (Language::Swedish, 't') => 'h',
-            (Language::German | Language::Dutch, 'j') => 'y',
-            (Language::German, 't') => 'd',
-            (Language::Dutch, 'u') => 'h',
-            (Language::French, 'j') => 'd',
-            (Language::Italian, 'g') => 'd',
-            // `a` is the year in these languages, written aa or aaaa; a lone one is A/P.
-            (Language::Spanish | Language::French | Language::Italian | Language::Portuguese, 'a') if run >= 2 => 'y',
-            _ => return None,
-        })
-    };
-    // The format as pieces that are codes (true) or kept as written (false).
-    let chars: Vec<char> = code.chars().collect();
-    let mut pieces: Vec<(bool, String)> = Vec::new();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        let ahead: String = chars[i..chars.len().min(i + 7)].iter().collect::<String>().to_lowercase();
-        let kept = match c {
-            '"' => chars[i + 1..].iter().position(|&c| c == '"').map_or(chars.len() - i, |p| p + 2),
-            '[' => chars[i..].iter().position(|&c| c == ']').map_or(chars.len() - i, |p| p + 1),
-            '\\' | '_' | '*' => 2.min(chars.len() - i),
-            _ => ["general", "am/pm", "a/p"].into_iter().find(|w| ahead.starts_with(w)).map_or(0, str::len),
-        };
-        if kept > 0 {
-            pieces.push((false, chars[i..i + kept].iter().collect()));
-            i += kept;
+    Cow::Owned(sections(code).into_iter().map(|section| translate(section, settings)).collect::<Vec<_>>().join(";"))
+}
+
+/// The format's `;` sections, leaving alone a `;` inside quotes or brackets or after a backslash.
+fn sections(code: &str) -> Vec<&str> {
+    let (mut sections, mut start) = (Vec::new(), 0);
+    let (mut quoted, mut bracketed, mut escaped) = (false, false, false);
+    for (i, c) in code.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if !quoted => escaped = true,
+            '"' => quoted = !quoted,
+            '[' if !quoted => bracketed = true,
+            ']' if !quoted => bracketed = false,
+            ';' if !quoted && !bracketed => {
+                sections.push(&code[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    sections.push(&code[start..]);
+    sections
+}
+
+fn us_separators(settings: RegionalSettings) -> bool {
+    (settings.decimal_separator, settings.thousands_separator) == ('.', ',')
+}
+
+/// The names of General in the languages here, which mean General in a TEXT format.
+const GENERAL: [&str; 6] = ["standaard", "standard", "estándar", "generale", "allmänt", "geral"];
+
+/// The length of the text at the start of `rest` that has the same letter throughout, as `[tt]`.
+fn bracketed_letters(rest: &str) -> Option<(char, usize)> {
+    let inner = &rest[1..rest.find(']')?];
+    let first = inner.chars().next()?;
+    let lower = first.to_lowercase().next();
+    inner.chars().all(|c| c.is_alphabetic() && c.to_lowercase().next() == lower).then(|| (first, inner.chars().count()))
+}
+
+/// One section, in English codes and with the separators the number-format engine reads.
+fn translate(section: &str, settings: RegionalSettings) -> String {
+    let mut pieces = Vec::new();
+    let mut rest = section;
+    while let Some(c) = rest.chars().next() {
+        // Elapsed time, [tt]:mm in Swedish: the letters are codes.
+        if let Some((letter, run)) = (c == '[').then(|| bracketed_letters(rest)).flatten() {
+            let english = english_code(settings.language, letter, run).unwrap_or(letter);
+            let end = rest.find(']').map_or(rest.len(), |p| p + 1);
+            pieces.push(Piece::Code(format!("[{}]", std::iter::repeat_n(english, run).collect::<String>())));
+            rest = &rest[end..];
             continue;
         }
-        let run = chars[i..].iter().take_while(|&&d| d.to_lowercase().eq(c.to_lowercase())).count();
-        let text: String = match letter(c, run) {
-            Some(english) => std::iter::repeat_n(english, run).collect(),
-            None => chars[i..i + run].iter().collect(),
+        let general = GENERAL.into_iter().find(|w| rest.get(..w.len()).is_some_and(|start| start.to_lowercase() == *w));
+        if let Some(word) = general {
+            pieces.push(Piece::Kept("General"));
+            rest = &rest[word.len()..];
+            continue;
+        }
+        let kept = match c {
+            '"' => rest[1..].find('"').map_or(rest.len(), |p| p + 2),
+            '[' => rest.find(']').map_or(rest.len(), |p| p + 1),
+            '\\' | '_' | '*' => rest.char_indices().nth(2).map_or(rest.len(), |(i, _)| i),
+            _ => ["general", "am/pm", "a/p"]
+                .into_iter()
+                .find(|w| rest.get(..w.len()).is_some_and(|start| start.eq_ignore_ascii_case(w)))
+                .map_or(0, str::len),
         };
+        if kept > 0 {
+            pieces.push(Piece::Kept(&rest[..kept]));
+            rest = &rest[kept..];
+            continue;
+        }
+        let lower = c.to_lowercase().next();
+        let run = rest.chars().take_while(|d| d.to_lowercase().next() == lower).count();
+        let english = english_code(settings.language, c, run);
+        let text: String = rest.chars().take(run).map(|d| english.unwrap_or(d)).collect();
         match pieces.last_mut() {
-            Some((true, last)) => last.push_str(&text),
-            _ => pieces.push((true, text)),
+            Some(Piece::Code(last)) => last.push_str(&text),
+            _ => pieces.push(Piece::Code(text)),
         }
-        i += run;
+        rest = &rest[rest.char_indices().nth(run).map_or(rest.len(), |(i, _)| i)..];
     }
-    let is_date = pieces.iter().any(|(code, text)| *code && text.chars().any(|c| "yYmMdDhHsS".contains(c)));
-    let mut out = String::with_capacity(code.len());
-    for (is_code, text) in pieces {
-        if !is_code || !swap_separators {
-            out.push_str(&text);
-        } else if is_date {
-            // The number-format engine would write these as the regional separators.
-            for c in text.chars() {
-                if matches!(c, '.' | ',') {
-                    out.push('\\');
+    let is_date = pieces.iter().any(|p| matches!(p, Piece::Code(text) if text.contains(|c: char| "yYmMdDhHsS".contains(c))));
+    let mut out = String::with_capacity(section.len());
+    for piece in pieces {
+        match piece {
+            Piece::Kept(text) => out.push_str(text),
+            Piece::Code(text) if us_separators(settings) => out.push_str(&text),
+            Piece::Code(text) if is_date => {
+                // The number-format engine would write a period or comma as a regional separator,
+                // so they become literal, except the decimal point of fractional seconds (ss,000).
+                let chars: Vec<char> = text.chars().collect();
+                for (i, &c) in chars.iter().enumerate() {
+                    let fraction = i > 0 && matches!(chars[i - 1], 's' | 'S') && chars.get(i + 1) == Some(&'0');
+                    if fraction && (c == settings.decimal_separator || c == '.') {
+                        out.push('.');
+                        continue;
+                    }
+                    if matches!(c, '.' | ',') {
+                        out.push('\\');
+                    }
+                    out.push(c);
                 }
-                out.push(c);
             }
-        } else {
-            out.extend(text.chars().map(|c| match c {
-                ',' => '.',
-                '.' if settings.thousands_separator == '.' => ',',
+            Piece::Code(text) => out.extend(text.chars().map(|c| match c {
+                c if c == settings.decimal_separator => '.',
+                c if c == settings.thousands_separator && !c.is_whitespace() => ',',
                 c => c,
-            }));
+            })),
         }
     }
-    Cow::Owned(out)
+    out
 }
 
 #[cfg(test)]
 pub(crate) fn with_settings<T>(tag: &str, f: impl FnOnce() -> T) -> T {
-    let previous = CURRENT.with(|c| c.replace(RegionalSettings::from_tag(tag)));
-    let _restore = Restore(previous);
+    let _restore = make_current(RegionalSettings::from_tag(tag));
     f()
 }
 
@@ -228,18 +222,27 @@ mod tests {
         with_settings("sv-SE", || assert_eq!(format_code("ÅÅÅÅ-MM-DD tt:mm"), "yyyy-MM-DD hh:mm"));
         with_settings("de-DE", || assert_eq!(format_code("TT.MM.JJJJ"), r"dd\.MM\.yyyy"));
         with_settings("de-DE", || assert_eq!(format_code("#.##0,00"), "#,##0.00"));
+        with_settings("de-DE", || assert_eq!(format_code("#.##0,00;TT.MM.JJJJ"), r"#,##0.00;dd\.MM\.yyyy"));
+        with_settings("de-DE", || assert_eq!(format_code(r#""a;b" 0,0"#), r#""a;b" 0.0"#));
         with_settings("es-ES", || assert_eq!(format_code("dd/mm/aaaa hh:mm AM/PM"), "dd/mm/yyyy hh:mm AM/PM"));
         with_settings("es-ES", || assert_eq!(format_code("d mmm, aaaa"), r"d mmm\, yyyy"));
         with_settings("es-ES", || assert_eq!(format_code("\"año\" aa"), "\"año\" yy"));
         with_settings("it-IT", || assert_eq!(format_code("General"), "General"));
         with_settings("fr-FR", || assert_eq!(format_code("jj mmmm aaaa"), "dd mmmm yyyy"));
-        with_settings("en-GB", || assert_eq!(format_code("dd/mm/yyyy"), "dd/mm/yyyy"));
         with_settings("fr-FR", || assert_eq!(format_code("0,0 \"h\""), "0.0 \"h\""));
+        with_settings("en-GB", || assert_eq!(format_code("dd/mm/yyyy"), "dd/mm/yyyy"));
+        with_settings("de-DE", || assert_eq!(format_code("hh:mm:ss,000"), "hh:mm:ss.000"));
+        with_settings("sv-SE", || assert_eq!(format_code("[tt]:mm"), "[hh]:mm"));
+        with_settings("sv-SE", || assert_eq!(format_code("[Röd]0"), "[Röd]0"));
+        with_settings("de-CH", || assert_eq!(format_code("TTTT, TT.MM.JJJJ"), r"dddd\, dd\.MM\.yyyy"));
+        with_settings("de-CH", || assert_eq!(format_code("#'##0.00"), "#,##0.00"));
+        with_settings("de-DE", || assert_eq!(format_code("Standard"), "General"));
     }
 
     #[test]
     fn reads_month_names() {
         assert_eq!(month_named("Sep"), Some(9));
+        assert_eq!(month_named("september"), Some(9));
         assert_eq!(month_named("enero"), None);
         with_settings("es-ES", || {
             assert_eq!(month_named("enero"), Some(1));

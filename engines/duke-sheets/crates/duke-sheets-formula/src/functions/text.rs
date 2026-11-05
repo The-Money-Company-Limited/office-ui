@@ -599,7 +599,7 @@ pub fn fn_text(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     let Ok(format) = ssfmt::NumberFormat::parse(&crate::regional::format_code(&format_code)) else {
         return Ok(FormulaValue::Error(CellError::Value));
     };
-    let options = ssfmt::FormatOptions { locale: crate::regional::format_locale(), ..Default::default() };
+    let options = ssfmt::FormatOptions { locale: crate::regional::current().format_locale(), ..Default::default() };
     let text = match value {
         FormulaValue::String(text) => match value.as_number() {
             Some(number) => format.format(number, &options),
@@ -764,9 +764,17 @@ pub fn fn_numbervalue(
     if matches!(text_arg, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
+    // A number needs no reading; text written out from one would carry the regional separator.
+    if let FormulaValue::Number(n) = text_arg {
+        if args.len() == 1 {
+            return Ok(FormulaValue::Number(*n));
+        }
+    }
 
+    // Left out, the separators are the regional ones.
+    let regional = crate::regional::current();
     let decimal_separator = match args.get(1) {
-        None => ".".to_string(),
+        None => regional.decimal_separator.to_string(),
         Some(v) => {
             if let FormulaValue::Error(e) = v {
                 return Ok(FormulaValue::Error(*e));
@@ -783,7 +791,8 @@ pub fn fn_numbervalue(
     };
 
     let group_separator = match args.get(2) {
-        None => ",".to_string(),
+        None if regional.thousands_separator == '\u{a0}' => " ".to_string(),
+        None => regional.thousands_separator.to_string(),
         Some(v) => {
             if let FormulaValue::Error(e) = v {
                 return Ok(FormulaValue::Error(*e));
