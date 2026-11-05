@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Run builds and tests on the Cloudflare build box instead of the laptop.
+
+A <repo> is a local directory under ~/Desktop/Code: absolute, relative to the current directory
+(e.g. `.`), or relative to ~/Desktop/Code (e.g. office-ui). It is uploaded to
+/work/<path under ~/Desktop/Code>, keeping the box's node_modules and target dirs between runs.
+
+  r up                    start the box (it stops itself 30 minutes after the last request)
+  r sync <repo>...        upload tracked + new files, and .git
+  r run <repo> '<cmd>'    run in /work/<repo>; exits with the command's code
+  r pull <repo> <path>    copy a path back (e.g. dist)
+  r down                  stop the box now
+
+The Worker's URL is in ~/.config/office-builds/url and its token in ~/.config/office-builds/token
+(the RUNNER_TOKEN secret of the office-builds Worker).
+"""
+import io
+import json
+import os
+import subprocess
+import sys
+import tarfile
+import urllib.parse
+import urllib.request
+
+CODE = os.path.expanduser("~/Desktop/Code")
+CONFIG = os.path.expanduser("~/.config/office-builds")
+CHUNK = 64 * 1024 * 1024  # Cloudflare takes request bodies up to 100 MB
+
+
+def config(name):
+    with open(os.path.join(CONFIG, name)) as f:
+        return f.read().strip()
+
+
+def request(method, path, body=None, query=None, data=None):
+    url = config("url").rstrip("/") + path
+    if query:
+        url += "?" + urllib.parse.urlencode(query)
+    headers = {"authorization": f"Bearer {config('token')}"}
+    if body is not None:
+        data = json.dumps(body).encode()
+        headers["content-type"] = "application/json"
+    return urllib.request.urlopen(urllib.request.Request(url, data=data, method=method, headers=headers), timeout=3600)
+
+
+def stream(response):
+    """Prints a command's output as it arrives and returns its exit code."""
+    code = 1
+    for line in response:
+        text = line.decode(errors="replace")
+        if text.startswith("__EXIT__ "):
+            code = int(text.split()[1])
+        else:
+            print(text, end="", flush=True)
+    return code
+
+
+def run(command, cwd="/work"):
+    return stream(request("POST", "/run", {"command": command}, {"cwd": cwd}))
+
+
+def resolve(repo):
+    root = os.path.abspath(repo if os.path.exists(repo) else os.path.join(CODE, repo))
+    key = os.path.relpath(root, CODE)
+    if key.startswith(".."):
+        sys.exit(f"{root} is not under {CODE}")
+    return root, key
+
+
+def sync(repo):
+    root, key = resolve(repo)
+    files = subprocess.run(
+        ["git", "-C", root, "ls-files", "-co", "--exclude-standard", "-z"], check=True, capture_output=True
+    ).stdout.split(b"\0")
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name in filter(None, files):
+            path = os.path.join(root, name.decode())
+            if os.path.isfile(path) and not os.path.islink(path):
+                archive.add(path, arcname=name.decode())
+        # Builds read git (the office template stamps `git describe`).
+        if os.path.isdir(os.path.join(root, ".git")):
+            archive.add(os.path.join(root, ".git"), arcname=".git")
+    data = buffer.getvalue()
+    parts = [data[i : i + CHUNK] for i in range(0, len(data), CHUNK)] or [b""]
+    for n, part in enumerate(parts):
+        if stream(request("PUT", "/file", query={"path": f"/tmp/sync/{n:03d}"}, data=part)) != 0:
+            sys.exit(f"upload of part {n} failed")
+    code = run(f"mkdir -p /work/{key} && cat /tmp/sync/* | tar xzf - -C /work/{key} && rm -rf /tmp/sync")
+    if code != 0:
+        sys.exit(code)
+    print(f"synced {key}: {len(data) // 1024} KiB in {len(parts)} part(s)")
+
+
+def pull(repo, path):
+    target, key = resolve(repo)
+    data = request("POST", "/stdout", {"command": f"tar czf - {path}"}, {"cwd": f"/work/{key}"}).read()
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+        archive.extractall(target, filter="data")
+    print(f"pulled {key}/{path}: {len(data) // 1024} KiB")
+
+
+def main():
+    action, *rest = sys.argv[1:] or [None]
+    if action == "up":
+        sys.exit(run("node -v && pnpm -v && cargo -V && wasm-pack -V"))
+    elif action == "down":
+        print(request("POST", "/down").read().decode(), end="")
+    elif action == "sync":
+        for repo in rest:
+            sync(repo)
+    elif action == "run":
+        key = resolve(rest[0])[1]
+        # The office template's browser tests load Playwright from <repo>/.cod1460; the image keeps it
+        # in /opt/cod1460.
+        link = "[ -d apps/v4/experiments/artifact-template ] && ln -sfn /opt/cod1460 .cod1460"
+        sys.exit(run(f"{{ {link}; }} 2>/dev/null; {rest[1]}", f"/work/{key}"))
+    elif action == "pull":
+        pull(rest[0], rest[1])
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main()

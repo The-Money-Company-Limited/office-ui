@@ -1,0 +1,29 @@
+# Deploys the build box (tools/cloudflare): wrangler builds its image here with Docker, pushes it to
+# Cloudflare's registry and deploys the Worker that runs it. Laptops never build it.
+name: office-builds
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - tools/cloudflare/**
+      - .github/workflows/office-builds.yml
+
+concurrency: office-builds
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: tools/cloudflare
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npx --yes wrangler@4.157.0 deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
