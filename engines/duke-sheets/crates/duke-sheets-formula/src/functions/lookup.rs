@@ -58,30 +58,43 @@ pub(crate) fn index_resolve_coords(
     }
 }
 
+/// How two values order in an approximate lookup. Only values of the same type compare: a number
+/// never matches text that looks like it, and blanks and other types are passed over (`None`).
 pub(crate) fn compare_lookup_values(a: &FormulaValue, b: &FormulaValue) -> Option<Ordering> {
     match (a, b) {
         (FormulaValue::Number(x), FormulaValue::Number(y)) => x.partial_cmp(y),
         (FormulaValue::Boolean(x), FormulaValue::Boolean(y)) => Some(x.cmp(y)),
         (FormulaValue::String(x), FormulaValue::String(y)) => {
-            Some(x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase()))
-        }
-        (FormulaValue::Number(x), FormulaValue::String(s)) => {
-            s.parse::<f64>().ok().and_then(|n| x.partial_cmp(&n))
-        }
-        (FormulaValue::String(s), FormulaValue::Number(x)) => {
-            s.parse::<f64>().ok().and_then(|n| n.partial_cmp(x))
-        }
-        (FormulaValue::Empty, FormulaValue::Empty) => Some(Ordering::Equal),
-        (FormulaValue::Empty, FormulaValue::Number(n)) => 0.0f64.partial_cmp(n),
-        (FormulaValue::Number(n), FormulaValue::Empty) => n.partial_cmp(&0.0),
-        (FormulaValue::Empty, FormulaValue::String(s)) => {
-            Some("".cmp(s.to_ascii_lowercase().as_str()))
-        }
-        (FormulaValue::String(s), FormulaValue::Empty) => {
-            Some(s.to_ascii_lowercase().as_str().cmp(""))
+            Some(x.to_lowercase().cmp(&y.to_lowercase()))
         }
         _ => None,
     }
+}
+
+/// The position of the last value at or below `lookup_value` (or at or above it, `descending`) in
+/// an ascending (descending) list, as Excel's approximate MATCH, VLOOKUP and HLOOKUP find it.
+/// Values of another type, and blanks, are passed over; the first value past the lookup value
+/// ends the search.
+pub(crate) fn approximate_position<'a>(
+    values: impl IntoIterator<Item = &'a FormulaValue>,
+    lookup_value: &FormulaValue,
+    descending: bool,
+) -> Option<usize> {
+    let (within, past) = if descending {
+        (Ordering::Greater, Ordering::Less)
+    } else {
+        (Ordering::Less, Ordering::Greater)
+    };
+    let mut best = None;
+    for (i, value) in values.into_iter().enumerate() {
+        match compare_lookup_values(value, lookup_value) {
+            Some(Ordering::Equal) => best = Some(i),
+            Some(ord) if ord == within => best = Some(i),
+            Some(ord) if ord == past => break,
+            _ => {}
+        }
+    }
+    best
 }
 
 pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
@@ -296,42 +309,10 @@ pub fn fn_match(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult
             }
             Ok(FormulaValue::Error(CellError::Na))
         }
-        1 => {
-            // Largest value <= lookup_value (array should be ascending)
-            // Linear scan: find last value <= lookup_value
-            let mut best: Option<usize> = None;
-            for (i, v) in vec.iter().enumerate() {
-                match compare_lookup_values(v, lookup_value) {
-                    Some(Ordering::Less) | Some(Ordering::Equal) => {
-                        best = Some(i);
-                    }
-                    Some(Ordering::Greater) => break,
-                    None => {}
-                }
-            }
-            match best {
-                Some(i) => Ok(FormulaValue::Number((i + 1) as f64)),
-                None => Ok(FormulaValue::Error(CellError::Na)),
-            }
-        }
-        -1 => {
-            // Smallest value >= lookup_value (array should be descending)
-            // Linear scan: find last value >= lookup_value
-            let mut best: Option<usize> = None;
-            for (i, v) in vec.iter().enumerate() {
-                match compare_lookup_values(v, lookup_value) {
-                    Some(Ordering::Greater) | Some(Ordering::Equal) => {
-                        best = Some(i);
-                    }
-                    Some(Ordering::Less) => break,
-                    None => {}
-                }
-            }
-            match best {
-                Some(i) => Ok(FormulaValue::Number((i + 1) as f64)),
-                None => Ok(FormulaValue::Error(CellError::Na)),
-            }
-        }
+        1 | -1 => match approximate_position(vec.iter(), lookup_value, match_type == -1) {
+            Some(i) => Ok(FormulaValue::Number((i + 1) as f64)),
+            None => Ok(FormulaValue::Error(CellError::Na)),
+        },
         _ => Ok(FormulaValue::Error(CellError::Na)),
     }
 }
@@ -543,40 +524,7 @@ pub fn fn_vlookup(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
             .map(|row| row.first().unwrap_or(&FormulaValue::Empty))
             .collect();
 
-        let mut is_sorted = true;
-        for i in 1..first_col.len() {
-            match compare_lookup_values(first_col[i - 1], first_col[i]) {
-                Some(Ordering::Greater) | None => {
-                    is_sorted = false;
-                    break;
-                }
-                _ => {}
-            }
-        }
-        if !is_sorted {
-            return Ok(FormulaValue::Error(CellError::Na));
-        }
-
-        let mut lo = 0usize;
-        let mut hi = first_col.len();
-        let mut best: Option<usize> = None;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            match compare_lookup_values(first_col[mid], lookup_value) {
-                Some(Ordering::Equal) => {
-                    best = Some(mid);
-                    break;
-                }
-                Some(Ordering::Less) => {
-                    best = Some(mid);
-                    lo = mid + 1;
-                }
-                Some(Ordering::Greater) => {
-                    hi = mid;
-                }
-                None => return Ok(FormulaValue::Error(CellError::Na)),
-            }
-        }
+        let best = approximate_position(first_col.iter().copied(), lookup_value, false);
         match best {
             Some(r) => Ok(table[r]
                 .get(col_index0)
@@ -691,42 +639,7 @@ pub fn fn_hlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
     let first_row = &table[0];
 
     let col_idx = if range_lookup {
-        let mut is_sorted = true;
-        for i in 1..first_row.len() {
-            let prev = &first_row[i - 1];
-            let curr = &first_row[i];
-            match compare_lookup_values(prev, curr) {
-                Some(Ordering::Greater) | None => {
-                    is_sorted = false;
-                    break;
-                }
-                _ => {}
-            }
-        }
-        if !is_sorted {
-            return Ok(FormulaValue::Error(CellError::Na));
-        }
-
-        let mut lo = 0usize;
-        let mut hi = first_row.len();
-        let mut best: Option<usize> = None;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            match compare_lookup_values(&first_row[mid], lookup_value) {
-                Some(Ordering::Equal) => {
-                    best = Some(mid);
-                    break;
-                }
-                Some(Ordering::Less) => {
-                    best = Some(mid);
-                    lo = mid + 1;
-                }
-                Some(Ordering::Greater) => {
-                    hi = mid;
-                }
-                None => return Ok(FormulaValue::Error(CellError::Na)),
-            }
-        }
+        let best = approximate_position(first_row.iter(), lookup_value, false);
         match best {
             Some(i) => i,
             None => return Ok(FormulaValue::Error(CellError::Na)),

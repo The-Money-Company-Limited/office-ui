@@ -108,7 +108,7 @@ pub(crate) fn evaluate_let(args: &[FormulaExpr], ctx: &EvaluationContext) -> For
 }
 
 /// A LAMBDA written in place, capturing the names in scope, or one bound to a LET name.
-fn lambda_of(expr: &FormulaExpr, ctx: &EvaluationContext) -> Option<Arc<Lambda>> {
+pub(crate) fn lambda_of(expr: &FormulaExpr, ctx: &EvaluationContext) -> Option<Arc<Lambda>> {
     match expr {
         FormulaExpr::Function { name, args } if crate::evaluator::function_name(name) == "LAMBDA" => {
             let (body, params) = args.split_last()?;
@@ -314,5 +314,8 @@ mod tests {
         assert_eq!(sum("=SCAN(0,{1,2,3},LAMBDA(a,v,a+v))"), 10.0);
         assert_eq!(sum("=MAKEARRAY(2,2,LAMBDA(r,c,r*c))"), 9.0);
         assert_eq!(eval("=MAKEARRAY(1E+20,1,LAMBDA(r,c,1))").unwrap(), FormulaValue::Error(CellError::Value));
+        // A LAMBDA called where it is written
+        assert_eq!(eval("=LAMBDA(x,x+1)(2)").unwrap(), FormulaValue::Number(3.0));
+        assert_eq!(eval("=LAMBDA(a,b,a*b)(3,4)").unwrap(), FormulaValue::Number(12.0));
     }
 }

@@ -412,6 +412,14 @@ fn ref_sheets(sheet: Option<&String>, workbook: &Workbook, current_sheet: usize)
     }
 }
 
+/// A formula that reads another workbook keeps the value saved in the file (`None`), as Excel shows
+/// it until the link is refreshed; one with no saved value, such as a formula just typed, is #REF!
+/// because that workbook isn't open.
+fn unsaved_external(workbook: &Workbook, cell_key: CellKey) -> Option<FormulaValue> {
+    let saved = workbook.worksheet(cell_key.sheet).map(|sheet| sheet.get_value_at(cell_key.row, cell_key.col));
+    matches!(saved, None | Some(CellValue::Empty)).then_some(FormulaValue::Error(duke_sheets_core::CellError::Ref))
+}
+
 fn shift_formula_rows(expr: &mut FormulaExpr, row_delta: i32) {
     match expr {
         FormulaExpr::CellRef(cell_ref) => shift_cell_address_row(&mut cell_ref.address, row_delta),
@@ -1340,10 +1348,10 @@ impl CalculationEngine {
 
             match evaluate(ast, &ctx) {
                 Ok(value) => Some(value),
-                Err(
-                    duke_sheets_formula::FormulaError::ExternalFunctionUnresolved(_)
-                    | duke_sheets_formula::FormulaError::ExternalReference(_),
-                ) => None,
+                Err(duke_sheets_formula::FormulaError::ExternalReference(_)) => {
+                    unsaved_external(wb_ref, cell_key)
+                }
+                Err(duke_sheets_formula::FormulaError::ExternalFunctionUnresolved(_)) => None,
                 Err(_e) => {
                     stats.errors += 1;
                     Some(FormulaValue::Error(duke_sheets_core::CellError::Value))
@@ -1452,10 +1460,10 @@ impl CalculationEngine {
         ctx.eval_cache = Some(eval_cache);
         match evaluate(ast, &ctx) {
             Ok(value) => Some((value, false)),
-            Err(
-                    duke_sheets_formula::FormulaError::ExternalFunctionUnresolved(_)
-                    | duke_sheets_formula::FormulaError::ExternalReference(_),
-                ) => None,
+            Err(duke_sheets_formula::FormulaError::ExternalReference(_)) => {
+                unsaved_external(workbook, cell_key).map(|value| (value, false))
+            }
+            Err(duke_sheets_formula::FormulaError::ExternalFunctionUnresolved(_)) => None,
             Err(_) => Some((
                 FormulaValue::Error(duke_sheets_core::CellError::Value),
                 true,

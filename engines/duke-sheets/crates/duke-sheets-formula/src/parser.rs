@@ -1025,10 +1025,18 @@ impl<'a> FormulaParser<'a> {
 
     fn parse_function_call(&mut self, name: String) -> FormulaResult<FormulaExpr> {
         let args = self.parse_call_args()?;
-        Ok(FormulaExpr::Function {
+        let call = FormulaExpr::Function {
             name: name.to_uppercase(),
             args,
-        })
+        };
+        // A LAMBDA called where it is written: =LAMBDA(x,x+1)(2)
+        let lambda = matches!(name.to_uppercase().as_str(), "LAMBDA" | "_XLFN.LAMBDA");
+        if lambda && matches!(self.current_token(), Token::LeftParen) {
+            let mut args = vec![call];
+            args.extend(self.parse_call_args()?);
+            return Ok(FormulaExpr::Function { name: LAMBDA_CALL.to_string(), args });
+        }
+        Ok(call)
     }
 
     /// Parse a parenthesized, comma-separated argument list (supports empty/omitted args,
@@ -1294,6 +1302,10 @@ impl<'a> FormulaParser<'a> {
         }
     }
 }
+
+/// The function name a LAMBDA called in place parses to: its first argument is the LAMBDA, the rest
+/// are the values it is called with. No real function has this name.
+pub const LAMBDA_CALL: &str = "_LAMBDA.CALL";
 
 /// A table column name as written in a formula, with Excel's `'` escapes removed: `'[`, `']`,
 /// `'#` and `''` stand for `[`, `]`, `#` and `'`.

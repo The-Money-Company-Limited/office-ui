@@ -48,6 +48,19 @@ pub struct RangeSource {
     pub start_col: u16,
     pub end_row: u32,
     pub end_col: u16,
+    /// Blank cells the reference covers past the cells read: a whole column (`A:A`) is read as
+    /// far as the used cells go, and COUNTBLANK and COUNTIF still count the rest, as Excel does.
+    pub blank_cells_past: u64,
+}
+
+impl RangeSource {
+    /// The blank cells the reference covers past what was read, for an array that has a source.
+    pub fn blanks_past(value: &FormulaValue) -> u64 {
+        match value {
+            FormulaValue::Array { source: Some(source), .. } => source.blank_cells_past,
+            _ => 0,
+        }
+    }
 }
 
 impl FormulaValue {
@@ -284,6 +297,7 @@ impl<'a> EvaluationContext<'a> {
     /// costs; whole columns on different sheets come out the same height, and the first blank row
     /// after the data (`MATCH(TRUE,ISBLANK(A:A),0)`) is still there.
     pub fn range_source(&self, sheet: usize, start_row: u32, start_col: u16, end_row: u32, end_col: u16) -> RangeSource {
+        let (full_end_row, full_end_col) = (end_row, end_col);
         let whole_column = end_row == MAX_ROWS - 1;
         let whole_row = end_col == MAX_COLS - 1;
         let (end_row, end_col) = if whole_column || whole_row {
@@ -295,7 +309,10 @@ impl<'a> EvaluationContext<'a> {
         } else {
             (end_row, end_col)
         };
-        RangeSource { sheet, start_row, start_col, end_row, end_col }
+        let cells = |r0: u32, c0: u16, r1: u32, c1: u16| (r1 - r0 + 1) as u64 * (c1 - c0 + 1) as u64;
+        let blank_cells_past = cells(start_row, start_col, full_end_row, full_end_col)
+            - cells(start_row, start_col, end_row, end_col);
+        RangeSource { sheet, start_row, start_col, end_row, end_col, blank_cells_past }
     }
 
     /// The last used row and column across the workbook's sheets.
@@ -1216,6 +1233,7 @@ fn evaluate_index_fast(
             start_col: range_expr.range.start.col,
             end_row: range_expr.range.end.row,
             end_col: range_expr.range.end.col,
+            blank_cells_past: 0,
         };
         return Some(Ok(direct_value_from_source(&source, r, c, ctx)
             .unwrap_or(FormulaValue::Error(CellError::Ref))));
@@ -1327,30 +1345,11 @@ fn evaluate_match_fast(
             found
         }
         0 => exact_match_in_shared_range(&lookup_value, arr, &source, ctx),
-        1 => {
-            let mut best = None;
-            for i in 0..len {
-                let v = shared_vector_value(arr, i).unwrap();
-                match compare_lookup_values(v, &lookup_value) {
-                    Some(Ordering::Less) | Some(Ordering::Equal) => best = Some(i),
-                    Some(Ordering::Greater) => break,
-                    None => {}
-                }
-            }
-            best
-        }
-        -1 => {
-            let mut best = None;
-            for i in 0..len {
-                let v = shared_vector_value(arr, i).unwrap();
-                match compare_lookup_values(v, &lookup_value) {
-                    Some(Ordering::Greater) | Some(Ordering::Equal) => best = Some(i),
-                    Some(Ordering::Less) => break,
-                    None => {}
-                }
-            }
-            best
-        }
+        1 | -1 => crate::functions::lookup::approximate_position(
+            (0..len).filter_map(|i| shared_vector_value(arr, i)),
+            &lookup_value,
+            match_type == -1,
+        ),
         _ => return Some(Ok(FormulaValue::Error(CellError::Na))),
     };
 
@@ -1868,9 +1867,16 @@ fn evaluate_function(
 ) -> FormulaResult<FormulaValue> {
     let lookup_name = function_name(name);
 
-    // A LAMBDA bound by LET is called by its name.
-    if let Some(Binding::Lambda(lambda)) = ctx.local(lookup_name).cloned() {
-        let values = args.iter().map(|arg| evaluate(arg, ctx)).collect::<FormulaResult<Vec<_>>>()?;
+    // A LAMBDA bound by LET is called by its name, and one written in place, LAMBDA(x,x+1)(2), there.
+    let lambda = match ctx.local(lookup_name) {
+        Some(Binding::Lambda(lambda)) => Some((lambda.clone(), args)),
+        _ if name == crate::parser::LAMBDA_CALL => args
+            .split_first()
+            .and_then(|(lambda, values)| Some((crate::lambda::lambda_of(lambda, ctx)?, values))),
+        _ => None,
+    };
+    if let Some((lambda, values)) = lambda {
+        let values = values.iter().map(|arg| evaluate(arg, ctx)).collect::<FormulaResult<Vec<_>>>()?;
         return call_lambda(&lambda, &values, ctx);
     }
 

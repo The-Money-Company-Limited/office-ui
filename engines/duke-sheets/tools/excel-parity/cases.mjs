@@ -8,7 +8,7 @@ const n4 = { A1: 1, A2: 2, A3: 3, A4: 4 }
 const d = (y, m, day) => (Date.UTC(y, m - 1, day) - Date.UTC(1899, 11, 30)) / 86400000
 
 // Cases the engine doesn't handle yet; run-cases.mjs reports them but doesn't fail on them.
-export const known = new Set(["LAMBDA called inline", "3D reference"])
+export const known = new Set([])
 
 export const cases = [
   // Coercion, blanks and empty strings
@@ -308,6 +308,13 @@ export const cases = [
   ["COUNTIF keeps spaces", { A1: "  2E", A2: "2E" }, '=COUNTIF(A1:A2,"="&A1)', 1],
   ["COUNTIF date text", { A1: d(2024, 1, 5) }, '=COUNTIF(A1:A1,">=1/1/2024")', 1],
   ["broadcast column by row", { A1: 1, A2: 2, B3: 1, C3: 2 }, "=SUMPRODUCT((A1:A2=1)*(B3:C3=2))", 1],
+  ["LAMBDA called inline, two values", {}, "=LAMBDA(a,b,a*b)(3,4)", 12],
+  ["COUNTBLANK of a whole column", n3, "=COUNTBLANK(A:A)", 1048573, "C1"],
+  ["COUNTIF not-equal over a whole column", n3, '=COUNTIF(A:A,"<>2")', 1048575, "C1"],
+  ["COUNTIFS blanks over whole columns", n3, '=COUNTIFS(A:A,"",B:B,"")', 1048573, "C1"],
+  ["approximate MATCH skips text", { A1: 1, A2: "a", A3: 3, A4: 7 }, "=MATCH(5,A1:A4)", 3],
+  ["approximate VLOOKUP under a header", { A1: "h", A2: 1, A3: 2, A4: 3, B1: "x", B2: "a", B3: "b", B4: "c" }, "=VLOOKUP(2.5,A:B,2)", "b", "D1"],
+  ["approximate MATCH of text among numbers", { A1: 1, A2: "b", A3: 3 }, '=MATCH("c",A1:A3)', 2],
   // Financial
   ["PMT", {}, "=PMT(0.05/12,360,200000)", -1073.6432460242795],
   ["FV", {}, "=FV(0.05,10,-100)", 1257.7892535548839],
