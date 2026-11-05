@@ -1196,12 +1196,30 @@ pub struct Workbook {
     pub(crate) inner: Rc<RefCell<CoreWorkbook>>,
 }
 
+thread_local! {
+    static REGIONAL: std::cell::Cell<duke_sheets_core::RegionalSettings> = Default::default();
+}
+
+/// Sets the regional settings formulas compute with in workbooks opened or created from now on,
+/// from a language tag such as `en-GB` (the browser's `navigator.language`): the order of day and
+/// month in dates written as text, the language of TEXT's month and day names and date codes, and
+/// the decimal separator. The default is en-US.
+#[wasm_bindgen(js_name = setLocale)]
+pub fn set_locale(tag: &str) {
+    REGIONAL.with(|r| r.set(duke_sheets_core::RegionalSettings::from_tag(tag)));
+}
+
+fn opened(mut wb: CoreWorkbook) -> Rc<RefCell<CoreWorkbook>> {
+    wb.settings_mut().regional = REGIONAL.with(|r| r.get());
+    Rc::new(RefCell::new(wb))
+}
+
 #[wasm_bindgen]
 impl Workbook {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
-            inner: Rc::new(RefCell::new(CoreWorkbook::new())),
+            inner: opened(CoreWorkbook::new()),
         }
     }
 
@@ -1214,7 +1232,7 @@ impl Workbook {
         let mut wb = CoreWorkbook::empty();
         wb.add_existing_worksheet(ws).map_err(to_js_error)?;
         Ok(Self {
-            inner: Rc::new(RefCell::new(wb)),
+            inner: opened(wb),
         })
     }
 
@@ -1230,7 +1248,7 @@ impl Workbook {
         let wb = duke_sheets_core::Workbook::from_bytes(data)
             .map_err(|e| JsError::new(&format!("Failed to read file: {}", e)))?;
         Ok(Self {
-            inner: Rc::new(RefCell::new(wb)),
+            inner: opened(wb),
         })
     }
 
@@ -1252,7 +1270,7 @@ impl Workbook {
         let wb = duke_sheets_core::Workbook::from_bytes_with(data, &opts)
             .map_err(|e| JsError::new(&format!("Failed to read file: {}", e)))?;
         Ok(Self {
-            inner: Rc::new(RefCell::new(wb)),
+            inner: opened(wb),
         })
     }
 

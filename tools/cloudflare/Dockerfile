@@ -23,6 +23,13 @@ RUN mkdir -p /opt/cod1460/tmp && cd /opt/cod1460 \
     && printf '<?xml version="1.0"?><fontconfig><dir>/usr/share/fonts</dir><cachedir>/tmp/fc</cachedir></fontconfig>' > fonts.conf \
     && rm -rf /var/lib/apt/lists/*
 
+# The xlsx reader's integration tests make their fixtures with LibreOffice, over URP on port 2002.
+# `lo-start` starts it there, so the tests don't try Docker, which the box doesn't have:
+# r run <repo> 'lo-start && cargo test -p duke-sheets-xlsx --test e2e'
+RUN apt-get update && apt-get install -y --no-install-recommends libreoffice-calc-nogui \
+    && rm -rf /var/lib/apt/lists/*
+COPY lo-start /usr/local/bin/lo-start
+
 RUN git config --global --add safe.directory '*'
 WORKDIR /work
 CMD ["sleep", "infinity"]

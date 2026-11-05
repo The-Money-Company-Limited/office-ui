@@ -586,7 +586,8 @@ pub fn fn_text(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     }
 
     // TEXT formats with the same number-format engine as the grid, so every format code Excel
-    // accepts works: dates, times, sections, conditions, scaling, fractions and literals.
+    // accepts works: dates, times, sections, conditions, scaling, fractions and literals. The
+    // format and the month and day names are in the regional settings' language.
     let format_code = format_text.as_string();
     if format_code.is_empty() {
         // An empty format shows text as it is and a number as nothing.
@@ -595,10 +596,10 @@ pub fn fn_text(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
             _ => String::new(),
         }));
     }
-    let Ok(format) = ssfmt::NumberFormat::parse(&format_code) else {
+    let Ok(format) = ssfmt::NumberFormat::parse(&crate::regional::format_code(&format_code)) else {
         return Ok(FormulaValue::Error(CellError::Value));
     };
-    let options = ssfmt::FormatOptions::default();
+    let options = ssfmt::FormatOptions { locale: crate::regional::format_locale(), ..Default::default() };
     let text = match value {
         FormulaValue::String(text) => match value.as_number() {
             Some(number) => format.format(number, &options),

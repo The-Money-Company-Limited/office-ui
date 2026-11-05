@@ -74,6 +74,9 @@ export function getSheetsWasmModule() {
       } else {
         await mod.default();
       }
+      // Formulas read dates written as text, and TEXT names months, the way Excel does on this
+      // computer: 5/11/2026 is 5 November in en-GB.
+      mod.setLocale(globalThis.navigator?.language ?? "en-US");
       return mod;
     });
   }
