@@ -156,6 +156,8 @@ impl CriteriaMatcher {
             CriteriaType::TextComparison(op, pattern) => {
                 let text = match value {
                     FormulaValue::String(s) => s.to_lowercase(),
+                    // "<>#N/A" passes over #N/A and keeps every other error.
+                    FormulaValue::Error(e) => e.as_str().to_lowercase(),
                     FormulaValue::Empty if pattern.is_empty() => String::new(),
                     _ => return matches!(op, ComparisonOp::NotEqual),
                 };
@@ -311,6 +313,9 @@ mod tests {
         assert!(not_x.matches(&FormulaValue::Empty));
         assert!(not_x.matches(&FormulaValue::Number(1.0)));
         assert!(!not_x.matches(&FormulaValue::String("X".into())));
+        let not_na = CriteriaMatcher::new(&FormulaValue::String("<>#N/A".into()));
+        assert!(!not_na.matches(&FormulaValue::Error(duke_sheets_core::CellError::Na)));
+        assert!(not_na.matches(&FormulaValue::Error(duke_sheets_core::CellError::Ref)));
         let equals = CriteriaMatcher::new(&FormulaValue::String("=".into()));
         assert!(equals.matches(&FormulaValue::Empty));
         assert!(!equals.matches(&FormulaValue::String("x".into())));

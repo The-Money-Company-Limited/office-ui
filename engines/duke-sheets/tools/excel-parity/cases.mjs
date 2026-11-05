@@ -309,6 +309,8 @@ export const cases = [
   ["SUMIFS with an error criteria", { A1: 1, B1: 5 }, '=SUMIFS(B1:B1,A1:A1,"<="&EOMONTH("x",0))', 0],
   ["COUNTIF of an error", { A1: "=NA()", A2: 1, A3: "=NA()" }, "=COUNTIF(A1:A3,NA())", 2],
   ["COUNTIF of an error's text", { A1: "=NA()", A2: 1 }, '=COUNTIF(A1:A2,"#N/A")', 1],
+  // As Excel saved SUMIF(AX3:AX20,"<>#N/A") over #N/A and #REF! cells (54590).
+  ["SUMIF not #N/A passes over #N/A", { A1: "=NA()", A2: 2, A3: 3 }, '=SUMIF(A1:A3,"<>#N/A")', 5],
   ["LOOKUP of a big number past a blank", { A1: 44114 }, "=LOOKUP(9^9,A1:B1)", 44114],
   // As Excel saved SUMIFS($K$2:$K$32,$A$2:$A$32,$N$5,…) with dates written as text in A (56225).
   ["SUMIFS date matches date text", { A1: "3-1-21", A2: "3-2-21", B1: 2, B2: 3, C1: d(2021, 3, 1) }, "=SUMIFS(B1:B2,A1:A2,C1)", 2],
