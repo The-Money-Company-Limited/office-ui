@@ -19,7 +19,9 @@ export class Builder extends DurableObject<Env> {
     const container = this.ctx.container;
     if (!container) throw new Error("No container is configured");
     if (!container.running) {
-      container.start({ image: container.images.base, instance: "standard-4", enableInternet: true });
+      const image = container.images.base;
+      if (!image) throw new Error(`No base image; the deploy gave ${JSON.stringify(container.images)}`);
+      container.start({ image, instance: "standard-4", enableInternet: true });
       // start() returns before the box can run commands.
       for (let second = 0; ; second++) {
         const ready = await container.exec(["true"]).then((p) => p.exitCode).catch(() => null);
