@@ -108,6 +108,8 @@ pub struct StructuredReference {
     pub table: Option<String>,
     /// Column name (e.g., "Column1"). None when only specifiers are used
     pub column: Option<String>,
+    /// Last column of a column range (`Table1[[A]:[C]]`); None for one column
+    pub last_column: Option<String>,
     /// Special item specifiers (#All, #Data, #Headers, #Totals, #This Row)
     pub specifiers: Vec<StructuredRefSpecifier>,
 }

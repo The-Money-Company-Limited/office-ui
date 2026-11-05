@@ -20,6 +20,10 @@ pub struct CriteriaMatcher {
 enum CriteriaType {
     /// Exact number match
     Number(f64),
+    /// A number written as text (`"5"`): matches the number and the same text
+    NumberOrText(f64, String),
+    /// TRUE or FALSE: matches only that boolean
+    Boolean(bool),
     /// Comparison with number (operator, value)
     Comparison(ComparisonOp, f64),
     /// Text match (case-insensitive, with wildcards)
@@ -44,7 +48,7 @@ impl CriteriaMatcher {
     pub fn new(criteria: &FormulaValue) -> Self {
         let criteria_type = match criteria {
             FormulaValue::Number(n) => CriteriaType::Number(*n),
-            FormulaValue::Boolean(b) => CriteriaType::Number(if *b { 1.0 } else { 0.0 }),
+            FormulaValue::Boolean(b) => CriteriaType::Boolean(*b),
             FormulaValue::String(s) => Self::parse_string_criteria(s),
             FormulaValue::Empty => CriteriaType::Empty,
             FormulaValue::Error(_) => CriteriaType::Empty, // Errors don't match anything
@@ -55,8 +59,8 @@ impl CriteriaMatcher {
     }
 
     fn parse_string_criteria(s: &str) -> CriteriaType {
-        let s = s.trim();
-
+        // Text is matched as written, spaces included: "  2E" finds only "  2E". Numbers, percents
+        // and dates in it are read as Excel reads them (">=1/1/2024", "5%").
         if s.is_empty() {
             return CriteriaType::Empty;
         }
@@ -67,8 +71,13 @@ impl CriteriaMatcher {
         }
 
         // Try to parse as plain number
-        if let Ok(n) = s.parse::<f64>() {
-            return CriteriaType::Number(n);
+        if let Some(n) = crate::coerce::text_to_number(s) {
+            return CriteriaType::NumberOrText(n, s.trim().to_lowercase());
+        }
+        match s.to_ascii_uppercase().as_str() {
+            "TRUE" => return CriteriaType::Boolean(true),
+            "FALSE" => return CriteriaType::Boolean(false),
+            _ => {}
         }
 
         // Text match (case-insensitive, supports wildcards)
@@ -94,8 +103,7 @@ impl CriteriaMatcher {
         };
 
         // Try to parse the number part
-        let rest = rest.trim();
-        if let Ok(n) = rest.parse::<f64>() {
+        if let Some(n) = crate::coerce::text_to_number(rest) {
             Some(CriteriaType::Comparison(op, n))
         } else {
             Some(CriteriaType::TextComparison(op, rest.to_lowercase()))
@@ -106,30 +114,25 @@ impl CriteriaMatcher {
     pub fn matches(&self, value: &FormulaValue) -> bool {
         match &self.criteria_type {
             CriteriaType::Number(criteria_num) => {
-                // Only match actual numeric values, not strings that look like numbers
-                // This matches Excel behavior where SUMIF(A:A, 5) won't match text "5"
-                match value {
-                    FormulaValue::Number(n) => (n - criteria_num).abs() < 1e-10,
-                    FormulaValue::Boolean(b) => {
-                        let n = if *b { 1.0 } else { 0.0 };
-                        (n - criteria_num).abs() < 1e-10
-                    }
-                    _ => false,
-                }
+                // Only match actual numeric values, not booleans or strings that look like
+                // numbers: SUMIF(A:A, 5) won't match TRUE or the text "5"
+                matches!(value, FormulaValue::Number(n) if (n - criteria_num).abs() < 1e-10)
             }
 
+            CriteriaType::NumberOrText(criteria_num, text) => match value {
+                FormulaValue::Number(n) => (n - criteria_num).abs() < 1e-10,
+                FormulaValue::String(s) => s.trim().to_lowercase() == *text,
+                _ => false,
+            },
+
+            CriteriaType::Boolean(b) => matches!(value, FormulaValue::Boolean(v) if v == b),
+
             CriteriaType::Comparison(op, criteria_num) => {
-                // Comparisons also only work on numeric values
+                // Comparisons only work on numeric values: ">0" doesn't count TRUE, but "<>5"
+                // counts everything that isn't the number 5, text and blanks included
                 let n = match value {
                     FormulaValue::Number(n) => *n,
-                    FormulaValue::Boolean(b) => {
-                        if *b {
-                            1.0
-                        } else {
-                            0.0
-                        }
-                    }
-                    _ => return false,
+                    _ => return matches!(op, ComparisonOp::NotEqual),
                 };
                 match op {
                     ComparisonOp::Equal => (n - criteria_num).abs() < 1e-10,
@@ -166,32 +169,44 @@ impl CriteriaMatcher {
         }
     }
 
-    /// Match with wildcards: * = any characters, ? = single character
+    /// Match with wildcards: * = any characters, ? = single character, ~ makes the next
+    /// character literal (`a~*` matches the text "a*").
     fn wildcard_match(pattern: &str, text: &str) -> bool {
-        // If no wildcards, do exact match
-        if !pattern.contains('*') && !pattern.contains('?') {
+        if !pattern.contains(['*', '?', '~']) {
             return pattern == text;
         }
 
-        // Wildcard matching using iterative approach with backtracking
-        let pattern_chars: Vec<char> = pattern.chars().collect();
+        let mut tokens = Vec::new();
+        let mut chars = pattern.chars();
+        while let Some(c) = chars.next() {
+            tokens.push(match c {
+                '*' => Wild::Run,
+                '?' => Wild::One,
+                '~' => Wild::Char(chars.next().unwrap_or('~')),
+                other => Wild::Char(other),
+            });
+        }
         let text_chars: Vec<char> = text.chars().collect();
 
-        Self::wildcard_match_impl(&pattern_chars, &text_chars)
+        Self::wildcard_match_impl(&tokens, &text_chars)
     }
 
-    fn wildcard_match_impl(pattern: &[char], text: &[char]) -> bool {
+    fn wildcard_match_impl(pattern: &[Wild], text: &[char]) -> bool {
         let mut pi = 0; // pattern index
         let mut ti = 0; // text index
         let mut star_pi = None; // position of last * in pattern
         let mut star_ti = 0; // position in text when we matched last *
 
         while ti < text.len() {
-            if pi < pattern.len() && (pattern[pi] == '?' || pattern[pi] == text[ti]) {
-                // Characters match or pattern has ?
+            let matches_here = match pattern.get(pi) {
+                Some(Wild::One) => true,
+                Some(Wild::Char(c)) => *c == text[ti],
+                _ => false,
+            };
+            if matches_here {
                 pi += 1;
                 ti += 1;
-            } else if pi < pattern.len() && pattern[pi] == '*' {
+            } else if matches!(pattern.get(pi), Some(Wild::Run)) {
                 // Star found, record position
                 star_pi = Some(pi);
                 star_ti = ti;
@@ -208,12 +223,20 @@ impl CriteriaMatcher {
         }
 
         // Check remaining pattern characters (must all be *)
-        while pi < pattern.len() && pattern[pi] == '*' {
+        while matches!(pattern.get(pi), Some(Wild::Run)) {
             pi += 1;
         }
 
         pi == pattern.len()
     }
+}
+
+/// One element of a wildcard pattern.
+#[derive(Clone, Copy)]
+enum Wild {
+    One,
+    Run,
+    Char(char),
 }
 
 #[cfg(test)]

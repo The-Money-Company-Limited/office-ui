@@ -255,13 +255,14 @@ fn test_workbook_calculate_index_zero_zero() {
     let mut ctx = EvaluationContext::new(Some(&wb), 0, 0, 0);
     ctx.eval_cache = Some(&cache);
     let ast = parse_formula(wb.worksheet(0).unwrap().get_formula_at(0, 0).unwrap()).unwrap();
-    // Excel returns first element for INDEX(2D, 0, 0)
-    assert_eq!(evaluate(&ast, &ctx).unwrap(), FormulaValue::Number(1.0));
+    // INDEX(area, 0, 0) is the whole area, which spills from A1
+    assert!(matches!(evaluate(&ast, &ctx).unwrap(), FormulaValue::Array { .. }));
 
     wb.calculate().unwrap();
 
     let sheet = wb.worksheet(0).unwrap();
     assert_eq!(sheet.get_value_at(0, 0), CellValue::Number(1.0));
+    assert_eq!(sheet.get_value_at(1, 2), CellValue::Number(6.0));
 }
 
 #[test]
@@ -313,4 +314,86 @@ fn test_loaded_parity_cells_recalculate() {
         CellValue::Number(1.0)
     );
     assert_eq!(tests_sheet.get_value_at(456, 2), CellValue::Error(CellError::Num));
+}
+
+/// A range with a fixed start and a moving end grows as it is copied down (COD-1770).
+#[test]
+fn test_workbook_calculate_growing_ranges() {
+    let mut wb = Workbook::new();
+    {
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "header").unwrap();
+        for row in 2..=6 {
+            sheet.set_cell_value(&format!("A{row}"), (row - 1) as f64).unwrap();
+            sheet.set_cell_formula(&format!("B{row}"), &format!("=SUM($A$2:A{row})")).unwrap();
+            sheet.set_cell_formula(&format!("C{row}"), &format!("=COUNT($A$2:A{row})")).unwrap();
+            sheet.set_cell_formula(&format!("D{row}"), &format!("=ROWS($A$2:A{row})")).unwrap();
+            sheet.set_cell_formula(&format!("E{row}"), &format!("=COUNTIF(A$2:A{row},\">1\")")).unwrap();
+        }
+    }
+    wb.calculate().unwrap();
+
+    let sheet = wb.worksheet(0).unwrap();
+    for row in 2..=6u32 {
+        let n = (row - 1) as f64;
+        let r = row - 1;
+        assert_eq!(sheet.get_value_at(r, 1), CellValue::Number(n * (n + 1.0) / 2.0), "SUM in row {row}");
+        assert_eq!(sheet.get_value_at(r, 2), CellValue::Number(n), "COUNT in row {row}");
+        assert_eq!(sheet.get_value_at(r, 3), CellValue::Number(n), "ROWS in row {row}");
+        assert_eq!(sheet.get_value_at(r, 4), CellValue::Number(n - 1.0), "COUNTIF in row {row}");
+    }
+}
+
+/// Whole columns and rows read the sheet's used cells, on this sheet and others (COD-1772).
+#[test]
+fn test_workbook_calculate_whole_columns_and_rows() {
+    let mut wb = Workbook::new();
+    {
+        let sheet = wb.worksheet_mut(0).unwrap();
+        for (row, (key, value)) in [("x", 1.0), ("y", 2.0), ("x", 3.0)].into_iter().enumerate() {
+            sheet.set_cell_value(&format!("A{}", row + 1), key).unwrap();
+            sheet.set_cell_value(&format!("B{}", row + 1), value).unwrap();
+        }
+        sheet.set_cell_value("F10", 5.0).unwrap();
+        sheet.set_cell_value("G10", 7.0).unwrap();
+        let formulas = [
+            ("D1", "=SUM(B:B)"),
+            ("D2", "=COUNTA(A:A)"),
+            ("D3", "=SUMIF(A:A,\"x\",B:B)"),
+            ("D4", "=COUNTIFS($A:$A,$A1,$B:$B,\">1\")"),
+            ("D5", "=VLOOKUP(\"y\",A:B,2,FALSE)"),
+            ("D6", "=MATCH(7,10:10,0)"),
+            ("D7", "=SUM($10:$10)"),
+            ("D8", "=SUM(Data!A:A)"),
+            ("D9", "=ROWS(A:A)"),
+            ("D11", "=SUM(A:B)"),
+            ("E1", "=SUM($B$1:B1)*COUNTA(A:A)"),
+            ("E2", "=SUM($B$1:B2)*COUNTA(A:A)"),
+        ];
+        for (cell, formula) in formulas {
+            sheet.set_cell_formula(cell, formula).unwrap();
+        }
+    }
+    let data = wb.add_worksheet_with_name("Data").unwrap();
+    {
+        let sheet = wb.worksheet_mut(data).unwrap();
+        sheet.set_cell_value("A1", 4.0).unwrap();
+        sheet.set_cell_value("A2", 6.0).unwrap();
+    }
+    wb.calculate().unwrap();
+
+    let sheet = wb.worksheet(0).unwrap();
+    let number = |cell: &str| sheet.get_value(cell).unwrap();
+    assert_eq!(number("D1"), CellValue::Number(6.0));
+    assert_eq!(number("D2"), CellValue::Number(3.0));
+    assert_eq!(number("D3"), CellValue::Number(4.0));
+    assert_eq!(number("D4"), CellValue::Number(1.0));
+    assert_eq!(number("D5"), CellValue::Number(2.0));
+    assert_eq!(number("D6"), CellValue::Number(7.0));
+    assert_eq!(number("D7"), CellValue::Number(12.0));
+    assert_eq!(number("D8"), CellValue::Number(10.0));
+    assert_eq!(number("D9"), CellValue::Number(1_048_576.0));
+    assert_eq!(number("D11"), CellValue::Number(6.0));
+    assert_eq!(number("E1"), CellValue::Number(3.0));
+    assert_eq!(number("E2"), CellValue::Number(9.0));
 }

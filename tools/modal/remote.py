@@ -44,7 +44,10 @@ def sandbox(create=False):
     except modal.exception.NotFoundError:
         if not create:
             sys.exit("No sandbox; run: remote.py up")
-        return modal.Sandbox.create(app=app, image=image, name=NAME, timeout=24 * 3600, cpu=8, memory=16384)
+        # An idle box still bills for its 8 CPUs (one left up for a day cost $24), so it stops itself.
+        return modal.Sandbox.create(
+            app=app, image=image, name=NAME, timeout=6 * 3600, idle_timeout=30 * 60, cpu=8, memory=16384
+        )
 
 
 def run(sb, command, check=True):

@@ -214,178 +214,35 @@ mod tests {
     #[test]
     fn test_let_docs() {
         // https://support.microsoft.com/en-us/office/let-function-34842dd8-b92b-4d3f-b325-b8b8f9908999
-        // LET is a pass-through: evaluator pre-evaluates args, fn_let returns the last one.
-        let ctx = EvaluationContext::simple();
-
         // Docs Example 1: =LET(x, 5, SUM(x, 1)) → 6
-        let result = fn_let(
-            &[
-                FormulaValue::String("x".into()),
-                FormulaValue::Number(5.0),
-                FormulaValue::Number(6.0),
-            ],
-            &ctx,
-        )
-        .unwrap();
-        assert_eq!(result, FormulaValue::Number(6.0));
+        assert_eq!(eval("=LET(x,5,SUM(x,1))").unwrap(), FormulaValue::Number(6.0));
+        // Later names see earlier ones; names ignore case; Excel's file form is _xlpm.name
+        assert_eq!(eval("=LET(a,10,b,a*2,A+b)").unwrap(), FormulaValue::Number(30.0));
+        assert_eq!(eval("=LET(_xlpm.x,2,_xlpm.x^3)").unwrap(), FormulaValue::Number(8.0));
+        // A name shadows an outer one
+        assert_eq!(eval("=LET(x,1,LET(x,2,x)+x)").unwrap(), FormulaValue::Number(3.0));
+        // Errors in a value come through where the name is used
+        assert_eq!(eval("=LET(x,1/0,x+1)").unwrap(), FormulaValue::Error(CellError::Div0));
+        assert_eq!(eval("=LET(x,1/0,42)").unwrap(), FormulaValue::Number(42.0));
+        // A quoted name, or a missing calculation, is #VALUE!
+        assert_eq!(eval("=LET(\"x\",5,5+1)").unwrap(), FormulaValue::Error(CellError::Value));
+        assert_eq!(eval("=LET(a,1,b,2)").unwrap(), FormulaValue::Error(CellError::Value));
+        // A LAMBDA bound by LET is callable by its name
+        assert_eq!(eval("=LET(sq,LAMBDA(n,n*n),sq(4)+sq(2))").unwrap(), FormulaValue::Number(20.0));
+    }
 
-        // Via eval - string name, inline SUM(5,1)
-        assert_eq!(
-            eval("=LET(\"x\",5,SUM(5,1))").unwrap(),
-            FormulaValue::Number(6.0)
-        );
-
-        // Inline arithmetic: =LET("x", 5, 5+1) → 6
-        assert_eq!(
-            eval("=LET(\"x\",5,5+1)").unwrap(),
-            FormulaValue::Number(6.0)
-        );
-
-        // Two name/value pairs + calculation (5 args)
-        let result = fn_let(
-            &[
-                FormulaValue::String("filterCriteria".into()),
-                FormulaValue::String("Fred".into()),
-                FormulaValue::String("filteredRange".into()),
-                FormulaValue::String("filtered_data".into()),
-                FormulaValue::String("Fred".into()),
-            ],
-            &ctx,
-        )
-        .unwrap();
-        assert_eq!(result, FormulaValue::String("Fred".into()));
-
-        // Two pairs via eval: =LET("a", 10, "b", 20, 10+20) → 30
-        assert_eq!(
-            eval("=LET(\"a\",10,\"b\",20,10+20)").unwrap(),
-            FormulaValue::Number(30.0)
-        );
-
-        // Minimum 3 args (one pair + calculation)
-        let result = fn_let(
-            &[
-                FormulaValue::String("a".into()),
-                FormulaValue::Number(10.0),
-                FormulaValue::Number(10.0),
-            ],
-            &ctx,
-        )
-        .unwrap();
-        assert_eq!(result, FormulaValue::Number(10.0));
-
-        // Boolean result
-        let result = fn_let(
-            &[
-                FormulaValue::String("flag".into()),
-                FormulaValue::Boolean(true),
-                FormulaValue::Boolean(true),
-            ],
-            &ctx,
-        )
-        .unwrap();
-        assert_eq!(result, FormulaValue::Boolean(true));
-
-        // String result via eval
-        assert_eq!(
-            eval("=LET(\"name\",\"hello\",\"hello\")").unwrap(),
-            FormulaValue::String("hello".into())
-        );
-
-        // Error propagation: error in value position bubbles up
-        let result = fn_let(
-            &[
-                FormulaValue::String("x".into()),
-                FormulaValue::Error(CellError::Div0),
-                FormulaValue::Number(42.0),
-            ],
-            &ctx,
-        )
-        .unwrap();
-        assert_eq!(result, FormulaValue::Error(CellError::Div0));
-
-        // Via eval: =LET("x", 1/0, 42) → #DIV/0!
-        assert_eq!(
-            eval("=LET(\"x\",1/0,42)").unwrap(),
-            FormulaValue::Error(CellError::Div0)
-        );
-
-        // Error in name position is NOT checked - passes through to last arg
-        let result = fn_let(
-            &[
-                FormulaValue::Error(CellError::Value),
-                FormulaValue::Number(5.0),
-                FormulaValue::Number(5.0),
-            ],
-            &ctx,
-        )
-        .unwrap();
-        assert_eq!(result, FormulaValue::Number(5.0));
-
-        // Error in calculation position returned as-is
-        let result = fn_let(
-            &[
-                FormulaValue::String("x".into()),
-                FormulaValue::Number(5.0),
-                FormulaValue::Error(CellError::Num),
-            ],
-            &ctx,
-        )
-        .unwrap();
-        assert_eq!(result, FormulaValue::Error(CellError::Num));
-
-        // Arg count: must be odd ≥ 3, else #VALUE!
-        assert_eq!(
-            fn_let(&[], &ctx).unwrap(),
-            FormulaValue::Error(CellError::Value)
-        );
-        assert_eq!(
-            fn_let(&[FormulaValue::Number(5.0)], &ctx).unwrap(),
-            FormulaValue::Error(CellError::Value)
-        );
-        assert_eq!(
-            fn_let(
-                &[FormulaValue::String("x".into()), FormulaValue::Number(5.0)],
-                &ctx,
-            )
-            .unwrap(),
-            FormulaValue::Error(CellError::Value)
-        );
-        assert_eq!(
-            eval("=LET(\"a\",1,\"b\",2)").unwrap(),
-            FormulaValue::Error(CellError::Value)
-        );
-
-        // 3 pairs (7 args)
-        let result = fn_let(
-            &[
-                FormulaValue::String("x".into()),
-                FormulaValue::Number(1.0),
-                FormulaValue::String("y".into()),
-                FormulaValue::Number(2.0),
-                FormulaValue::String("z".into()),
-                FormulaValue::Number(3.0),
-                FormulaValue::Number(6.0),
-            ],
-            &ctx,
-        )
-        .unwrap();
-        assert_eq!(result, FormulaValue::Number(6.0));
-
-        // 3 pairs via eval
-        assert_eq!(
-            eval("=LET(\"x\",1,\"y\",2,\"z\",3,1+2+3)").unwrap(),
-            FormulaValue::Number(6.0)
-        );
-
-        // Nested function in calculation
-        assert_eq!(
-            eval("=LET(\"x\",10,IF(10>5,\"big\",\"small\"))").unwrap(),
-            FormulaValue::String("big".into())
-        );
-        assert_eq!(
-            eval("=LET(\"n\",100,SQRT(100))").unwrap(),
-            FormulaValue::Number(10.0)
-        );
+    #[test]
+    fn test_lambda_helpers() {
+        let sum = |f: &str| match eval(f).unwrap() {
+            FormulaValue::Array { data, .. } => data.iter().flatten().filter_map(|v| v.as_number()).sum::<f64>(),
+            other => other.as_number().unwrap(),
+        };
+        assert_eq!(sum("=MAP({1,2,3},LAMBDA(v,v*2))"), 12.0);
+        assert_eq!(sum("=BYROW({1,2;3,4},LAMBDA(r,MAX(r)))"), 6.0);
+        assert_eq!(sum("=BYCOL({1,2;3,4},LAMBDA(c,SUM(c)))"), 10.0);
+        assert_eq!(sum("=REDUCE(0,{1,2,3},LAMBDA(a,v,a+v))"), 6.0);
+        assert_eq!(sum("=SCAN(0,{1,2,3},LAMBDA(a,v,a+v))"), 10.0);
+        assert_eq!(sum("=MAKEARRAY(2,2,LAMBDA(r,c,r*c))"), 9.0);
     }
 
     #[test]

@@ -241,27 +241,23 @@ pub struct CellRange {
 impl CellRange {
     /// Create a new cell range
     pub fn new(start: CellAddress, end: CellAddress) -> Self {
-        // Normalize so start is top-left and end is bottom-right
-        let (start_row, end_row) = if start.row <= end.row {
-            (start.row, end.row)
+        // Normalize so start is top-left and end is bottom-right. Each coordinate keeps its own `$`:
+        // `$A$9:A1` is rows 1 to 9 with row 9 fixed, so copying it down grows the range from 9.
+        let ((start_row, start_row_abs), (end_row, end_row_abs)) = if start.row <= end.row {
+            ((start.row, start.row_absolute), (end.row, end.row_absolute))
         } else {
-            (end.row, start.row)
+            ((end.row, end.row_absolute), (start.row, start.row_absolute))
         };
 
-        let (start_col, end_col) = if start.col <= end.col {
-            (start.col, end.col)
+        let ((start_col, start_col_abs), (end_col, end_col_abs)) = if start.col <= end.col {
+            ((start.col, start.col_absolute), (end.col, end.col_absolute))
         } else {
-            (end.col, start.col)
+            ((end.col, end.col_absolute), (start.col, start.col_absolute))
         };
 
         Self {
-            start: CellAddress::with_absolute(
-                start_row,
-                start_col,
-                start.row_absolute,
-                start.col_absolute,
-            ),
-            end: CellAddress::with_absolute(end_row, end_col, end.row_absolute, end.col_absolute),
+            start: CellAddress::with_absolute(start_row, start_col, start_row_abs, start_col_abs),
+            end: CellAddress::with_absolute(end_row, end_col, end_row_abs, end_col_abs),
         }
     }
 
@@ -412,6 +408,22 @@ impl ExactSizeIterator for CellRangeIterator {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_range_normalization_keeps_each_coordinates_dollar() {
+        let fixed = CellAddress::with_absolute(8, 0, true, true); // $A$9
+        let moving = CellAddress::with_absolute(0, 0, false, false); // A1
+        let range = CellRange::new(fixed, moving);
+        assert_eq!((range.start.row, range.start.row_absolute), (0, false));
+        assert_eq!((range.end.row, range.end.row_absolute), (8, true));
+
+        let range = CellRange::new(
+            CellAddress::with_absolute(0, 3, true, false), // D$1
+            CellAddress::with_absolute(4, 1, false, true), // $B5
+        );
+        assert_eq!(range.start, CellAddress::with_absolute(0, 1, true, true));
+        assert_eq!(range.end, CellAddress::with_absolute(4, 3, false, false));
+    }
 
     #[test]
     fn test_column_to_letters() {

@@ -489,6 +489,7 @@ dependencies = [
  "rand",
  "regex",
  "rust_decimal",
+ "ssfmt",
  "thiserror 1.0.69",
 ]
 

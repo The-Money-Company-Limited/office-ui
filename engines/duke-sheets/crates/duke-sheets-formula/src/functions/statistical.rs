@@ -17,12 +17,8 @@ pub fn fn_counta(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         match arg {
             // Count numbers
             FormulaValue::Number(_) => count += 1,
-            // Count text (non-empty strings)
-            FormulaValue::String(s) => {
-                if !s.is_empty() {
-                    count += 1;
-                }
-            }
+            // Count text, "" from a formula included, as Excel does
+            FormulaValue::String(_) => count += 1,
             // Count booleans
             FormulaValue::Boolean(_) => count += 1,
             // Count errors (COUNTA counts error cells as non-empty)
@@ -35,11 +31,7 @@ pub fn fn_counta(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
                     for cell in row {
                         match cell {
                             FormulaValue::Number(_) => count += 1,
-                            FormulaValue::String(s) => {
-                                if !s.is_empty() {
-                                    count += 1;
-                                }
-                            }
+                            FormulaValue::String(_) => count += 1,
                             FormulaValue::Boolean(_) => count += 1,
                             FormulaValue::Error(_) => count += 1,
                             FormulaValue::Empty => {}

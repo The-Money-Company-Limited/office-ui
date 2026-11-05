@@ -19,6 +19,7 @@
 //! ```
 
 pub mod ast;
+pub mod coerce;
 pub mod decompile;
 pub mod dependency;
 pub mod error;

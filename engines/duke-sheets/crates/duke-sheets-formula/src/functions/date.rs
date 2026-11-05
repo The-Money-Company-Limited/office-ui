@@ -193,15 +193,12 @@ fn weekday_sun0_from_serial(serial: i64, ctx: &EvaluationContext) -> Result<u32,
         let date = excel1904_date_from_serial(serial).ok_or(FormulaValue::Error(CellError::Num))?;
         Ok(date.weekday().num_days_from_sunday())
     } else {
-        if serial == 60 {
-            return Ok(4);
+        if serial < 0 {
+            return Err(FormulaValue::Error(CellError::Num));
         }
-        let base = NaiveDate::from_ymd_opt(1899, 12, 31).unwrap();
-        let adjusted = if serial > 60 { serial - 1 } else { serial };
-        let date = base
-            .checked_add_signed(Duration::days(adjusted))
-            .ok_or(FormulaValue::Error(CellError::Num))?;
-        Ok(date.weekday().num_days_from_sunday())
+        // Excel's 1900 calendar has a 29 February 1900, so its weekdays run evenly from serial 1,
+        // a Sunday: before March 1900 they are one day off the real calendar, as in Excel.
+        Ok(((serial + 6) % 7) as u32)
     }
 }
 
@@ -320,9 +317,12 @@ pub fn fn_date(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<
         Ok(FormulaValue::Number(excel1904_serial_from_date(date) as f64))
     } else {
         // 1900 system with bug calendar: compute directly in the buggy serial system.
-        Ok(FormulaValue::Number(
-            excel1900_serial_from_ymd(norm_year, norm_month, day) as f64,
-        ))
+        // Excel's dates run from 0 (1900-01-00) to 9999-12-31 (2958465); outside is #NUM!
+        let serial = excel1900_serial_from_ymd(norm_year, norm_month, day);
+        if !(0..=2_958_465).contains(&serial) {
+            return Ok(FormulaValue::Error(CellError::Num));
+        }
+        Ok(FormulaValue::Number(serial as f64))
     }
 }
 
@@ -530,9 +530,13 @@ pub fn fn_weeknum(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
         Err(e) => return Ok(e),
     };
 
+    // 1 and 17 start weeks on Sunday, 2 and 11 on Monday, 12 to 16 on Tuesday to Saturday; 21 is
+    // the ISO week.
     let week_start_sun0 = match return_type {
-        1 => 0,
-        2 => 1,
+        1 | 17 => 0,
+        2 | 11 => 1,
+        12..=16 => return_type - 10,
+        21 => return fn_isoweeknum(&args[..1], ctx),
         _ => return Ok(FormulaValue::Error(CellError::Num)),
     };
 
@@ -745,7 +749,10 @@ pub fn fn_datedif(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
             if ed >= sd {
                 (ed - sd) as f64
             } else {
-                let dim = match days_in_month_ctx(sy, sm, ctx) {
+                // Days left in the month before the end date's month, as Excel counts them:
+                // 15 January to 10 March 2024 is 24 (February 2024 has 29 days).
+                let (py, pm) = if em == 1 { (ey - 1, 12) } else { (ey, em - 1) };
+                let dim = match days_in_month_ctx(py, pm, ctx) {
                     Some(v) => v,
                     None => return Ok(FormulaValue::Error(CellError::Num)),
                 };
@@ -1514,8 +1521,10 @@ mod tests {
             FormulaValue::Number(49.0)
         );
         assert_eq!(
+            // Excel counts from the same day in the month before the end date, so 31 January to
+            // 2 March 2024 is 0 (and 31 January to 1 March 2015 is Excel's documented -2).
             eval("=DATEDIF(DATE(2024,1,31),DATE(2024,3,2),\"MD\")").unwrap(),
-            FormulaValue::Number(2.0)
+            FormulaValue::Number(0.0)
         );
         assert_eq!(
             eval("=DATEDIF(DATE(2024,1,31),DATE(2024,3,2),\"YM\")").unwrap(),

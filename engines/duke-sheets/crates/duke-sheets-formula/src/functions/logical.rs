@@ -16,10 +16,13 @@ pub fn fn_if(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<F
 
     let if_false = args.get(2);
 
-    // Evaluate condition
+    // Evaluate condition: an empty cell is FALSE, and so is the text "FALSE"; other text is #VALUE!
     let condition_bool = match condition {
         FormulaValue::Boolean(b) => *b,
         FormulaValue::Number(n) => *n != 0.0,
+        FormulaValue::Empty => false,
+        FormulaValue::String(s) if s.eq_ignore_ascii_case("TRUE") => true,
+        FormulaValue::String(s) if s.eq_ignore_ascii_case("FALSE") => false,
         FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
         _ => return Ok(FormulaValue::Error(CellError::Value)),
     };

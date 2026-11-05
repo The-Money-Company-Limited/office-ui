@@ -15,19 +15,8 @@ pub(crate) fn values_equal(a: &FormulaValue, b: &FormulaValue) -> bool {
         (FormulaValue::Boolean(x), FormulaValue::Boolean(y)) => x == y,
         (FormulaValue::String(x), FormulaValue::String(y)) => x.eq_ignore_ascii_case(y),
 
-        // Try numeric coercion between string/number
-        (FormulaValue::Number(x), FormulaValue::String(s))
-        | (FormulaValue::String(s), FormulaValue::Number(x)) => {
-            s.parse::<f64>().ok().map(|n| n == *x).unwrap_or(false)
-        }
-
-        // Empty coercions
-        (FormulaValue::Empty, FormulaValue::Empty) => true,
-        (FormulaValue::Empty, FormulaValue::Number(n))
-        | (FormulaValue::Number(n), FormulaValue::Empty) => *n == 0.0,
-        (FormulaValue::Empty, FormulaValue::String(s))
-        | (FormulaValue::String(s), FormulaValue::Empty) => s.is_empty(),
-
+        // A number never matches text that looks like it (2 doesn't find "2"), and nothing matches
+        // an empty cell, so looking up a blank is #N/A as in Excel.
         _ => false,
     }
 }
@@ -196,7 +185,8 @@ pub fn fn_index(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     // row_num=0: return entire column as a column vector
     if row_num == 0 {
         if col_num == 0 {
-            return Ok(arr[0][0].clone());
+            // The whole area, as in MATCH(0,INDEX(COUNTIF(…),0,0),0)
+            return Ok(FormulaValue::Array { data: arr.clone(), source: None });
         }
         let c = (col_num - 1) as usize;
         if c >= cols {
@@ -239,13 +229,23 @@ pub fn fn_match(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult
     if let FormulaValue::Error(e) = lookup_value {
         return Ok(FormulaValue::Error(*e));
     }
+    // A blank lookup value finds nothing, in exact and approximate matches alike
+    if matches!(lookup_value, FormulaValue::Empty) {
+        return Ok(FormulaValue::Error(CellError::Na));
+    }
     if matches!(lookup_value, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
-    let arr = match expect_array(args.get(1).unwrap()) {
-        Some(a) => a,
-        None => return Ok(FormulaValue::Error(CellError::Value)),
+    // A single cell is a one-cell lookup array: MATCH(A2:A9, D2, 0) asks which of A2:A9 is D2.
+    let single;
+    let arr = match args.get(1).unwrap() {
+        FormulaValue::Array { data, .. } => data,
+        FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
+        other => {
+            single = vec![vec![other.clone()]];
+            &single
+        }
     };
     let (rows, cols) = array_dims(arr);
     if rows == 0 || cols == 0 {
@@ -1460,9 +1460,16 @@ mod tests {
                 source: None
             }
         );
+        // INDEX(area, 0, 0) is the whole area
         assert_eq!(
             eval("=INDEX({1,2,3;4,5,6},0,0)").unwrap(),
-            FormulaValue::Number(1.0) // Excel returns first element for INDEX(2D,0,0)
+            FormulaValue::Array {
+                data: vec![
+                    vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0), FormulaValue::Number(3.0)],
+                    vec![FormulaValue::Number(4.0), FormulaValue::Number(5.0), FormulaValue::Number(6.0)],
+                ],
+                source: None
+            }
         );
         // Docs Reference form: Fruits/Price/Count table
         // =INDEX(..., 2, 3) -> 38 (Bananas count)

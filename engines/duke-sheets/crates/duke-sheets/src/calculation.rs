@@ -26,7 +26,7 @@ use crate::{
 };
 use ahash::{AHashMap, AHashSet};
 use dashmap::DashMap;
-use duke_sheets_core::CellAddress;
+use duke_sheets_core::{CellAddress, CellRange};
 use duke_sheets_formula::dependency::CellKey;
 use duke_sheets_formula::functions::FunctionRegistry;
 use duke_sheets_formula::{StructuredRefSpecifier, StructuredReference};
@@ -380,6 +380,15 @@ fn emit_calculation_trace(trace: &CalculationTrace) {
     }
 }
 
+/// A formula that returns an empty cell (`=A1` with A1 empty, or `INDEX` landing on one) shows 0,
+/// as in Excel, and counts as a number for the formulas that read it.
+fn shown_result(value: FormulaValue) -> CellValue {
+    match value {
+        FormulaValue::Empty => CellValue::Number(0.0),
+        other => other.into(),
+    }
+}
+
 #[derive(Clone)]
 struct ParsedFormulaTemplate {
     base_row: u32,
@@ -391,8 +400,11 @@ fn shift_formula_rows(expr: &mut FormulaExpr, row_delta: i32) {
     match expr {
         FormulaExpr::CellRef(cell_ref) => shift_cell_address_row(&mut cell_ref.address, row_delta),
         FormulaExpr::RangeRef(range_ref) => {
-            shift_cell_address_row(&mut range_ref.range.start, row_delta);
-            shift_cell_address_row(&mut range_ref.range.end, row_delta);
+            let (mut start, mut end) = (range_ref.range.start, range_ref.range.end);
+            shift_cell_address_row(&mut start, row_delta);
+            shift_cell_address_row(&mut end, row_delta);
+            // A fixed end and a moving end can pass each other, as in `$A$9:A1` shifted down.
+            range_ref.range = CellRange::new(start, end);
         }
         FormulaExpr::ExternalRef(ext) => shift_cell_address_row(&mut ext.address, row_delta),
         FormulaExpr::BinaryOp { left, right, .. } => {
@@ -1282,12 +1294,12 @@ impl CalculationEngine {
                 FormulaValue::Array { data: array, .. } => {
                     let cell_array: Vec<Vec<CellValue>> = array
                         .into_iter()
-                        .map(|row| row.into_iter().map(|v| v.into()).collect())
+                        .map(|row| row.into_iter().map(shown_result).collect())
                         .collect();
                     let _ = sheet.set_array_formula_result(cell_key.row, cell_key.col, cell_array);
                 }
                 _ => {
-                    let _ = sheet.set_formula_result(cell_key.row, cell_key.col, result.into());
+                    let _ = sheet.set_formula_result(cell_key.row, cell_key.col, shown_result(result));
                 }
             }
         }
@@ -1387,12 +1399,12 @@ impl CalculationEngine {
                 FormulaValue::Array { data: array, .. } => {
                     let cell_array: Vec<Vec<CellValue>> = array
                         .into_iter()
-                        .map(|row| row.into_iter().map(|v| v.into()).collect())
+                        .map(|row| row.into_iter().map(shown_result).collect())
                         .collect();
                     let _ = sheet.set_array_formula_result(cell_key.row, cell_key.col, cell_array);
                 }
                 _ => {
-                    let _ = sheet.set_formula_result(cell_key.row, cell_key.col, result.into());
+                    let _ = sheet.set_formula_result(cell_key.row, cell_key.col, shown_result(result));
                 }
             }
         }
@@ -2127,20 +2139,21 @@ fn collect_structured_ref_input_ranges(
         }
     };
 
-    let (col_start, col_end) = match &sr.column {
-        Some(col_name) => {
-            match columns
-                .iter()
-                .position(|c| c.eq_ignore_ascii_case(col_name))
-            {
-                Some(i) => {
-                    let col = reference.start.col + i as u16;
-                    (col, col)
-                }
-                None => return,
-            }
+    // One column, a column range (`[[A]:[C]]`), or the whole table.
+    let position = |name: &str| columns.iter().position(|c| c.eq_ignore_ascii_case(name));
+    let (col_start, col_end) = match (&sr.column, &sr.last_column) {
+        (Some(first), last) => {
+            let Some(a) = position(first) else { return };
+            let b = match last {
+                Some(last) => match position(last) {
+                    Some(b) => b,
+                    None => return,
+                },
+                None => a,
+            };
+            (reference.start.col + a.min(b) as u16, reference.start.col + a.max(b) as u16)
         }
-        None => (reference.start.col, reference.end.col),
+        (None, _) => (reference.start.col, reference.end.col),
     };
 
     let ref_start = reference.start.row;
@@ -2554,20 +2567,21 @@ fn extract_structured_ref_deps(
     };
 
     // Determine column range.
-    let (col_start, col_end) = match &sr.column {
-        Some(col_name) => {
-            match columns
-                .iter()
-                .position(|c| c.eq_ignore_ascii_case(col_name))
-            {
-                Some(i) => {
-                    let col = reference.start.col + i as u16;
-                    (col, col)
-                }
-                None => return, // column not found
-            }
+    // One column, a column range (`[[A]:[C]]`), or the whole table.
+    let position = |name: &str| columns.iter().position(|c| c.eq_ignore_ascii_case(name));
+    let (col_start, col_end) = match (&sr.column, &sr.last_column) {
+        (Some(first), last) => {
+            let Some(a) = position(first) else { return };
+            let b = match last {
+                Some(last) => match position(last) {
+                    Some(b) => b,
+                    None => return,
+                },
+                None => a,
+            };
+            (reference.start.col + a.min(b) as u16, reference.start.col + a.max(b) as u16)
         }
-        None => (reference.start.col, reference.end.col),
+        (None, _) => (reference.start.col, reference.end.col),
     };
 
     // Determine row range based on specifiers.

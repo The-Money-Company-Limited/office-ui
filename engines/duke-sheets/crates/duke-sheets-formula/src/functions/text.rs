@@ -2,7 +2,6 @@
 
 use crate::error::FormulaResult;
 use crate::evaluator::{EvaluationContext, FormulaValue};
-use chrono::{Datelike, Duration, NaiveDate};
 use duke_sheets_core::CellError;
 
 fn to_int_trunc(v: &FormulaValue) -> Option<i64> {
@@ -73,79 +72,6 @@ fn format_fixed_number(number: f64, decimals: i64, with_commas: bool) -> String 
         out = add_thousands_separators(&out);
     }
     out
-}
-
-fn excel1900_date_from_serial(serial: i64) -> Option<(i32, u32, u32)> {
-    if serial == 60 {
-        return Some((1900, 2, 29));
-    }
-
-    let base = NaiveDate::from_ymd_opt(1899, 12, 31)?;
-    let adjusted = if serial > 60 { serial - 1 } else { serial };
-    let date = base.checked_add_signed(Duration::days(adjusted))?;
-    Some((date.year(), date.month(), date.day()))
-}
-
-fn serial_time_parts(number: f64) -> (u32, u32, u32) {
-    let frac = number.rem_euclid(1.0);
-    let mut total_seconds = (frac * 86400.0).round() as i64;
-    if total_seconds >= 86400 {
-        total_seconds = 0;
-    }
-    let h = (total_seconds / 3600) as u32;
-    let m = ((total_seconds % 3600) / 60) as u32;
-    let s = (total_seconds % 60) as u32;
-    (h, m, s)
-}
-
-fn format_text_value(number: f64, format_text: &str) -> String {
-    let fmt = format_text.trim();
-    let fmt_lower = fmt.to_ascii_lowercase();
-    match fmt_lower.as_str() {
-        "0" => format_fixed_number(number, 0, false),
-        "0.00" => format_fixed_number(number, 2, false),
-        "#,##0" => format_fixed_number(number, 0, true),
-        "0%" => format!("{}%", round_with_decimals(number * 100.0, 0) as i64),
-        "0.0%" => format!("{:.1}%", round_with_decimals(number * 100.0, 1)),
-        "0.00%" => format!("{:.2}%", round_with_decimals(number * 100.0, 2)),
-        "0.00e+00" => format!("{:.2E}", number),
-        "$#,##0.00" => {
-            if number < 0.0 {
-                format!("-${}", format_fixed_number(-number, 2, true))
-            } else {
-                format!("${}", format_fixed_number(number, 2, true))
-            }
-        }
-        "mm/dd/yyyy" | "yyyy-mm-dd" | "dd/mm/yyyy" | "m/d/yy" => {
-            let serial = number.floor() as i64;
-            if let Some((y, m, d)) = excel1900_date_from_serial(serial) {
-                match fmt_lower.as_str() {
-                    "mm/dd/yyyy" => format!("{:02}/{:02}/{:04}", m, d, y),
-                    "yyyy-mm-dd" => format!("{:04}-{:02}-{:02}", y, m, d),
-                    "dd/mm/yyyy" => format!("{:02}/{:02}/{:04}", d, m, y),
-                    "m/d/yy" => format!("{}/{}/{:02}", m, d, y.rem_euclid(100)),
-                    _ => number.to_string(),
-                }
-            } else {
-                number.to_string()
-            }
-        }
-        "hh:mm:ss" => {
-            let (h, m, s) = serial_time_parts(number);
-            format!("{:02}:{:02}:{:02}", h, m, s)
-        }
-        "hh:mm" => {
-            let (h, m, _s) = serial_time_parts(number);
-            format!("{:02}:{:02}", h, m)
-        }
-        _ => {
-            if number.fract() == 0.0 {
-                format!("{}", number as i64)
-            } else {
-                number.to_string()
-            }
-        }
-    }
 }
 
 /// LEN(text)
@@ -395,13 +321,38 @@ pub fn fn_search(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
     let search_str: String = within_text.chars().skip(search_start).collect();
     let search_str_lower = search_str.to_lowercase();
 
-    // Find the substring (case-insensitive)
-    if let Some(byte_pos) = search_str_lower.find(&find_text) {
+    // Find the substring (case-insensitive). `?` is any one character, `*` any run of them, and
+    // `~` makes the next character literal, as in Excel.
+    let found = if find_text.contains(['?', '*', '~']) {
+        regex::Regex::new(&search_pattern(&find_text))
+            .ok()
+            .and_then(|pattern| pattern.find(&search_str_lower).map(|m| m.start()))
+    } else {
+        search_str_lower.find(&find_text)
+    };
+    if let Some(byte_pos) = found {
         let char_pos = search_str_lower[..byte_pos].chars().count();
         Ok(FormulaValue::Number((search_start + char_pos + 1) as f64))
     } else {
         Ok(FormulaValue::Error(CellError::Value))
     }
+}
+
+fn search_pattern(find_text: &str) -> String {
+    let mut pattern = String::from("(?s)");
+    let mut chars = find_text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '?' => pattern.push('.'),
+            '*' => pattern.push_str(".*?"),
+            '~' => match chars.next() {
+                Some(next) => pattern.push_str(&regex::escape(&next.to_string())),
+                None => pattern.push('~'),
+            },
+            other => pattern.push_str(&regex::escape(&other.to_string())),
+        }
+    }
+    pattern
 }
 
 /// EXACT(text1, text2) - Checks whether two text strings are exactly the same (case-sensitive)
@@ -430,16 +381,15 @@ pub fn fn_rept(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
         None => return Ok(FormulaValue::Error(CellError::Value)),
     };
 
+    // The count is any number Excel can read: TRUE is 1, so REPT(", x", A2="Y") adds the text
+    // only when the condition holds.
     let times = match args.get(1) {
-        Some(FormulaValue::Number(n)) => {
-            if *n < 0.0 {
-                return Ok(FormulaValue::Error(CellError::Value));
-            }
-            *n as usize
-        }
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
-        Some(FormulaValue::Empty) => 0,
-        _ => return Ok(FormulaValue::Error(CellError::Value)),
+        Some(v) => match v.as_number() {
+            Some(n) if n >= 0.0 => n as usize,
+            _ => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+        None => return Ok(FormulaValue::Error(CellError::Value)),
     };
 
     // Limit to prevent memory issues (Excel has a limit of 32767 chars)
@@ -608,11 +558,10 @@ pub fn fn_value(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
         None => return Ok(FormulaValue::Error(CellError::Value)),
     };
 
-    // Try to parse as a number
-    let trimmed = text.trim();
-    match trimmed.parse::<f64>() {
-        Ok(n) => Ok(FormulaValue::Number(n)),
-        Err(_) => Ok(FormulaValue::Error(CellError::Value)),
+    // Numbers, percents, currency, dates and times, as Excel reads them
+    match crate::coerce::text_to_number(&text) {
+        Some(n) => Ok(FormulaValue::Number(n)),
+        None => Ok(FormulaValue::Error(CellError::Value)),
     }
 }
 
@@ -654,17 +603,29 @@ pub fn fn_text(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
-    let number = match value.as_number() {
-        Some(n) => n,
-        // Excel returns string values as-is (the text section of any number
-        // format applies, which defaults to returning the string unchanged).
-        None => return Ok(FormulaValue::String(value.as_string())),
+    // TEXT formats with the same number-format engine as the grid, so every format code Excel
+    // accepts works: dates, times, sections, conditions, scaling, fractions and literals.
+    let format_code = format_text.as_string();
+    if format_code.is_empty() {
+        // An empty format shows text as it is and a number as nothing.
+        return Ok(FormulaValue::String(match value {
+            FormulaValue::String(text) => text.clone(),
+            _ => String::new(),
+        }));
+    }
+    let Ok(format) = ssfmt::NumberFormat::parse(&format_code) else {
+        return Ok(FormulaValue::Error(CellError::Value));
     };
-
-    Ok(FormulaValue::String(format_text_value(
-        number,
-        &format_text.as_string(),
-    )))
+    let options = ssfmt::FormatOptions::default();
+    let text = match value {
+        FormulaValue::String(text) => match value.as_number() {
+            Some(number) => format.format(number, &options),
+            // Text that isn't a number goes through the format's text section.
+            None => format.format_text(text, &options),
+        },
+        _ => format.format(value.as_number().unwrap_or(0.0), &options),
+    };
+    Ok(FormulaValue::String(text))
 }
 
 pub fn fn_textjoin(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -1331,7 +1292,7 @@ mod tests {
         // Percentage
         assert_eq!(eval("=TEXT(0.285,\"0%\")").unwrap(), s("28%"));
         // Scientific notation
-        assert_eq!(eval("=TEXT(12200000,\"0.00E+00\")").unwrap(), s("1.22E7"));
+        assert_eq!(eval("=TEXT(12200000,\"0.00E+00\")").unwrap(), s("1.22E+07"));
         // Fixed decimal
         assert_eq!(eval("=TEXT(1234.567,\"0.00\")").unwrap(), s("1234.57"));
         // Thousands no decimals

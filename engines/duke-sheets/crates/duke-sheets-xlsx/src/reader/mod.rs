@@ -3319,6 +3319,9 @@ impl XlsxReader {
 
         // Post-process array/dataTable formulas: replicate formula to all
         // cells in the ref range and build array_result on the anchor cell.
+        // A dynamic array (an anchor with cell metadata, `cm`) is not replicated: its `ref` is the
+        // area it spilled over, whose cells hold plain values.
+        let mut dynamic_array_extents: HashMap<(u32, u16), (u32, u16)> = HashMap::new();
         for (anchor_ref, ref_range, kind, formula_text, r1, r2) in pending_array_formulas {
             let anchor = match CellAddress::parse(&anchor_ref) {
                 Ok(a) => a,
@@ -3328,6 +3331,13 @@ impl XlsxReader {
                 Ok(r) => r,
                 Err(_) => continue,
             };
+            if kind == CellFormulaKind::Array && dynamic_array_anchors.contains(&(anchor.row, anchor.col)) {
+                dynamic_array_extents.insert(
+                    (anchor.row, anchor.col),
+                    (range.end.row - range.start.row + 1, range.end.col - range.start.col + 1),
+                );
+                continue;
+            }
 
             let formula_for_cells = match kind {
                 CellFormulaKind::Array => {
@@ -3389,21 +3399,27 @@ impl XlsxReader {
         // For each anchor, determine the spill rectangle by scanning the ghost set,
         // build array_result from cached values, then create SpillTarget cells.
         for &(anchor_row, anchor_col) in &dynamic_array_anchors {
-            // Determine the spill rectangle dimensions by scanning ghosts.
-            // The anchor occupies (anchor_row, anchor_col). Ghosts extend right and down.
-            let mut num_cols: u16 = 1;
-            while dynamic_array_ghosts.contains(&(anchor_row, anchor_col + num_cols)) {
-                num_cols += 1;
-            }
-            let mut num_rows: u32 = 1;
-            'row_scan: while dynamic_array_ghosts.contains(&(anchor_row + num_rows, anchor_col)) {
-                for c in 1..num_cols {
-                    if !dynamic_array_ghosts.contains(&(anchor_row + num_rows, anchor_col + c)) {
-                        break 'row_scan;
+            // The spill rectangle is the anchor's `ref`, else the ghosts (cm="2") that extend right
+            // and down from the anchor.
+            let (num_rows, num_cols) = match dynamic_array_extents.get(&(anchor_row, anchor_col)) {
+                Some(&extent) => extent,
+                None => {
+                    let mut num_cols: u16 = 1;
+                    while dynamic_array_ghosts.contains(&(anchor_row, anchor_col + num_cols)) {
+                        num_cols += 1;
                     }
+                    let mut num_rows: u32 = 1;
+                    'row_scan: while dynamic_array_ghosts.contains(&(anchor_row + num_rows, anchor_col)) {
+                        for c in 1..num_cols {
+                            if !dynamic_array_ghosts.contains(&(anchor_row + num_rows, anchor_col + c)) {
+                                break 'row_scan;
+                            }
+                        }
+                        num_rows += 1;
+                    }
+                    (num_rows, num_cols)
                 }
-                num_rows += 1;
-            }
+            };
 
             if !worksheet.has_formula_at(anchor_row, anchor_col) {
                 continue;
@@ -3429,6 +3445,9 @@ impl XlsxReader {
 
             if let Some(formula) = worksheet.formula_data_at_mut(anchor_row, anchor_col) {
                 formula.array_result = Some(array_result);
+            }
+            if num_rows > 1 || num_cols > 1 {
+                worksheet.register_spill(anchor_row, anchor_col, num_rows, num_cols);
             }
 
             // Replace ghost cells with SpillTarget values.
