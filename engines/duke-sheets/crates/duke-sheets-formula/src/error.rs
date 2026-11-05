@@ -28,6 +28,11 @@ pub enum FormulaError {
     #[error("External function unresolved: {0}")]
     ExternalFunctionUnresolved(String),
 
+    /// A reference to another workbook's cells; that workbook isn't open, so the formula keeps the
+    /// value saved in the file.
+    #[error("Reference to another workbook: {0}")]
+    ExternalReference(String),
+
     /// Wrong number of arguments
     #[error("Wrong number of arguments for {function}: expected {expected}, got {actual}")]
     ArgumentCount {

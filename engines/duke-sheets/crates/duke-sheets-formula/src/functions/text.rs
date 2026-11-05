@@ -321,12 +321,10 @@ pub fn fn_search(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
     let search_str: String = within_text.chars().skip(search_start).collect();
     let search_str_lower = search_str.to_lowercase();
 
-    // Find the substring (case-insensitive). `?` is any one character, `*` any run of them, and
-    // `~` makes the next character literal, as in Excel.
-    let found = if find_text.contains(['?', '*', '~']) {
-        regex::Regex::new(&search_pattern(&find_text))
-            .ok()
-            .and_then(|pattern| pattern.find(&search_str_lower).map(|m| m.start()))
+    // Find the substring (case-insensitive), with Excel's wildcards
+    let found = if super::wildcard::has_wildcards(&find_text) {
+        super::wildcard::find(&find_text, &search_str_lower)
+            .map(|chars| search_str_lower.char_indices().nth(chars).map_or(search_str_lower.len(), |(i, _)| i))
     } else {
         search_str_lower.find(&find_text)
     };
@@ -338,22 +336,6 @@ pub fn fn_search(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
     }
 }
 
-fn search_pattern(find_text: &str) -> String {
-    let mut pattern = String::from("(?s)");
-    let mut chars = find_text.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '?' => pattern.push('.'),
-            '*' => pattern.push_str(".*?"),
-            '~' => match chars.next() {
-                Some(next) => pattern.push_str(&regex::escape(&next.to_string())),
-                None => pattern.push('~'),
-            },
-            other => pattern.push_str(&regex::escape(&other.to_string())),
-        }
-    }
-    pattern
-}
 
 /// EXACT(text1, text2) - Checks whether two text strings are exactly the same (case-sensitive)
 /// Returns TRUE if they are identical, FALSE otherwise

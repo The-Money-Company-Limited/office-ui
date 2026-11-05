@@ -219,7 +219,7 @@ pub fn fn_round(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     // For negative numbers: round(-2.5) = -3, round(-2.4) = -2
     // The scaled value is taken at 15 digits first, so ROUND(1.005,2) is 1.01 as in Excel even
     // though 1.005 * 100 is 100.49999999999999 in binary.
-    let scaled = crate::evaluator::round_15(number * multiplier);
+    let scaled = crate::coerce::round_15(number * multiplier);
     let result = if number >= 0.0 {
         (scaled + 0.5).floor() / multiplier
     } else {
@@ -303,7 +303,7 @@ pub fn fn_trunc(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     };
 
     let multiplier = 10_f64.powi(num_digits);
-    let result = crate::evaluator::round_15(number * multiplier).trunc() / multiplier;
+    let result = crate::coerce::round_15(number * multiplier).trunc() / multiplier;
     Ok(FormulaValue::Number(result))
 }
 
@@ -618,9 +618,9 @@ pub fn fn_roundup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
 
     // Round away from zero
     let result = if number >= 0.0 {
-        crate::evaluator::round_15(number * multiplier).ceil() / multiplier
+        crate::coerce::round_15(number * multiplier).ceil() / multiplier
     } else {
-        crate::evaluator::round_15(number * multiplier).floor() / multiplier
+        crate::coerce::round_15(number * multiplier).floor() / multiplier
     };
 
     Ok(FormulaValue::Number(result))
@@ -649,7 +649,7 @@ pub fn fn_rounddown(
     let multiplier = 10_f64.powi(num_digits);
 
     // Round toward zero (truncate)
-    let result = crate::evaluator::round_15(number * multiplier).trunc() / multiplier;
+    let result = crate::coerce::round_15(number * multiplier).trunc() / multiplier;
 
     Ok(FormulaValue::Number(result))
 }

@@ -152,8 +152,8 @@ pub(super) fn shift_a1_references(formula: &str, row_delta: i32, col_delta: i32)
                     continue;
                 }
             }
-            if let Some((consumed, shifted)) =
-                try_shift_cell_ref(&formula[i..], row_delta, col_delta)
+            if let Some((consumed, shifted)) = try_shift_line_range(&formula[i..], row_delta, col_delta)
+                .or_else(|| try_shift_cell_ref(&formula[i..], row_delta, col_delta))
             {
                 out.push_str(&shifted);
                 i += consumed;
@@ -166,6 +166,42 @@ pub(super) fn shift_a1_references(formula: &str, row_delta: i32, col_delta: i32)
     }
 
     out
+}
+
+/// Shifts a whole-column (`A:C`, `$A:A`) or whole-row (`1:3`, `$2:$2`) reference by the delta
+/// along its own axis: a shared `=SUM(A:A)` copied right is `=SUM(B:B)`.
+fn try_shift_line_range(s: &str, row_delta: i32, col_delta: i32) -> Option<(usize, String)> {
+    let b = s.as_bytes();
+    // One end: optional `$`, then letters (a column) or digits (a row).
+    let end = |at: usize, letters: bool| -> Option<(usize, bool, &str)> {
+        let abs = b.get(at) == Some(&b'$');
+        let start = at + abs as usize;
+        let mut i = start;
+        while b.get(i).is_some_and(|c| if letters { c.is_ascii_uppercase() } else { c.is_ascii_digit() }) {
+            i += 1;
+        }
+        (i > start).then(|| (i, abs, &s[start..i]))
+    };
+    let letters = b.get(usize::from(b.first() == Some(&b'$')))?.is_ascii_uppercase();
+    let (colon, first_abs, first) = end(0, letters)?;
+    if b.get(colon) != Some(&b':') {
+        return None;
+    }
+    let (stop, last_abs, last) = end(colon + 1, letters)?;
+    if b.get(stop).is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'.' || *c == b'(') {
+        return None;
+    }
+    let shift = |text: &str, abs: bool| -> Option<String> {
+        let mark = if abs { "$" } else { "" };
+        if letters {
+            let col = a1_col_to_index(text)? as i32 + if abs { 0 } else { col_delta };
+            Some(format!("{mark}{}", if col < 0 { "#REF!".to_string() } else { a1_index_to_col(u16::try_from(col).ok()?) }))
+        } else {
+            let row = text.parse::<i32>().ok()? + if abs { 0 } else { row_delta };
+            Some(format!("{mark}{}", if row < 1 { "#REF!".to_string() } else { row.to_string() }))
+        }
+    };
+    Some((stop, format!("{}:{}", shift(first, first_abs)?, shift(last, last_abs)?)))
 }
 
 pub(super) fn try_shift_cell_ref(
@@ -355,6 +391,13 @@ mod tests {
 
         assert_eq!(formula_text_at(sheet, "C1"), Some("=A1+B1"));
         assert_eq!(formula_text_at(sheet, "C2"), Some("=A2+B2"));
+    }
+
+    #[test]
+    fn test_shift_whole_columns_and_rows() {
+        assert_eq!(super::shift_a1_references("SUM(A:A)+SUM($B:C)", 0, 1), "SUM(B:B)+SUM($B:D)");
+        assert_eq!(super::shift_a1_references("SUM(1:1)+SUM($2:3)", 2, 0), "SUM(3:3)+SUM($2:5)");
+        assert_eq!(super::shift_a1_references("SUM(A1:B2)+\"A:A\"", 1, 1), "SUM(B2:C3)+\"A:A\"");
     }
 
     #[test]

@@ -10,7 +10,6 @@ pub mod financial_extra;
 pub mod info;
 pub mod info_extra;
 pub mod logical;
-pub mod logical_extra;
 pub mod lookup;
 pub mod lookup_extra;
 pub mod math;
@@ -19,10 +18,12 @@ pub mod statistical;
 pub mod statistical_extra;
 pub mod text;
 pub mod text_extra;
+pub mod wildcard;
 
 use crate::decompile::function_table::OperandClass;
 use crate::error::{FormulaError, FormulaResult};
 use crate::evaluator::{EvaluationContext, FormulaValue};
+use duke_sheets_core::CellError;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -97,6 +98,87 @@ pub struct FunctionDef {
     /// Runtime evaluator implementation. Defaults to a stub that returns
     /// an `Evaluation` error.
     pub implementation: FunctionImpl,
+    /// The arguments that take one value each (see `ScalarArgs`).
+    pub scalar_args: ScalarArgs,
+    /// How values typed into the formula are read (see `TypedArgs`).
+    pub typed_args: TypedArgs,
+}
+
+/// The arguments where a function takes one value. Given an array there, Excel applies the
+/// function to each element and returns an array of the results: `LEN(A1:A3)`,
+/// `IF(A1:A3>1,A1:A3)`, `ISNUMBER(SEARCH(x,A1:A9))`, `COUNTIF(r,{"a","b"})`, `CHOOSE({1,2},a,b)`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScalarArgs {
+    /// Every argument takes arrays as they are.
+    #[default]
+    None,
+    All,
+    At(&'static [usize]),
+    /// The criteria of COUNTIFS (1, 3, 5, …) or of SUMIFS and the like (2, 4, 6, …).
+    EveryOtherFrom(usize),
+}
+
+impl ScalarArgs {
+    pub fn includes(self, position: usize) -> bool {
+        match self {
+            ScalarArgs::None => false,
+            ScalarArgs::All => true,
+            ScalarArgs::At(positions) => positions.contains(&position),
+            ScalarArgs::EveryOtherFrom(first) => position >= first && (position - first) % 2 == 0,
+        }
+    }
+}
+
+/// How a value typed into the formula is read, as opposed to one from a cell or a function:
+/// `SUM("5",TRUE)` is 6 and `SUM("x")` is #VALUE!, while text and TRUE in cells are left out.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TypedArgs {
+    #[default]
+    AsGiven,
+    /// SUM, AVERAGE, MIN, MAX and the like: typed text and TRUE/FALSE become numbers.
+    Numbers,
+    /// AND, OR, XOR: typed "TRUE"/"FALSE" become booleans, other typed text is #VALUE!.
+    Logicals,
+}
+
+const SCALAR_ARGS: &[(&[&str], ScalarArgs)] = &[
+    (
+        &[
+            "IF", "IFERROR", "IFNA", "IFS", "CHOOSE", "NOT", "ISNUMBER", "ISTEXT", "ISNONTEXT", "ISBLANK",
+            "ISERROR", "ISERR", "ISNA", "ISLOGICAL", "ISEVEN", "ISODD", "LEFT", "RIGHT", "MID", "LEN",
+            "LOWER", "UPPER", "PROPER", "TRIM", "CLEAN", "VALUE", "TEXT", "SUBSTITUTE", "REPLACE", "FIND",
+            "SEARCH", "EXACT", "REPT", "CHAR", "CODE", "UNICODE", "UNICHAR", "N", "T", "NUMBERVALUE",
+            "DATEVALUE", "TIMEVALUE", "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "WEEKDAY",
+            "WEEKNUM", "ISOWEEKNUM", "DATE", "TIME", "EDATE", "EOMONTH", "DATEDIF", "DAYS", "ABS", "INT",
+            "TRUNC", "ROUND", "ROUNDUP", "ROUNDDOWN", "MROUND", "MOD", "SIGN", "SQRT", "POWER", "EXP",
+            "LN", "LOG", "LOG10", "CEILING", "FLOOR", "EVEN", "ODD", "QUOTIENT", "FACT", "DOLLAR",
+            "FIXED", "ADDRESS",
+        ],
+        ScalarArgs::All,
+    ),
+    (&["COUNTIF", "SUMIF", "AVERAGEIF", "SMALL", "LARGE"], ScalarArgs::At(&[1])),
+    (&["MATCH", "XMATCH", "VLOOKUP", "HLOOKUP", "XLOOKUP", "LOOKUP"], ScalarArgs::At(&[0])),
+    (&["INDEX"], ScalarArgs::At(&[1, 2])),
+    (&["COUNTIFS"], ScalarArgs::EveryOtherFrom(1)),
+    (&["SUMIFS", "AVERAGEIFS", "MAXIFS", "MINIFS"], ScalarArgs::EveryOtherFrom(2)),
+];
+
+const TYPED_ARGS: &[(&[&str], TypedArgs)] = &[
+    (
+        &[
+            "SUM", "AVERAGE", "MIN", "MAX", "PRODUCT", "SUMSQ", "MEDIAN", "STDEV", "STDEV.S", "STDEV.P",
+            "STDEVP", "VAR", "VAR.S", "VAR.P", "VARP",
+        ],
+        TypedArgs::Numbers,
+    ),
+    (&["AND", "OR", "XOR"], TypedArgs::Logicals),
+];
+
+/// LET, LAMBDA and the LAMBDA helpers are evaluated from the formula itself (`crate::lambda`),
+/// and INDIRECT and OFFSET as references (`crate::reference`), before the registry function would
+/// run; their entries keep their names, argument counts and BIFF metadata.
+pub fn special_form(_args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    Ok(FormulaValue::Error(CellError::Value))
 }
 
 impl Default for FunctionDef {
@@ -113,6 +195,8 @@ impl Default for FunctionDef {
             arg_classes: &[],
             returns_reference: false,
             implementation: fn_not_implemented,
+            scalar_args: ScalarArgs::None,
+            typed_args: TypedArgs::AsGiven,
         }
     }
 }
@@ -161,7 +245,23 @@ impl FunctionRegistry {
         registry.register_web_functions();
         registry.register_obsolete_biff_functions();
 
+        for (names, rule) in SCALAR_ARGS {
+            for name in *names {
+                registry.function_mut(name).scalar_args = *rule;
+            }
+        }
+        for (names, rule) in TYPED_ARGS {
+            for name in *names {
+                registry.function_mut(name).typed_args = *rule;
+            }
+        }
+
         registry
+    }
+
+    fn function_mut(&mut self, name: &str) -> &mut FunctionDef {
+        let index = self.by_name[name];
+        &mut self.functions[index]
     }
 
     /// Look up a function by name (case-insensitive).
@@ -1220,12 +1320,12 @@ impl FunctionRegistry {
             volatile: false,
             ..Default::default()
         });
-        // logical_extra functions
+        // LET, LAMBDA and the LAMBDA helpers: special forms (crate::lambda)
         self.register(FunctionDef {
             name: "LET",
             min_args: 3,
             max_args: None,
-            implementation: logical_extra::fn_let,
+            implementation: special_form,
             volatile: false,
             ..Default::default()
         });
@@ -1233,7 +1333,7 @@ impl FunctionRegistry {
             name: "LAMBDA",
             min_args: 1,
             max_args: None,
-            implementation: logical_extra::fn_lambda,
+            implementation: special_form,
             volatile: false,
             ..Default::default()
         });
@@ -1241,7 +1341,7 @@ impl FunctionRegistry {
             name: "MAP",
             min_args: 2,
             max_args: None,
-            implementation: logical_extra::fn_map,
+            implementation: special_form,
             volatile: false,
             ..Default::default()
         });
@@ -1249,7 +1349,7 @@ impl FunctionRegistry {
             name: "REDUCE",
             min_args: 3,
             max_args: Some(3),
-            implementation: logical_extra::fn_reduce,
+            implementation: special_form,
             volatile: false,
             ..Default::default()
         });
@@ -1257,7 +1357,7 @@ impl FunctionRegistry {
             name: "SCAN",
             min_args: 3,
             max_args: Some(3),
-            implementation: logical_extra::fn_scan,
+            implementation: special_form,
             volatile: false,
             ..Default::default()
         });
@@ -1265,7 +1365,7 @@ impl FunctionRegistry {
             name: "BYCOL",
             min_args: 2,
             max_args: Some(2),
-            implementation: logical_extra::fn_bycol,
+            implementation: special_form,
             volatile: false,
             ..Default::default()
         });
@@ -1273,7 +1373,7 @@ impl FunctionRegistry {
             name: "BYROW",
             min_args: 2,
             max_args: Some(2),
-            implementation: logical_extra::fn_byrow,
+            implementation: special_form,
             volatile: false,
             ..Default::default()
         });
@@ -1281,7 +1381,7 @@ impl FunctionRegistry {
             name: "MAKEARRAY",
             min_args: 3,
             max_args: Some(3),
-            implementation: logical_extra::fn_makearray,
+            implementation: special_form,
             volatile: false,
             ..Default::default()
         });
@@ -2558,7 +2658,7 @@ impl FunctionRegistry {
             declared_argc: 2,
             min_args: 1,
             max_args: Some(2),
-            implementation: lookup::fn_indirect,
+            implementation: special_form,
             volatile: true,
             // INDIRECT returns a reference; verified SUM(INDIRECT(...)) →
             // INDIRECT R-class (0x22).
@@ -2572,7 +2672,7 @@ impl FunctionRegistry {
             declared_argc: 5,
             min_args: 3,
             max_args: Some(5),
-            implementation: lookup::fn_offset,
+            implementation: special_form,
             volatile: true,
             arg_classes: &[OperandClass::R],
             // OFFSET returns a reference; verified SUM(OFFSET(...)) → OFFSET

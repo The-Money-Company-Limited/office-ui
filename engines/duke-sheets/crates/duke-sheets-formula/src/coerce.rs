@@ -58,13 +58,14 @@ fn plain_number(text: &str) -> Option<f64> {
     {
         return None;
     }
-    let mut number: f64 = format!("{}.{}", if digits.is_empty() { "0" } else { &digits }, fraction.unwrap_or("0"))
-        .parse()
-        .ok()?;
-    if let Some(exponent) = exponent {
-        let exponent: i32 = exponent.strip_prefix('+').unwrap_or(exponent).parse().ok()?;
-        number *= 10f64.powi(exponent);
-    }
+    let exponent: i32 = match exponent {
+        Some(e) => e.strip_prefix('+').unwrap_or(e).parse().ok()?,
+        None => 0,
+    };
+    let mut number: f64 =
+        format!("{}.{}e{}", if digits.is_empty() { "0" } else { &digits }, fraction.unwrap_or("0"), exponent)
+            .parse()
+            .ok()?;
     if percent {
         number /= 100.0;
     }
@@ -87,6 +88,24 @@ fn month_named(word: &str) -> Option<u32> {
         .map(|i| i as u32 + 1)
 }
 
+/// The date in text that is a date, or a date followed by a time (DATEVALUE).
+pub fn date_text(text: &str) -> Option<f64> {
+    let text = text.trim();
+    date(text).or_else(|| split_date_time(text).map(|(day, _)| day))
+}
+
+/// The time in text that is a time, or a date followed by a time (TIMEVALUE).
+pub fn time_text(text: &str) -> Option<f64> {
+    let text = text.trim();
+    time_of_day(text).or_else(|| split_date_time(text).map(|(_, time)| time))
+}
+
+/// "2024-03-15 18:00", "3/15/2024 6:30 PM": the time starts at the first space that leaves a
+/// valid date before it.
+fn split_date_time(text: &str) -> Option<(f64, f64)> {
+    text.match_indices(' ').find_map(|(i, _)| Some((date(text[..i].trim())?, time_of_day(text[i..].trim())?)))
+}
+
 /// A date, a time, or a date followed by a time.
 fn date_time(text: &str) -> Option<f64> {
     if let Some(time) = time_of_day(text) {
@@ -95,13 +114,7 @@ fn date_time(text: &str) -> Option<f64> {
     if let Some(date) = date(text) {
         return Some(date);
     }
-    // "2024-03-15 18:00", "3/15/2024 6:30 PM": the time starts at the first space that leaves a
-    // valid date before it.
-    text.match_indices(' ').find_map(|(i, _)| {
-        let day = date(text[..i].trim())?;
-        let time = time_of_day(text[i..].trim())?;
-        Some(day + time)
-    })
+    split_date_time(text).map(|(day, time)| day + time)
 }
 
 /// `18:30`, `18:30:15`, `6:30 PM`, `6 PM`, `1:05:00.5 am`: a fraction of a day.
@@ -179,12 +192,42 @@ fn full_year(year: i32, digits: usize) -> Option<i32> {
 
 fn serial(year: i32, month: u32, day: i32) -> Option<f64> {
     let date = NaiveDate::from_ymd_opt(year, month, u32::try_from(day).ok()?)?;
-    if date.year() < 1900 {
-        return None;
+    (date.year() >= 1900).then(|| crate::functions::date::excel1900_serial_from_ymd(year, month, day) as f64)
+}
+
+/// A number rounded to 15 significant digits, the precision Excel shows, compares and rounds at:
+/// `=0.1+0.2=0.3` is TRUE and ROUND(1.005,2) is 1.01.
+pub fn round_15(n: f64) -> f64 {
+    if n == 0.0 || !n.is_finite() {
+        return n;
     }
-    let days = (date - NaiveDate::from_ymd_opt(1899, 12, 30)?).num_days();
-    // Excel counts the 29 February 1900 that never was, so dates before March 1900 are one less.
-    Some(if days < 61 { days - 1 } else { days } as f64)
+    format!("{:.14e}", n).parse().unwrap_or(n)
+}
+
+/// A number as Excel writes it as text (`&`, CONCATENATE, a text argument): at most 15
+/// significant digits, so `=1/3&""` is "0.333333333333333" and `=0.1+0.2&""` is "0.3", in
+/// scientific notation from 1E+15 up and below 1E-09.
+pub fn number_text(n: f64) -> String {
+    if n == 0.0 || !n.is_finite() {
+        return "0".to_string();
+    }
+    let rounded = round_15(n);
+    let exponent = rounded.abs().log10().floor() as i32;
+    let trim = |text: String| -> String {
+        if text.contains('.') {
+            text.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            text
+        }
+    };
+    if !(-9..15).contains(&exponent) {
+        let scientific = format!("{:.14e}", rounded);
+        let (mantissa, power) = scientific.split_once('e').unwrap_or((&scientific, "0"));
+        let power: i32 = power.parse().unwrap_or(0);
+        let sign = if power < 0 { '-' } else { '+' };
+        return format!("{}E{}{:02}", trim(mantissa.to_string()), sign, power.abs());
+    }
+    trim(format!("{:.*}", (14 - exponent).max(0) as usize, rounded))
 }
 
 #[cfg(test)]

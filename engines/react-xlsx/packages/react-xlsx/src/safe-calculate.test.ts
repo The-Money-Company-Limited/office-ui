@@ -81,16 +81,24 @@ describe("safeCalculate", () => {
   });
 
   it("keeps saved formula values when recalculation turns them into errors", () => {
+    // A function the engine doesn't have gives #NAME? where Excel saved a value.
+    const result = calculate(buildWorkbook({ formula: "_xlfn.NOSUCHFUNCTION(A1:A3)", cachedValue: "3750" }));
+
+    assert.equal(result.calculated, false);
+    assert.equal(result.skipReason, "calculate-regressed");
+    assert.equal(result.workbook.getSheet(0).getFormattedValueAt(0, 1), "$3,750");
+  });
+
+  it("calculates a defined name that holds a formula", () => {
     const result = calculate(
       buildWorkbook({
         formula: "TotalIncome",
-        cachedValue: "3750",
+        cachedValue: "1",
         definedNames: `<definedName name="TotalIncome">SUM(Sheet1!$A$1:$A$3)</definedName>`
       })
     );
 
-    assert.equal(result.calculated, false);
-    assert.equal(result.skipReason, "calculate-regressed");
+    assert.equal(result.calculated, true);
     assert.equal(result.workbook.getSheet(0).getFormattedValueAt(0, 1), "$3,750");
   });
 

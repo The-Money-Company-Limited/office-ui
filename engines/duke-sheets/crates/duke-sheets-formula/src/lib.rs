@@ -18,6 +18,7 @@
 //! let result = evaluate(&ast, &context)?;
 //! ```
 
+mod array_lift;
 pub mod ast;
 pub mod coerce;
 pub mod decompile;
@@ -26,7 +27,9 @@ pub mod error;
 pub mod eval_cache;
 pub mod evaluator;
 pub mod functions;
+pub mod lambda;
 pub mod parser;
+mod reference;
 
 pub use ast::{
     BinaryOperator, CellReference, ExternalReference, FormulaExpr, RangeReference,

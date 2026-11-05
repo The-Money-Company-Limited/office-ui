@@ -146,12 +146,12 @@ impl CriteriaMatcher {
 
             CriteriaType::Text(pattern) => {
                 let text = value.as_string().to_lowercase();
-                Self::wildcard_match(pattern, &text)
+                super::wildcard::matches(pattern, &text)
             }
 
             CriteriaType::TextComparison(op, pattern) => {
                 let text = value.as_string().to_lowercase();
-                let matched = Self::wildcard_match(pattern, &text);
+                let matched = super::wildcard::matches(pattern, &text);
                 match op {
                     ComparisonOp::Equal => matched,
                     ComparisonOp::NotEqual => !matched,
@@ -169,75 +169,8 @@ impl CriteriaMatcher {
         }
     }
 
-    /// Match with wildcards: * = any characters, ? = single character, ~ makes the next
-    /// character literal (`a~*` matches the text "a*").
-    fn wildcard_match(pattern: &str, text: &str) -> bool {
-        if !pattern.contains(['*', '?', '~']) {
-            return pattern == text;
-        }
-
-        let mut tokens = Vec::new();
-        let mut chars = pattern.chars();
-        while let Some(c) = chars.next() {
-            tokens.push(match c {
-                '*' => Wild::Run,
-                '?' => Wild::One,
-                '~' => Wild::Char(chars.next().unwrap_or('~')),
-                other => Wild::Char(other),
-            });
-        }
-        let text_chars: Vec<char> = text.chars().collect();
-
-        Self::wildcard_match_impl(&tokens, &text_chars)
-    }
-
-    fn wildcard_match_impl(pattern: &[Wild], text: &[char]) -> bool {
-        let mut pi = 0; // pattern index
-        let mut ti = 0; // text index
-        let mut star_pi = None; // position of last * in pattern
-        let mut star_ti = 0; // position in text when we matched last *
-
-        while ti < text.len() {
-            let matches_here = match pattern.get(pi) {
-                Some(Wild::One) => true,
-                Some(Wild::Char(c)) => *c == text[ti],
-                _ => false,
-            };
-            if matches_here {
-                pi += 1;
-                ti += 1;
-            } else if matches!(pattern.get(pi), Some(Wild::Run)) {
-                // Star found, record position
-                star_pi = Some(pi);
-                star_ti = ti;
-                pi += 1; // Try matching * with empty string first
-            } else if let Some(sp) = star_pi {
-                // Mismatch, but we have a star to backtrack to
-                pi = sp + 1;
-                star_ti += 1;
-                ti = star_ti;
-            } else {
-                // No match and no star to backtrack to
-                return false;
-            }
-        }
-
-        // Check remaining pattern characters (must all be *)
-        while matches!(pattern.get(pi), Some(Wild::Run)) {
-            pi += 1;
-        }
-
-        pi == pattern.len()
-    }
 }
 
-/// One element of a wildcard pattern.
-#[derive(Clone, Copy)]
-enum Wild {
-    One,
-    Run,
-    Char(char),
-}
 
 #[cfg(test)]
 mod tests {

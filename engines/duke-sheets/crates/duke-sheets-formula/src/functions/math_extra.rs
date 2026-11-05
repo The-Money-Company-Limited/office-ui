@@ -1564,6 +1564,23 @@ pub fn fn_aggregate(
     }
 }
 
+/// Whether a formula calls SUBTOTAL or AGGREGATE (and not, say, MYSUBTOTAL), outside its strings.
+fn calls_total(formula: &str) -> bool {
+    let mut in_string = false;
+    let bytes = formula.as_bytes();
+    for (i, &c) in bytes.iter().enumerate() {
+        if c == b'"' {
+            in_string = !in_string;
+        } else if !in_string && (i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_')) {
+            let rest = &formula[i..];
+            if rest.starts_with("SUBTOTAL(") || rest.starts_with("AGGREGATE(") || rest.starts_with("_XLFN.AGGREGATE(") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn without_nested_totals(value: &FormulaValue, ctx: &EvaluationContext) -> FormulaValue {
     let FormulaValue::Array { data, source: Some(source) } = value else {
         return value.clone();
@@ -1574,10 +1591,7 @@ fn without_nested_totals(value: &FormulaValue, ctx: &EvaluationContext) -> Formu
     let is_total = |row: usize, col: usize| {
         sheet
             .get_formula_at(source.start_row + row as u32, source.start_col + col as u16)
-            .map(|formula| {
-                let formula = formula.to_string().to_ascii_uppercase();
-                formula.contains("SUBTOTAL(") || formula.contains("AGGREGATE(")
-            })
+            .map(|formula| calls_total(&formula.to_ascii_uppercase()))
             .unwrap_or(false)
     };
     let data = data

@@ -9,7 +9,7 @@
 
 use crate::error::FormulaResult;
 use crate::evaluator::{EvaluationContext, FormulaValue};
-use chrono::{Datelike, Duration, NaiveDate, Timelike};
+use chrono::{Datelike, Duration, NaiveDate};
 use duke_sheets_core::CellError;
 use std::collections::HashSet;
 
@@ -86,7 +86,7 @@ fn excel1900_serial_month_start(year: i32, month: u32) -> i64 {
     }
 }
 
-fn excel1900_serial_from_ymd(year: i32, month: u32, day: i32) -> i64 {
+pub(crate) fn excel1900_serial_from_ymd(year: i32, month: u32, day: i32) -> i64 {
     excel1900_serial_month_start(year, month) + (day as i64) - 1
 }
 
@@ -905,25 +905,12 @@ pub fn fn_datevalue(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaRe
         Ok(s) => s,
         Err(e) => return Ok(e),
     };
-    let text = text.trim();
-
-    let parsed = NaiveDate::parse_from_str(text, "%m/%d/%Y")
-        .or_else(|_| NaiveDate::parse_from_str(text, "%Y-%m-%d"))
-        .or_else(|_| NaiveDate::parse_from_str(text, "%Y/%m/%d"))
-        .or_else(|_| NaiveDate::parse_from_str(text, "%d-%b-%y"))
-        .or_else(|_| NaiveDate::parse_from_str(text, "%d-%b-%Y"));
-
-    let date = match parsed {
-        Ok(d) => d,
-        Err(_) => return Ok(FormulaValue::Error(CellError::Value)),
+    // The date part of text Excel reads as a date, a time after it ignored (crate::coerce)
+    let Some(serial) = crate::coerce::date_text(&text) else {
+        return Ok(FormulaValue::Error(CellError::Value));
     };
-
-    let serial = if ctx_date_1904(ctx) {
-        excel1904_serial_from_date(date)
-    } else {
-        excel1900_serial_from_ymd(date.year(), date.month(), date.day() as i32)
-    };
-    Ok(FormulaValue::Number(serial as f64))
+    // 1904-system serials count from 1904-01-01, 1462 days later
+    Ok(FormulaValue::Number(if ctx_date_1904(ctx) { serial - 1462.0 } else { serial }))
 }
 
 pub fn fn_timevalue(
@@ -934,36 +921,11 @@ pub fn fn_timevalue(
         Ok(s) => s,
         Err(e) => return Ok(e),
     };
-    let t = text.trim();
-    let upper = t.to_uppercase();
-
-    let parsed = chrono::NaiveTime::parse_from_str(t, "%H:%M:%S")
-        .or_else(|_| chrono::NaiveTime::parse_from_str(t, "%H:%M"))
-        .or_else(|_| chrono::NaiveTime::parse_from_str(&upper, "%I:%M:%S %p"))
-        .or_else(|_| chrono::NaiveTime::parse_from_str(&upper, "%I:%M %p"))
-        .or_else(|_| {
-            // "Date information in time_text is ignored" - try datetime formats
-            // and extract just the time portion.
-            chrono::NaiveDateTime::parse_from_str(&upper, "%d-%b-%Y %I:%M %p")
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&upper, "%d-%b-%Y %I:%M:%S %p"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&upper, "%d-%b-%Y %H:%M:%S"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&upper, "%d-%b-%Y %H:%M"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(t, "%m/%d/%Y %H:%M:%S"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(t, "%m/%d/%Y %H:%M"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(t, "%Y/%m/%d %H:%M:%S"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(t, "%Y/%m/%d %H:%M"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(t, "%Y-%m-%d %H:%M:%S"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(t, "%Y-%m-%d %H:%M"))
-                .map(|dt| dt.time())
-        });
-
-    let tm = match parsed {
-        Ok(v) => v,
-        Err(_) => return Ok(FormulaValue::Error(CellError::Value)),
-    };
-
-    let total_seconds = tm.num_seconds_from_midnight() as f64;
-    Ok(FormulaValue::Number(total_seconds / 86400.0))
+    // The time part of text Excel reads as a time, a date before it ignored (crate::coerce)
+    match crate::coerce::time_text(&text) {
+        Some(time) => Ok(FormulaValue::Number(time.fract())),
+        None => Ok(FormulaValue::Error(CellError::Value)),
+    }
 }
 
 pub fn fn_networkdays(

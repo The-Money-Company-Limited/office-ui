@@ -3399,8 +3399,8 @@ impl XlsxReader {
         // For each anchor, determine the spill rectangle by scanning the ghost set,
         // build array_result from cached values, then create SpillTarget cells.
         for &(anchor_row, anchor_col) in &dynamic_array_anchors {
-            // The spill rectangle is the anchor's `ref`, else the ghosts (cm="2") that extend right
-            // and down from the anchor.
+            // The spill rectangle is the anchor's `ref`, as Excel writes it, else the ghosts (cm="2")
+            // that extend right and down from the anchor, as other writers mark spilled cells.
             let (num_rows, num_cols) = match dynamic_array_extents.get(&(anchor_row, anchor_col)) {
                 Some(&extent) => extent,
                 None => {

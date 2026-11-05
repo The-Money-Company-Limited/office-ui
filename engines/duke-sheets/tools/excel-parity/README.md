@@ -35,5 +35,5 @@ $r run ~/Desktop/Code/office-ui/engines/duke-sheets \
 
 `parity.json` lists each mismatch with its file, cell, formula, Excel's value and the engine's.
 
-Baseline (2026-11-05, COD-1769): 51,932 formulas compared, 609 mismatches in 37 of 800 files,
+Baseline (2026-11-05, COD-1769): 51,932 formulas compared, 609 mismatches in 39 of 800 files,
 down from 7,245 in 191. What is left, and why, is listed on COD-1769.

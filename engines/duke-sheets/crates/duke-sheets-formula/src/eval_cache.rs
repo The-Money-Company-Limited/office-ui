@@ -61,9 +61,9 @@ pub struct EvalCache {
     /// Pre-built before the eval loop; immutable during evaluation.
     pub sheet_names: AHashMap<String, usize>,
 
-    /// Each sheet's last used row and column, which bound whole-column and whole-row references.
-    /// Formulas change values, not positions, during one calculation.
-    pub used_extents: DashMap<usize, Option<(u32, u16)>>,
+    /// The workbook's last used row and column, which bound whole-column and whole-row references.
+    /// Spills move it, so the pass that recalculates formulas reading spills uses a new cache.
+    pub used_extent: std::sync::OnceLock<(u32, u16)>,
 }
 
 impl EvalCache {
@@ -74,7 +74,7 @@ impl EvalCache {
             lookup_indexes: DashMap::new(),
             source_lookup_indexes: DashMap::new(),
             sheet_names,
-            used_extents: DashMap::new(),
+            used_extent: std::sync::OnceLock::new(),
         }
     }
 }

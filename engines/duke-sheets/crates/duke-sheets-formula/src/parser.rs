@@ -1316,13 +1316,13 @@ fn unescape_column(name: &str) -> String {
 #[derive(Clone, Copy)]
 enum Line {
     Column(u16, bool),
-    Row(u32),
+    Row(u32, bool),
 }
 
 fn token_as_line(token: &Token) -> Option<Line> {
     match token {
         Token::Identifier(text) => text_as_line(text),
-        Token::Number(n) => number_as_row(*n).map(Line::Row),
+        Token::Number(n) => number_as_row(*n).map(|row| Line::Row(row, false)),
         _ => None,
     }
 }
@@ -1330,7 +1330,7 @@ fn token_as_line(token: &Token) -> Option<Line> {
 fn expr_as_line(expr: &FormulaExpr) -> Option<Line> {
     match expr {
         FormulaExpr::NameRef(text) => text_as_line(text),
-        FormulaExpr::Number(n) => number_as_row(*n).map(Line::Row),
+        FormulaExpr::Number(n) => number_as_row(*n).map(|row| Line::Row(row, false)),
         _ => None,
     }
 }
@@ -1344,7 +1344,7 @@ fn text_as_line(text: &str) -> Option<Line> {
         return CellAddress::letters_to_column(rest).ok().map(|col| Line::Column(col, absolute));
     }
     if absolute && !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
-        return number_as_row(rest.parse().ok()?).map(Line::Row);
+        return number_as_row(rest.parse().ok()?).map(|row| Line::Row(row, true));
     }
     None
 }
@@ -1357,18 +1357,18 @@ fn whole_lines(left: &FormulaExpr, right: &FormulaExpr) -> Option<CellRange> {
     lines_range(expr_as_line(left)?, expr_as_line(right)?)
 }
 
-/// The rows of a whole column, and of a whole row, are marked fixed: the formula-text shifting of
-/// shared and repeated formulas (`shift_a1_references`) moves only `A1`-style references, so the
-/// parsed range must not move either. Copying `A:A` down leaves it `A:A`, as in Excel.
+/// A whole column's rows are fixed (copying `A:A` down leaves it `A:A`) and so are a whole row's
+/// columns; the other axis keeps its `$`, so `A:A` copied right is `B:B` and `1:1` copied down is
+/// `2:2`.
 fn lines_range(left: Line, right: Line) -> Option<CellRange> {
     match (left, right) {
         (Line::Column(a, a_abs), Line::Column(b, b_abs)) => Some(CellRange::new(
             CellAddress::with_absolute(0, a, true, a_abs),
             CellAddress::with_absolute(MAX_ROWS - 1, b, true, b_abs),
         )),
-        (Line::Row(a), Line::Row(b)) => Some(CellRange::new(
-            CellAddress::with_absolute(a, 0, true, true),
-            CellAddress::with_absolute(b, MAX_COLS - 1, true, true),
+        (Line::Row(a, a_abs), Line::Row(b, b_abs)) => Some(CellRange::new(
+            CellAddress::with_absolute(a, 0, a_abs, true),
+            CellAddress::with_absolute(b, MAX_COLS - 1, b_abs, true),
         )),
         _ => None,
     }

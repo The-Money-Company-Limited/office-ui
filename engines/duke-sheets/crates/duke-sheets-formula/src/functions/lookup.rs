@@ -85,25 +85,7 @@ pub(crate) fn compare_lookup_values(a: &FormulaValue, b: &FormulaValue) -> Optio
 }
 
 pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
-    let p: Vec<char> = pattern.chars().collect();
-    let t: Vec<char> = text.chars().collect();
-    let mut dp = vec![vec![false; t.len() + 1]; p.len() + 1];
-    dp[0][0] = true;
-    for i in 1..=p.len() {
-        if p[i - 1] == '*' {
-            dp[i][0] = dp[i - 1][0];
-        }
-    }
-    for i in 1..=p.len() {
-        for j in 1..=t.len() {
-            if p[i - 1] == '*' {
-                dp[i][j] = dp[i - 1][j] || dp[i][j - 1];
-            } else if p[i - 1] == '?' || p[i - 1].eq_ignore_ascii_case(&t[j - 1]) {
-                dp[i][j] = dp[i - 1][j - 1];
-            }
-        }
-    }
-    dp[p.len()][t.len()]
+    super::wildcard::matches(pattern, text)
 }
 
 fn vector_from_array(arr: &[Vec<FormulaValue>]) -> Option<Vec<FormulaValue>> {
@@ -124,34 +106,7 @@ fn vector_from_array(arr: &[Vec<FormulaValue>]) -> Option<Vec<FormulaValue>> {
     None
 }
 
-fn parse_column_letters(s: &str) -> Option<u16> {
-    let upper = s.to_ascii_uppercase();
-    let mut col: u16 = 0;
-    for c in upper.chars() {
-        if !c.is_ascii_uppercase() {
-            return None;
-        }
-        col = col
-            .checked_mul(26)?
-            .checked_add((c as u16) - ('A' as u16) + 1)?;
-    }
-    Some(col - 1)
-}
 
-fn parse_cell_address(addr: &str) -> Option<(u32, u16)> {
-    let col_end = addr
-        .find(|c: char| c.is_ascii_digit())
-        .unwrap_or(addr.len());
-    if col_end == 0 || col_end == addr.len() {
-        return None;
-    }
-    let col = parse_column_letters(&addr[..col_end])?;
-    let row: u32 = addr[col_end..].parse().ok()?;
-    if row == 0 {
-        return None;
-    }
-    Some((row - 1, col))
-}
 
 /// INDEX(array, row_num, [column_num])
 pub fn fn_index(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -283,7 +238,7 @@ pub fn fn_match(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult
     match match_type {
         0 => {
             // Exact match (with wildcard support for string patterns)
-            let is_wildcard = matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+            let is_wildcard = matches!(lookup_value, FormulaValue::String(s) if crate::functions::wildcard::has_wildcards(s));
 
             if !is_wildcard {
                 // Hash index (Tier 2) - only for non-wildcard lookups
@@ -632,7 +587,7 @@ pub fn fn_vlookup(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
     } else {
         // Exact match (with wildcard support for string patterns)
         let is_wildcard =
-            matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+            matches!(lookup_value, FormulaValue::String(s) if crate::functions::wildcard::has_wildcards(s));
 
         if !is_wildcard {
             // Hash index (Tier 2) - only for non-wildcard lookups
@@ -778,7 +733,7 @@ pub fn fn_hlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
         }
     } else {
         let is_wildcard =
-            matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+            matches!(lookup_value, FormulaValue::String(s) if crate::functions::wildcard::has_wildcards(s));
         match first_row.iter().position(|k| {
             if is_wildcard {
                 matches!((lookup_value, k), (FormulaValue::String(p), FormulaValue::String(t)) if wildcard_match(p, t))
@@ -981,87 +936,7 @@ pub fn fn_xlookup(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
     }
 }
 
-pub fn fn_indirect(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    for v in args {
-        if let FormulaValue::Error(e) = v {
-            return Ok(FormulaValue::Error(*e));
-        }
-    }
 
-    if ctx.workbook.is_none() {
-        return Ok(FormulaValue::Error(CellError::Ref));
-    }
-
-    let ref_text = args.first().unwrap();
-    if matches!(ref_text, FormulaValue::Array { .. }) {
-        return Ok(FormulaValue::Error(CellError::Value));
-    }
-
-    let a1_style = args
-        .get(1)
-        .map(|v| v.as_bool().unwrap_or(false))
-        .unwrap_or(true);
-    if !a1_style {
-        return Ok(FormulaValue::Error(CellError::Ref));
-    }
-
-    let text = ref_text.as_string();
-    let (sheet_name, ref_part) = if let Some(pos) = text.rfind('!') {
-        let raw_sheet = text[..pos].trim();
-        let clean_sheet = raw_sheet.trim_matches('\'').to_string();
-        (Some(clean_sheet), text[pos + 1..].trim().to_string())
-    } else {
-        (None, text.trim().to_string())
-    };
-
-    let ref_clean = ref_part.replace('$', "");
-    if let Some(colon) = ref_clean.find(':') {
-        let start = &ref_clean[..colon];
-        let end = &ref_clean[colon + 1..];
-        let (sr, sc) = match parse_cell_address(start) {
-            Some(v) => v,
-            None => return Ok(FormulaValue::Error(CellError::Ref)),
-        };
-        let (er, ec) = match parse_cell_address(end) {
-            Some(v) => v,
-            None => return Ok(FormulaValue::Error(CellError::Ref)),
-        };
-        Ok(ctx.get_range_values(sheet_name.as_deref(), sr, sc, er, ec))
-    } else {
-        let (row, col) = match parse_cell_address(&ref_clean) {
-            Some(v) => v,
-            None => return Ok(FormulaValue::Error(CellError::Ref)),
-        };
-        Ok(ctx.get_cell_value(sheet_name.as_deref(), row, col))
-    }
-}
-
-/// OFFSET's reference-aware behavior is intercepted in `evaluator.rs`; this
-/// fallback preserves direct-call coercion and error propagation semantics.
-pub fn fn_offset(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    for v in args {
-        if let FormulaValue::Error(e) = v {
-            return Ok(FormulaValue::Error(*e));
-        }
-    }
-
-    if args.get(1).and_then(to_i64_trunc).is_none() || args.get(2).and_then(to_i64_trunc).is_none()
-    {
-        return Ok(FormulaValue::Error(CellError::Value));
-    }
-
-    if let Some(h) = args.get(3).and_then(to_i64_trunc) {
-        if h < 1 {
-            return Ok(FormulaValue::Error(CellError::Value));
-        }
-    }
-    if let Some(w) = args.get(4).and_then(to_i64_trunc) {
-        if w < 1 {
-            return Ok(FormulaValue::Error(CellError::Value));
-        }
-    }
-    Ok(FormulaValue::Error(CellError::Ref))
-}
 
 /// SEQUENCE(rows, [columns], [start], [step]) - Generates a sequence of numbers
 ///
@@ -1148,6 +1023,11 @@ pub fn fn_sequence(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Evaluates a formula in a context, as the engine does for a cell.
+    fn run(formula: &str, ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+        crate::evaluator::evaluate(&crate::parser::parse_formula(formula)?, ctx)
+    }
     use duke_sheets_core::{CellValue, Workbook};
 
     fn eval(formula: &str) -> FormulaResult<FormulaValue> {
@@ -1238,10 +1118,10 @@ mod tests {
         }
         let ctx = EvaluationContext::new(Some(&workbook), 0, 0, 0);
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("A1".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"A1\")", &ctx).unwrap(),
             FormulaValue::Number(42.0)
         );
-        let result = fn_indirect(&[FormulaValue::String("A1:B1".into())], &ctx).unwrap();
+        let result = run("=INDIRECT(\"A1:B1\")", &ctx).unwrap();
         if let FormulaValue::Array { data, .. } = &result {
             assert_eq!(
                 *data,
@@ -1262,7 +1142,7 @@ mod tests {
         // Data layout (matching the docs example table):
         //   A2="B2", A3="B3", A5=5
         //   B2=1.333, B3=45, B5=62
-        // We call fn_indirect directly with the resolved string values.
+        // The formulas below give INDIRECT its text directly.
 
         let mut workbook = Workbook::new();
         {
@@ -1292,25 +1172,25 @@ mod tests {
 
         // Docs Example 1: =INDIRECT(A2) where A2="B2", B2=1.333 → 1.333
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("B2".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"B2\")", &ctx).unwrap(),
             FormulaValue::Number(1.333)
         );
 
         // Docs Example 2: =INDIRECT(A3) where A3="B3", B3=45 → 45
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("B3".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"B3\")", &ctx).unwrap(),
             FormulaValue::Number(45.0)
         );
 
         // Docs Example 4: =INDIRECT("B"&A5) where A5=5 → INDIRECT("B5"), B5=62
-        // (concatenation already resolved before fn_indirect is called)
+        // (concatenation already resolved)
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("B5".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"B5\")", &ctx).unwrap(),
             FormulaValue::Number(62.0)
         );
 
         // INDIRECT with range: INDIRECT("A1:B1") → array of values
-        let result = fn_indirect(&[FormulaValue::String("A1:B1".into())], &ctx).unwrap();
+        let result = run("=INDIRECT(\"A1:B1\")", &ctx).unwrap();
         if let FormulaValue::Array { data, .. } = &result {
             assert_eq!(
                 *data,
@@ -1325,44 +1205,37 @@ mod tests {
 
         // INDIRECT with invalid reference: INDIRECT("ZZZZZ999999") → #REF!
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("ZZZZZ999999".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"ZZZZZ999999\")", &ctx).unwrap(),
             FormulaValue::Error(CellError::Ref)
         );
 
         // INDIRECT with sheet reference: INDIRECT("Sheet1!A1") → 99
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("Sheet1!A1".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"Sheet1!A1\")", &ctx).unwrap(),
             FormulaValue::Number(99.0)
         );
 
-        // INDIRECT with R1C1 style (a1=false): our impl returns #REF!
+        // INDIRECT with R1C1 style (a1=false) names the same cells
         assert_eq!(
-            fn_indirect(
-                &[
-                    FormulaValue::String("R1C1".into()),
-                    FormulaValue::Boolean(false)
-                ],
-                &ctx,
-            )
-            .unwrap(),
-            FormulaValue::Error(CellError::Ref)
+            run("=INDIRECT(\"R1C1\",FALSE)", &ctx).unwrap(),
+            run("=INDIRECT(\"A1\")", &ctx).unwrap()
         );
 
         // Error propagation: INDIRECT(#VALUE!) → #VALUE!
         assert_eq!(
-            fn_indirect(&[FormulaValue::Error(CellError::Value)], &ctx).unwrap(),
+            run("=INDIRECT(#VALUE!)", &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)
         );
 
         // INDIRECT with empty string: INDIRECT("") → #REF!
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"\")", &ctx).unwrap(),
             FormulaValue::Error(CellError::Ref)
         );
 
         // INDIRECT with absolute refs (dollar signs): INDIRECT("$B$2") → 1.333
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("$B$2".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"$B$2\")", &ctx).unwrap(),
             FormulaValue::Number(1.333)
         );
     }
@@ -1377,9 +1250,10 @@ mod tests {
             eval("=OFFSET(1,\"x\",1)").unwrap(),
             FormulaValue::Error(CellError::Value)
         );
+        // OFFSET needs a reference to start from; a height below 1 is #REF! as for a real one
         assert_eq!(
             eval("=OFFSET(1,1,1,0,1)").unwrap(),
-            FormulaValue::Error(CellError::Value)
+            FormulaValue::Error(CellError::Ref)
         );
     }
 
