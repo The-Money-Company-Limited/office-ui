@@ -136,8 +136,8 @@ def pull(repo, path):
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
         try:
             archive.extractall(target, filter="data")
-        except TypeError:  # Python before 3.12 has no extraction filters
-            archive.extractall(target)
+        except TypeError:  # without the filter, a crafted archive could write outside the repo
+            sys.exit("r pull needs Python 3.12 or later, for safe tar extraction.")
     print(f"pulled {key}/{path}: {len(data) // 1024} KiB")
 
 
