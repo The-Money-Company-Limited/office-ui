@@ -872,7 +872,8 @@ export function init(): void;
  * Sets the regional settings formulas compute with in workbooks opened or created from now on,
  * from a language tag such as `en-GB` (the browser's `navigator.language`): the order of day and
  * month in dates written as text, the language of TEXT's month and day names and date codes, and
- * the decimal separator. The default is en-US.
+ * the decimal separator. The default is en-US. The grid's own number display doesn't follow it
+ * yet.
  */
 export function setLocale(tag: string): void;
 
