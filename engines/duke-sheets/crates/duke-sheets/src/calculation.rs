@@ -412,34 +412,6 @@ fn ref_sheets(sheet: Option<&String>, workbook: &Workbook, current_sheet: usize)
     }
 }
 
-/// A formula's value, or ExternalReference when it reads another workbook (`'[1]May 2021'!A2:A9`):
-/// checked before evaluating, since a function that reads its range itself (INDEX, MATCH) would
-/// otherwise find no such sheet and give #REF!.
-fn evaluate_cell(ast: &FormulaExpr, ctx: &EvaluationContext) -> duke_sheets_formula::FormulaResult<FormulaValue> {
-    match other_workbook(ast) {
-        Some(book) => Err(duke_sheets_formula::FormulaError::ExternalReference(book.to_string())),
-        None => evaluate(ast, ctx),
-    }
-}
-
-/// The other workbook `expr` reads, if any: `[1]`, written before a sheet or a name.
-fn other_workbook(expr: &FormulaExpr) -> Option<&str> {
-    fn book(sheet: &Option<String>) -> Option<&str> {
-        sheet.as_deref().filter(|name| name.starts_with('['))
-    }
-    match expr {
-        FormulaExpr::ExternalRef(r) => Some(&r.book),
-        FormulaExpr::CellRef(r) => book(&r.sheet),
-        FormulaExpr::RangeRef(r) => book(&r.sheet),
-        FormulaExpr::NameRef(name) if name.starts_with('[') => Some(name),
-        FormulaExpr::BinaryOp { left, right, .. } => other_workbook(left).or_else(|| other_workbook(right)),
-        FormulaExpr::UnaryOp { operand, .. } => other_workbook(operand),
-        FormulaExpr::Function { args, .. } => args.iter().find_map(other_workbook),
-        FormulaExpr::Array(rows) => rows.iter().flatten().find_map(other_workbook),
-        _ => None,
-    }
-}
-
 /// A formula that reads another workbook keeps the value saved in the file (`None`), as Excel shows
 /// it until the link is refreshed; one with no saved value, such as a formula just typed, is #REF!
 /// because that workbook isn't open.
@@ -1374,7 +1346,7 @@ impl CalculationEngine {
             ctx.image_sink = Some(&image_sink);
             ctx.eval_cache = Some(eval_cache);
 
-            match evaluate_cell(ast, &ctx) {
+            match evaluate(ast, &ctx) {
                 Ok(value) => Some(value),
                 Err(duke_sheets_formula::FormulaError::ExternalReference(_)) => {
                     unsaved_external(wb_ref, cell_key)
@@ -1486,7 +1458,7 @@ impl CalculationEngine {
         ctx.external_fn = self.options.external_fn.as_deref();
         ctx.image_sink = Some(&image_sink);
         ctx.eval_cache = Some(eval_cache);
-        match evaluate_cell(ast, &ctx) {
+        match evaluate(ast, &ctx) {
             Ok(value) => Some((value, false)),
             Err(duke_sheets_formula::FormulaError::ExternalReference(_)) => {
                 unsaved_external(workbook, cell_key).map(|value| (value, false))

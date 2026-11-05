@@ -141,15 +141,15 @@ pub(crate) fn read_comments_list<R: Read>(reader: R) -> XlsxResult<Vec<(u32, u16
             },
             Ok(Event::Text(e)) => {
                 if in_author {
-                    if let Ok(text) = e.unescape() {
+                    if let Ok(text) = super::xml_text(&e) {
                         author_text.push_str(&text);
                     }
                 } else if in_run_t {
-                    if let Ok(text) = e.unescape() {
+                    if let Ok(text) = super::xml_text(&e) {
                         run_text.push_str(&text);
                     }
                 } else if in_t {
-                    if let Ok(text) = e.unescape() {
+                    if let Ok(text) = super::xml_text(&e) {
                         plain_text.push_str(&text);
                     }
                 }

@@ -53,17 +53,15 @@ pub struct RangeSource {
     pub blank_cells_past: u64,
 }
 
-impl RangeSource {
-    /// The blank cells the reference covers past what was read, for an array that has a source.
-    pub fn blanks_past(value: &FormulaValue) -> u64 {
-        match value {
+impl FormulaValue {
+    /// The blank cells a range covers past the cells read (see RangeSource::blank_cells_past).
+    pub fn blank_cells_past(&self) -> u64 {
+        match self {
             FormulaValue::Array { source: Some(source), .. } => source.blank_cells_past,
             _ => 0,
         }
     }
-}
 
-impl FormulaValue {
     /// Convert to number, if possible
     pub fn as_number(&self) -> Option<f64> {
         match self {
@@ -1795,6 +1793,7 @@ fn evaluate_vlookup_fast(
             &RangeSource {
                 start_col: source.start_col,
                 end_col: source.start_col,
+                blank_cells_past: 0,
                 ..source.clone()
             },
             ctx,
@@ -1928,6 +1927,12 @@ fn evaluate_function(
         });
     }
 
+    // TEXTJOIN(",",,A1:A3) skips empty text: Excel reads that left-out flag as TRUE, though a
+    // blank cell there is FALSE.
+    if lookup_name.eq_ignore_ascii_case("TEXTJOIN") && matches!(args.get(1), Some(FormulaExpr::Empty)) {
+        evaluated_args[1] = FormulaValue::Boolean(true);
+    }
+
     crate::array_lift::coerce_typed_arguments(func.typed_args, args, &mut evaluated_args, ctx);
 
     if let Some(result) = crate::array_lift::lift_over_arrays(func, &evaluated_args, ctx) {
@@ -1959,6 +1964,9 @@ fn evaluate_with_expressions(
         "ISFORMULA" => evaluate_isformula(args, ctx),
         "INDIRECT" => value_of(reference::indirect_target(args, ctx)),
         "OFFSET" => value_of(reference::offset_target(args, ctx)),
+        // The fast lookups find their sheet by name, and another workbook's ('[1]May'!A:A) isn't
+        // one: the general path raises ExternalReference, so the cell keeps its saved value.
+        "INDEX" | "MATCH" | "XMATCH" | "XLOOKUP" | "VLOOKUP" if args.iter().any(reference::is_external) => None,
         "INDEX" => evaluate_index_fast(args, ctx),
         "MATCH" => evaluate_match_fast(args, ctx),
         "XMATCH" => evaluate_xmatch_fast(args, ctx),

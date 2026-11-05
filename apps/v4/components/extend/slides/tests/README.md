@@ -1,8 +1,10 @@
 # Slides verification
 
-Run builds, typechecks and browser tests on the build box from
-`tools/cloudflare` (`cd tools/cloudflare`; `office-ui` below is the main checkout). The browser runner uses the existing `.cod1460`
-Playwright, Chromium and shared-library setup inside `/work/office-ui`.
+Run builds, typechecks and browser tests on the Cloudflare build box (see the
+root README's Development section) from `tools/cloudflare` (`cd tools/cloudflare`).
+`office-ui` below is the main checkout; from a worktree, pass its path instead.
+The browser runner uses Playwright and Chromium from `/work/office-ui/.cod1460`,
+which `r sync` links to the box image's copy.
 JSZip resolves from `apps/v4/package.json`; there is no nested slides package.
 
 ```sh
@@ -63,7 +65,7 @@ Run the positive browser command afterward to restore `results.json` to passing
 results. Do not run the browser and negative-control scripts concurrently:
 they share the results directory.
 
-Verified on Modal on 2026-10-17: ESLint and whole-app TypeScript passed;
+Verified on Modal (the build box before Cloudflare) on 2026-10-17: ESLint and whole-app TypeScript passed;
 `artifact-template:build` passed (Vite reported directive/sourcemap and large-chunk
 warnings). All 11 browser cases passed against `polish-release-2`. All seven
 polish regressions failed against the committed editor. Staging/path rejection
@@ -82,15 +84,15 @@ geometry uses ink metrics rather than the font's unused ascent/descent space.
 
 On a fresh Linux machine, install Playwright beside `slides-check.mjs` with
 `npm install --no-save playwright`, then `npx playwright install --with-deps chromium`.
-Keep `validate.js` and `slides.css` beside the command. On the shared build box,
-reuse the already-installed browser and libraries, without touching other repos:
+Keep `validate.js` and `slides.css` beside the command. On the build box,
+reuse the image's browser, without touching other repos:
 
 ```sh
 cd tools/cloudflare
 ./r up
 ./r sync office-ui
 ./r run office-ui 'mkdir -p apps/v4/components/extend/slides/node_modules && ln -sfn /work/office-ui/.cod1460/node_modules/playwright apps/v4/components/extend/slides/node_modules/playwright'
-./r run office-ui 'export LD_LIBRARY_PATH=/work/office-ui/.cod1460/libs/usr/lib/x86_64-linux-gnu:/work/office-ui/.cod1460/libs/lib/x86_64-linux-gnu TMPDIR=/work/office-ui/.cod1460/tmp FONTCONFIG_FILE=/work/office-ui/.cod1460/fonts.conf PLAYWRIGHT_BROWSERS_PATH=/work/office-ui/.cod1460/browsers && node apps/v4/components/extend/slides/tests/checker.mjs --negative-control'
+./r run office-ui 'export TMPDIR=/work/office-ui/.cod1460/tmp FONTCONFIG_FILE=/work/office-ui/.cod1460/fonts.conf PLAYWRIGHT_BROWSERS_PATH=/work/office-ui/.cod1460/browsers && node apps/v4/components/extend/slides/tests/checker.mjs --negative-control'
 ./r run office-ui 'cd apps/v4 && node node_modules/eslint/bin/eslint.js components/extend/slides/slides-check.mjs components/extend/slides/validate.js components/extend/slides/validate.d.ts components/extend/slides/tests/checker.mjs'
 ```
 

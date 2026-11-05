@@ -161,13 +161,21 @@ fn time_of_day(text: &str) -> Option<f64> {
 /// `2024-03-15`, `2024/3/15`, `3/15/2024`, `3-15-24`, `15-Mar-2024`, `15 March 2024`,
 /// `Mar 15, 2024`, `March 15 2024`, `Mar-2024` (the 1st), `1Jan2016` (a month name needs no separators).
 fn date(text: &str) -> Option<f64> {
-    let mut spaced = String::with_capacity(text.len() + 2);
-    for c in text.chars() {
-        if spaced.chars().next_back().is_some_and(|last| last.is_ascii_digit() != c.is_ascii_digit() && last.is_alphanumeric() && c.is_alphanumeric()) {
-            spaced.push(' ');
+    let boundary = |a: u8, b: u8| a.is_ascii_alphanumeric() && b.is_ascii_alphanumeric() && a.is_ascii_digit() != b.is_ascii_digit();
+    let spaced: std::borrow::Cow<str> = if text.as_bytes().windows(2).any(|w| boundary(w[0], w[1])) {
+        let mut spaced = String::with_capacity(text.len() + 4);
+        let mut last = 0u8;
+        for c in text.chars() {
+            if c.is_ascii() && boundary(last, c as u8) {
+                spaced.push(' ');
+            }
+            last = if c.is_ascii() { c as u8 } else { 0 };
+            spaced.push(c);
         }
-        spaced.push(c);
-    }
+        spaced.into()
+    } else {
+        text.into()
+    };
     let parts: Vec<&str> = spaced
         .split(|c: char| c == '/' || c == '-' || c == ' ' || c == ',')
         .filter(|p| !p.is_empty())

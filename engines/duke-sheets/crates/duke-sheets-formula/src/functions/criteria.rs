@@ -120,19 +120,12 @@ impl CriteriaMatcher {
     /// Check if a value matches the criteria
     pub fn matches(&self, value: &FormulaValue) -> bool {
         match &self.criteria_type {
-            // A number matches the number and text that reads as it: SUMIFS(K:K,A:A,DATE(2021,3,1))
-            // adds the rows whose date is the text "3-1-21". Booleans never match.
-            CriteriaType::Number(criteria_num) => match value {
-                FormulaValue::Number(n) => (n - criteria_num).abs() < 1e-10,
-                FormulaValue::String(s) => crate::coerce::text_to_number(s).is_some_and(|n| (n - criteria_num).abs() < 1e-10),
-                _ => false,
-            },
+            CriteriaType::Number(criteria_num) => is_number(value, *criteria_num),
 
-            CriteriaType::NumberOrText(criteria_num, text) => match value {
-                FormulaValue::Number(n) => (n - criteria_num).abs() < 1e-10,
-                FormulaValue::String(s) => s.trim().to_lowercase() == *text,
-                _ => false,
-            },
+            CriteriaType::NumberOrText(criteria_num, text) => {
+                is_number(value, *criteria_num)
+                    || matches!(value, FormulaValue::String(s) if s.trim().to_lowercase() == *text)
+            }
 
             CriteriaType::Boolean(b) => matches!(value, FormulaValue::Boolean(v) if v == b),
 
@@ -153,13 +146,19 @@ impl CriteriaMatcher {
                 }
             }
 
-            CriteriaType::Text(pattern) => {
-                let text = value.as_string().to_lowercase();
-                super::wildcard::matches(pattern, &text)
-            }
+            // Text criteria test text only: "*" counts no blanks or numbers, while "<>x" counts
+            // everything that isn't x. "=" alone matches blanks.
+            CriteriaType::Text(pattern) => match value {
+                FormulaValue::String(s) => super::wildcard::matches(pattern, &s.to_lowercase()),
+                _ => false,
+            },
 
             CriteriaType::TextComparison(op, pattern) => {
-                let text = value.as_string().to_lowercase();
+                let text = match value {
+                    FormulaValue::String(s) => s.to_lowercase(),
+                    FormulaValue::Empty if pattern.is_empty() => String::new(),
+                    _ => return matches!(op, ComparisonOp::NotEqual),
+                };
                 let matched = super::wildcard::matches(pattern, &text);
                 match op {
                     ComparisonOp::Equal => matched,
@@ -178,6 +177,17 @@ impl CriteriaMatcher {
 
             CriteriaType::Error(error) => matches!(value, FormulaValue::Error(e) if e == error),
         }
+    }
+}
+
+/// A number, or text that reads as it: SUMIFS(K:K,A:A,DATE(2021,3,1)) adds the rows whose date
+/// is the text "3-1-21". Booleans never match.
+fn is_number(value: &FormulaValue, number: f64) -> bool {
+    let same = |n: f64| (n - number).abs() < 1e-10;
+    match value {
+        FormulaValue::Number(n) => same(*n),
+        FormulaValue::String(s) => crate::coerce::text_to_number(s).is_some_and(same),
+        _ => false,
     }
 
 }
@@ -286,6 +296,31 @@ mod tests {
         assert!(matcher.matches(&FormulaValue::String("apple".into())));
         assert!(matcher.matches(&FormulaValue::String("app".into())));
         assert!(!matcher.matches(&FormulaValue::String("ap".into())));
+    }
+
+    #[test]
+    fn test_text_criteria_skip_blanks_and_numbers() {
+        let any = CriteriaMatcher::new(&FormulaValue::String("*".into()));
+        assert!(any.matches(&FormulaValue::String("x".into())));
+        assert!(!any.matches(&FormulaValue::Empty));
+        assert!(!any.matches(&FormulaValue::Number(1.0)));
+        let before_m = CriteriaMatcher::new(&FormulaValue::String("<m".into()));
+        assert!(before_m.matches(&FormulaValue::String("a".into())));
+        assert!(!before_m.matches(&FormulaValue::Empty));
+        let not_x = CriteriaMatcher::new(&FormulaValue::String("<>x".into()));
+        assert!(not_x.matches(&FormulaValue::Empty));
+        assert!(not_x.matches(&FormulaValue::Number(1.0)));
+        assert!(!not_x.matches(&FormulaValue::String("X".into())));
+        let equals = CriteriaMatcher::new(&FormulaValue::String("=".into()));
+        assert!(equals.matches(&FormulaValue::Empty));
+        assert!(!equals.matches(&FormulaValue::String("x".into())));
+    }
+
+    #[test]
+    fn test_number_text_criteria_reads_text_as_numbers() {
+        let matcher = CriteriaMatcher::new(&FormulaValue::String("5".into()));
+        assert!(matcher.matches(&FormulaValue::String("5.0".into())));
+        assert!(matcher.matches(&FormulaValue::Number(5.0)));
     }
 
     #[test]

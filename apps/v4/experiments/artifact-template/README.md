@@ -124,7 +124,8 @@ slide IDs, referenced images and the 25/64 MiB limits, and retains 32 receipts
 for 24 hours (`advance` moves its receipt clock in milliseconds).
 The production bridge still owns authorization, size limits and atomic releases.
 
-Run checks on the build box only, from `tools/cloudflare`:
+Run checks on the build box only, from `tools/cloudflare` (from a worktree, set
+`repo` to its path):
 
 ```sh
 repo=office-ui

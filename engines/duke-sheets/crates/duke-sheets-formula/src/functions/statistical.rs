@@ -58,7 +58,7 @@ pub fn fn_countblank(
     let mut count = 0;
 
     for arg in args {
-        count += crate::evaluator::RangeSource::blanks_past(arg);
+        count += arg.blank_cells_past();
         match arg {
             FormulaValue::Empty => count += 1,
             FormulaValue::String(s) if s.is_empty() => count += 1,
@@ -118,7 +118,7 @@ pub fn fn_countif(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
     // a blank (`COUNTIF(A:A,"")`, `COUNTIF(A:A,"<>x")`).
     let mut count = 0;
     if matcher.matches(&FormulaValue::Empty) {
-        count += crate::evaluator::RangeSource::blanks_past(&args[0]);
+        count += args[0].blank_cells_past();
     }
 
     for row in range {
@@ -1151,7 +1151,7 @@ pub fn fn_countifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
     // every criterion matches a blank.
     let mut count = 0.0;
     if matchers.iter().all(|m| m.matches(&FormulaValue::Empty)) {
-        count += crate::evaluator::RangeSource::blanks_past(&args[0]) as f64;
+        count += args[0].blank_cells_past() as f64;
     }
 
     for row_idx in 0..rows {

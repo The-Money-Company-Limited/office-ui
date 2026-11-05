@@ -32,6 +32,16 @@ impl<'s> Sheet<'s> {
     }
 }
 
+/// Whether `expr` is a reference into another workbook: `[1]May!A1`, `'[1]May 2021'!A2:A9`.
+pub(crate) fn is_external(expr: &FormulaExpr) -> bool {
+    match expr {
+        FormulaExpr::ExternalRef(_) => true,
+        FormulaExpr::CellRef(r) => matches!(Sheet::of(r.sheet.as_deref()), Sheet::External(_)),
+        FormulaExpr::RangeRef(r) => matches!(Sheet::of(r.sheet.as_deref()), Sheet::External(_)),
+        _ => false,
+    }
+}
+
 /// Another workbook isn't open, so a formula that reads it keeps the value saved in the file, as
 /// Excel shows it until the link is refreshed.
 pub(crate) fn external(book: &str) -> FormulaError {

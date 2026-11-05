@@ -133,22 +133,19 @@ fn collect_numbers(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), Formu
     }
 }
 
-fn collect_dates(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), FormulaValue> {
+/// Every value in an argument, each one a number: XNPV pairs each cash flow with a date, so
+/// none is passed over and text among them is #VALUE!.
+fn collect_every_number(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
         FormulaValue::Array { data: rows, .. } => {
-            for row in rows {
-                for cell in row {
-                    collect_dates(cell, out)?;
-                }
+            for cell in rows.iter().flatten() {
+                collect_every_number(cell, out)?;
             }
             Ok(())
         }
         _ => {
-            let n = value
-                .as_number()
-                .ok_or(FormulaValue::Error(CellError::Value))?;
-            out.push(n.floor());
+            out.push(value.as_number().ok_or(FormulaValue::Error(CellError::Value))?);
             Ok(())
         }
     }
@@ -739,12 +736,13 @@ pub fn fn_xnpv(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
         return Ok(FormulaValue::Error(CellError::Value));
     };
 
-    if let Err(e) = collect_numbers(v, &mut values) {
+    if let Err(e) = collect_every_number(v, &mut values) {
         return Ok(e);
     }
-    if let Err(e) = collect_dates(d, &mut dates) {
+    if let Err(e) = collect_every_number(d, &mut dates) {
         return Ok(e);
     }
+    let dates: Vec<f64> = dates.into_iter().map(f64::floor).collect();
 
     if values.is_empty() || values.len() != dates.len() {
         return Ok(FormulaValue::Error(CellError::Num));

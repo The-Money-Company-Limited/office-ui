@@ -14,12 +14,12 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --target wasm
     && curl -fsSL https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz \
        | tar xz -C /usr/local/bin --strip-components=1 wasm-pack-v0.13.1-x86_64-unknown-linux-musl/wasm-pack
 
-# The browser tests load Playwright and its browsers from <repo>/.cod1460; `r up` links it here.
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/cod1460/browsers
+# The office template's and slides' browser tests load Playwright 1.49.1 and its Chromium from
+# <repo>/.cod1460, which `r sync` links here. Other packages bring their own Playwright.
 RUN mkdir -p /opt/cod1460/tmp && cd /opt/cod1460 \
     && echo '{"name":"cod1460","private":true}' > package.json \
     && npm install --no-audit --no-fund playwright@1.49.1 \
-    && npx playwright install --with-deps chromium \
+    && PLAYWRIGHT_BROWSERS_PATH=/opt/cod1460/browsers npx playwright install --with-deps chromium \
     && printf '<?xml version="1.0"?><fontconfig><dir>/usr/share/fonts</dir><cachedir>/tmp/fc</cachedir></fontconfig>' > fonts.conf \
     && rm -rf /var/lib/apt/lists/*
 

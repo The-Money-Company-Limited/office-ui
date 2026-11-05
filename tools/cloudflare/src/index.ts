@@ -1,35 +1,30 @@
 // The office-ui build box on Cloudflare: one container (4 vCPU, 12 GiB, 20 GB disk) owned by a
 // Durable Object, driven by tools/cloudflare/r over HTTP. Every request needs the RUNNER_TOKEN
-// secret. The box stops 30 minutes after its last request.
+// secret. Everyone with the token shares the one box, which stops 30 minutes after its last
+// request; its files go with it.
 import { DurableObject } from "cloudflare:workers";
 
 interface Env {
   BUILDER: DurableObjectNamespace<Builder>;
-  RUNNER_TOKEN: string;
+  RUNNER_TOKEN?: string;
 }
 
 const IDLE_MS = 30 * 60_000;
+const START_SECONDS = 60;
 const encoder = new TextEncoder();
 
 export class Builder extends DurableObject<Env> {
-  /** The running box, started from the `base` image when it isn't running. */
+  /** The running box, started from the `base` image (which sleeps) when it isn't running. */
   private async box() {
     const container = this.ctx.container;
     if (!container) throw new Error("No container is configured");
     if (!container.running) {
-      container.start({
-        image: container.images.base,
-        instance: "standard-4",
-        enableInternet: true,
-        entrypoint: ["sleep", "infinity"],
-      });
+      container.start({ image: container.images.base, instance: "standard-4", enableInternet: true });
       // start() returns before the box can run commands.
-      for (let attempt = 0; ; attempt++) {
-        try {
-          if ((await (await container.exec(["true"])).exitCode) === 0) break;
-        } catch (error) {
-          if (attempt >= 60) throw error;
-        }
+      for (let second = 0; ; second++) {
+        const ready = await container.exec(["true"]).then((p) => p.exitCode, () => null);
+        if (ready === 0) break;
+        if (second >= START_SECONDS) throw new Error(`the box did not start within ${START_SECONDS} s; try again`);
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
@@ -38,23 +33,29 @@ export class Builder extends DurableObject<Env> {
   }
 
   /**
-   * Runs `bash -lc command` in `cwd` with `stdin` as its input. With `exitLine`, the output (stdout
-   * and stderr together) ends with `__EXIT__ <code>` on its own line; without, it is the bare
-   * stdout, for downloads.
+   * Runs `bash -lc command` in `cwd` with `stdin` as its input. Its output streams back: stdout and
+   * stderr together, ending with `__EXIT__ <code>` on its own line ("exit"), or the bare stdout,
+   * for downloads ("raw").
    */
-  async run(command: string, cwd: string, stdin: ReadableStream | null, exitLine: boolean): Promise<ReadableStream> {
+  async run(command: string, cwd: string, stdin: ReadableStream | null, output: "exit" | "raw"): Promise<ReadableStream> {
     const box = await this.box();
     const process = await box.exec(["bash", "-lc", command], {
       cwd,
       stdin: stdin ?? undefined,
-      stderr: exitLine ? "combined" : "ignore",
+      stderr: output === "exit" ? "combined" : "ignore",
     });
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     void (async () => {
-      if (process.stdout) await process.stdout.pipeTo(writable, { preventClose: true });
-      const writer = writable.getWriter();
-      if (exitLine) await writer.write(encoder.encode(`\n__EXIT__ ${await process.exitCode}\n`));
-      await writer.close();
+      let code: number | null = null;
+      try {
+        if (process.stdout) await process.stdout.pipeTo(writable, { preventClose: true });
+        code = await process.exitCode;
+      } finally {
+        // A command killed (out of memory) or a broken pipe still ends the stream, as a failure.
+        const writer = writable.getWriter();
+        if (output === "exit") await writer.write(encoder.encode(`\n__EXIT__ ${code ?? 1}\n`)).catch(() => {});
+        await writer.close().catch(() => {});
+      }
     })();
     return readable;
   }
@@ -66,36 +67,32 @@ export class Builder extends DurableObject<Env> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    if (!env.RUNNER_TOKEN || request.headers.get("authorization") !== `Bearer ${env.RUNNER_TOKEN}`) {
+    if (!env.RUNNER_TOKEN) {
+      return new Response("RUNNER_TOKEN is not set on the office-builds Worker (wrangler secret put RUNNER_TOKEN)\n", { status: 500 });
+    }
+    if (request.headers.get("authorization") !== `Bearer ${env.RUNNER_TOKEN}`) {
       return new Response("unauthorized\n", { status: 401 });
     }
     const url = new URL(request.url);
     const box = env.BUILDER.getByName("office-builds");
-    const cwd = url.searchParams.get("cwd") ?? "/work";
-    const text = (body: ReadableStream) => new Response(body, { headers: { "content-type": "text/plain; charset=utf-8" } });
-    switch (`${request.method} ${url.pathname}`) {
-      // A command; its output streams back, ending with the exit code line.
-      case "POST /run": {
-        const { command } = (await request.json()) as { command: string };
-        return text(await box.run(command, cwd, null, true));
+    try {
+      switch (`${request.method} ${url.pathname}`) {
+        // ?command=…&cwd=…&output=exit|raw, with the request body (if any) as the command's input.
+        case "POST /run": {
+          const command = url.searchParams.get("command");
+          if (!command) return new Response("command is required\n", { status: 400 });
+          const output = url.searchParams.get("output") === "raw" ? "raw" : "exit";
+          const body = await box.run(command, url.searchParams.get("cwd") ?? "/work", request.body, output);
+          return new Response(body, { headers: { "content-type": "text/plain; charset=utf-8" } });
+        }
+        case "POST /down":
+          await box.down();
+          return new Response("down\n");
+        default:
+          return new Response("not found: use POST /run or POST /down\n", { status: 404 });
       }
-      // Bytes from the request body into a file (a chunk of an upload).
-      case "PUT /file": {
-        const path = url.searchParams.get("path");
-        if (!path) return new Response("path is required\n", { status: 400 });
-        const quoted = `'${path.replaceAll("'", "'\\''")}'`;
-        return text(await box.run(`mkdir -p "$(dirname ${quoted})" && cat > ${quoted}`, "/", request.body, true));
-      }
-      // A command's bare stdout, such as `tar czf - dist`.
-      case "POST /stdout": {
-        const { command } = (await request.json()) as { command: string };
-        return new Response(await box.run(command, cwd, null, false));
-      }
-      case "POST /down":
-        await box.down();
-        return new Response("down\n");
-      default:
-        return new Response("not found\n", { status: 404 });
+    } catch (error) {
+      return new Response(`${error instanceof Error ? error.message : error}\n`, { status: 503 });
     }
   },
 };

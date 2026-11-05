@@ -56,8 +56,6 @@ use shared_strings::SharedStringEntry;
 
 use workbook::{read_part_rels, read_workbook_rels, read_workbook_xml};
 
-/// Resolve a relative path from a drawing's .rels against the drawing's own path.
-
 /// An element's text as an XML parser reads it: a line break written raw in the file (`\r\n` or
 /// `\r`) is `\n`, as Excel reads it, while `&#13;` and `_x000D_` stay carriage returns.
 pub(crate) fn xml_text(text: &quick_xml::events::BytesText) -> Result<String, quick_xml::escape::EscapeError> {

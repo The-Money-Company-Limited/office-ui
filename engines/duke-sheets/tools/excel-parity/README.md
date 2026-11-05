@@ -33,7 +33,9 @@ $r run ~/Desktop/Code/office-ui/engines/duke-sheets \
   'node tools/excel-parity/parity.mjs bindings/wasm/pkg /work/ssb /tmp/parity.json --max 328'
 ```
 
-`parity.json` lists each mismatch with its file, cell, formula, Excel's value and the engine's.
+`parity.json` lists each mismatch with its file, cell, formula, Excel's value and the engine's;
+read it with `$r run … 'cat /tmp/parity.json'`. The corpus and results go when the box stops, so
+download the corpus again on a fresh box.
 
 Excel saves a formula's text result without trailing spaces, so text that differs only there
 counts as the same.

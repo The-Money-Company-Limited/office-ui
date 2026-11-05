@@ -2,6 +2,7 @@
 
 use crate::error::FormulaResult;
 use crate::evaluator::{EvaluationContext, FormulaValue, ImageInfo, ImageSizing};
+use super::lookup::compare_lookup_values;
 use chrono::{Datelike, Duration, NaiveDate};
 use duke_sheets_core::CellError;
 use quick_xml::events::{BytesStart, Event};
@@ -69,7 +70,9 @@ fn flat_vector(a: &[Vec<FormulaValue>], by_col: bool) -> Vec<FormulaValue> {
     out
 }
 
-fn compare_lookup_values(a: &FormulaValue, b: &FormulaValue) -> Option<Ordering> {
+/// The order SORT and SORTBY put two keys in: numbers compare with numeric text, and a blank
+/// sorts as 0 or "".
+fn compare_sort_values(a: &FormulaValue, b: &FormulaValue) -> Option<Ordering> {
     match (a, b) {
         (FormulaValue::Number(x), FormulaValue::Number(y)) => x.partial_cmp(y),
         (FormulaValue::Boolean(x), FormulaValue::Boolean(y)) => Some(x.cmp(y)),
@@ -685,11 +688,12 @@ pub fn fn_lookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         return Ok(FormulaValue::Error(CellError::Na));
     }
 
-    // Like the approximate MATCH, blanks and values of another type are passed over:
-    // LOOKUP(9^9,A1:E1) is the last number in the row.
+    // Blanks and values of another type are passed over, as in the approximate MATCH:
+    // LOOKUP(9^9,A1:E1) is the last number in the row. Unlike MATCH, a larger value doesn't end
+    // the search, so LOOKUP(2,1/(A1:A9=x),B1:B9) finds the last match.
     let mut best: Option<usize> = None;
     for (i, item) in lookup_vec.iter().enumerate() {
-        if let Some(ord) = super::lookup::compare_lookup_values(item, &lookup_value) {
+        if let Some(ord) = compare_lookup_values(item, &lookup_value) {
             if ord == Ordering::Equal || ord == Ordering::Less {
                 best = Some(i);
             }
@@ -741,7 +745,7 @@ pub fn fn_sort(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
             if tr.is_empty() || idx >= tr[0].len() {
                 return Ok(FormulaValue::Error(CellError::Value));
             }
-            tr.sort_by(|a, b| compare_lookup_values(&a[idx], &b[idx]).unwrap_or(Ordering::Equal));
+            tr.sort_by(|a, b| compare_sort_values(&a[idx], &b[idx]).unwrap_or(Ordering::Equal));
             if sort_order == -1 {
                 tr.reverse();
             }
@@ -760,7 +764,7 @@ pub fn fn_sort(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     if arr.is_empty() || idx >= arr[0].len() {
         return Ok(FormulaValue::Error(CellError::Value));
     }
-    arr.sort_by(|a, b| compare_lookup_values(&a[idx], &b[idx]).unwrap_or(Ordering::Equal));
+    arr.sort_by(|a, b| compare_sort_values(&a[idx], &b[idx]).unwrap_or(Ordering::Equal));
     if sort_order == -1 {
         arr.reverse();
     }
@@ -803,7 +807,7 @@ pub fn fn_sortby(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
     let mut idxs: Vec<usize> = (0..arr.len()).collect();
     idxs.sort_by(|&a, &b| {
         for (key, order) in &keys {
-            let ord = compare_lookup_values(&key[a], &key[b]).unwrap_or(Ordering::Equal);
+            let ord = compare_sort_values(&key[a], &key[b]).unwrap_or(Ordering::Equal);
             if ord != Ordering::Equal {
                 return if *order == -1 { ord.reverse() } else { ord };
             }

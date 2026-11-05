@@ -5,6 +5,8 @@ name: office-builds
 on:
   workflow_dispatch:
   push:
+    # One box is shared, so only main deploys it; run the workflow by hand to try a branch.
+    branches: [main]
     paths:
       - tools/cloudflare/**
       - .github/workflows/office-builds.yml

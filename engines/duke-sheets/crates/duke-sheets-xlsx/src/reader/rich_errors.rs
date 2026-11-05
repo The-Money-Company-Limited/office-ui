@@ -12,26 +12,67 @@ use quick_xml::reader::Reader;
 /// The error each `vm` index (1-based, as on a cell) stands for, where it is one the cell's
 /// `<v>` can't hold. Parts that are missing or unreadable give no entries.
 pub(crate) fn value_errors(metadata: &[u8], rich_values: &[u8], structures: &[u8]) -> HashMap<u32, CellError> {
-    // metadata.xml: <metadataType name=…> in order (rc t is 1-based into them), the XLRICHVALUE
-    // <futureMetadata> blocks' <xlrd:rvb i=…> (rc v is 0-based into them), and <valueMetadata>
-    // blocks' <rc t v> (a cell's vm is 1-based into them).
+    let mut errors = HashMap::new();
+    let blocks = value_metadata(metadata);
+    let keys = structure_keys(structures);
+    let values = rich_value_fields(rich_values);
+    for (index, rich) in blocks.into_iter().enumerate() {
+        let Some((structure, fields)) = rich.and_then(|rich| values.get(rich)) else { continue };
+        let Some((kind, names)) = keys.get(*structure) else { continue };
+        if kind != "_error" {
+            continue;
+        }
+        let error_type = names.iter().position(|n| n == "errorType").and_then(|i| fields.get(i));
+        // 8 is #SPILL!, the one Excel shows where a dynamic array can't spill.
+        if error_type.map(String::as_str) == Some("8") {
+            errors.insert(index as u32 + 1, CellError::Spill);
+        }
+    }
+    errors
+}
+
+/// metadata.xml: for each `<valueMetadata>` block (one per `vm`), the rich value it points at.
+/// Its `<rc t v>` names a `<metadataType>` (`t`, 1-based) and, for XLRICHVALUE, a block of that
+/// `<futureMetadata>` (`v`, 0-based) whose `<xlrd:rvb i>` is the rich value.
+fn value_metadata(xml: &[u8]) -> Vec<Option<usize>> {
+    #[derive(PartialEq)]
+    enum Section {
+        Other,
+        RichValues,
+        ValueMetadata,
+    }
     let mut types = Vec::new();
     let mut rich_value_of_block = Vec::new();
-    let mut value_blocks = Vec::new();
-    let mut section = "";
-    each_element(metadata, |name, e| match name {
+    let mut blocks: Vec<Option<(usize, usize)>> = Vec::new();
+    let mut section = Section::Other;
+    each_element(xml, |name, e| match name {
         b"metadataType" => types.push(attr(e, b"name").unwrap_or_default()),
-        b"futureMetadata" => section = if attr(e, b"name").as_deref() == Some("XLRICHVALUE") { "rich" } else { "" },
-        b"valueMetadata" => section = "values",
-        b"cellMetadata" => section = "",
-        b"rvb" if section == "rich" => rich_value_of_block.push(number(e, b"i")),
-        b"rc" if section == "values" => value_blocks.push((number(e, b"t"), number(e, b"v"))),
+        b"futureMetadata" if attr(e, b"name").as_deref() == Some("XLRICHVALUE") => section = Section::RichValues,
+        b"futureMetadata" | b"cellMetadata" => section = Section::Other,
+        b"valueMetadata" => section = Section::ValueMetadata,
+        b"rvb" if section == Section::RichValues => rich_value_of_block.push(number(e, b"i")),
+        b"bk" if section == Section::ValueMetadata => blocks.push(None),
+        b"rc" if section == Section::ValueMetadata => {
+            if let (Some(block), Some(t), Some(v)) = (blocks.last_mut(), number(e, b"t"), number(e, b"v")) {
+                *block = Some((t, v));
+            }
+        }
         _ => {}
     });
+    let rich_type = types.iter().position(|t| t == "XLRICHVALUE").map(|i| i + 1);
+    blocks
+        .into_iter()
+        .map(|block| match block {
+            Some((t, v)) if Some(t) == rich_type => rich_value_of_block.get(v).copied().flatten(),
+            _ => None,
+        })
+        .collect()
+}
 
-    // rdrichvaluestructure.xml: <s t=…> with its <k n=…> keys in order.
+/// rdrichvaluestructure.xml: each `<s t>` with its `<k n>` key names in order.
+fn structure_keys(xml: &[u8]) -> Vec<(String, Vec<String>)> {
     let mut keys: Vec<(String, Vec<String>)> = Vec::new();
-    each_element(structures, |name, e| match name {
+    each_element(xml, |name, e| match name {
         b"s" => keys.push((attr(e, b"t").unwrap_or_default(), Vec::new())),
         b"k" => {
             if let Some((_, names)) = keys.last_mut() {
@@ -40,10 +81,13 @@ pub(crate) fn value_errors(metadata: &[u8], rich_values: &[u8], structures: &[u8
         }
         _ => {}
     });
+    keys
+}
 
-    // rdrichvalue.xml: <rv s=…> with one <v> per key.
+/// rdrichvalue.xml: each `<rv s>` (its structure) with one `<v>` per key, an empty one included.
+fn rich_value_fields(xml: &[u8]) -> Vec<(usize, Vec<String>)> {
     let mut values: Vec<(usize, Vec<String>)> = Vec::new();
-    let mut reader = Reader::from_reader(rich_values);
+    let mut reader = Reader::from_reader(xml);
     let mut buf = Vec::new();
     let mut in_value = false;
     loop {
@@ -51,10 +95,18 @@ pub(crate) fn value_errors(metadata: &[u8], rich_values: &[u8], structures: &[u8
             Ok(Event::Start(e)) if e.local_name().as_ref() == b"rv" => {
                 values.push((number(&e, b"s").unwrap_or(usize::MAX), Vec::new()))
             }
-            Ok(Event::Start(e)) if e.local_name().as_ref() == b"v" => in_value = true,
+            Ok(event @ (Event::Start(_) | Event::Empty(_))) => {
+                let (Event::Start(e) | Event::Empty(e)) = &event else { unreachable!() };
+                if e.local_name().as_ref() == b"v" {
+                    if let Some((_, fields)) = values.last_mut() {
+                        fields.push(String::new());
+                    }
+                    in_value = matches!(event, Event::Start(_));
+                }
+            }
             Ok(Event::Text(t)) if in_value => {
-                if let (Some((_, vs)), Ok(text)) = (values.last_mut(), t.unescape()) {
-                    vs.push(text.into_owned());
+                if let (Some(field), Ok(text)) = (values.last_mut().and_then(|(_, f)| f.last_mut()), t.unescape()) {
+                    field.push_str(&text);
                 }
             }
             Ok(Event::End(e)) if e.local_name().as_ref() == b"v" => in_value = false,
@@ -63,26 +115,7 @@ pub(crate) fn value_errors(metadata: &[u8], rich_values: &[u8], structures: &[u8
         }
         buf.clear();
     }
-
-    let rich_type = types.iter().position(|t| t == "XLRICHVALUE").map(|i| i + 1);
-    let mut errors = HashMap::new();
-    for (vm, (t, v)) in value_blocks.into_iter().enumerate() {
-        if t.is_none() || t != rich_type {
-            continue;
-        }
-        let Some(&Some(rich)) = v.and_then(|v| rich_value_of_block.get(v)) else { continue };
-        let Some((structure, fields)) = values.get(rich) else { continue };
-        let Some((kind, names)) = keys.get(*structure) else { continue };
-        if kind != "_error" {
-            continue;
-        }
-        let error_type = names.iter().position(|n| n == "errorType").and_then(|i| fields.get(i));
-        // 8 is #SPILL!, the one Excel shows where a dynamic array can't spill.
-        if error_type.map(String::as_str) == Some("8") {
-            errors.insert(vm as u32 + 1, CellError::Spill);
-        }
-    }
-    errors
+    values
 }
 
 fn each_element(xml: &[u8], mut visit: impl FnMut(&[u8], &BytesStart)) {
@@ -123,6 +156,13 @@ mod tests {
         let errors = value_errors(METADATA.as_bytes(), VALUES.as_bytes(), STRUCTURES.as_bytes());
         assert_eq!(errors.get(&1), Some(&CellError::Spill));
         assert_eq!(errors.len(), 1);
+    }
+
+    #[test]
+    fn an_empty_field_keeps_the_others_in_place() {
+        let values = r#"<rvData count="1"><rv s="0"><v/><v>8</v><v></v><v>3</v></rv></rvData>"#;
+        let errors = value_errors(METADATA.as_bytes(), values.as_bytes(), STRUCTURES.as_bytes());
+        assert_eq!(errors.get(&1), Some(&CellError::Spill));
     }
 
     #[test]

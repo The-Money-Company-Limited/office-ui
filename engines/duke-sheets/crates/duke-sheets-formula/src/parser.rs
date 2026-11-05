@@ -1025,12 +1025,10 @@ impl<'a> FormulaParser<'a> {
 
     fn parse_function_call(&mut self, name: String) -> FormulaResult<FormulaExpr> {
         let args = self.parse_call_args()?;
-        let call = FormulaExpr::Function {
-            name: name.to_uppercase(),
-            args,
-        };
+        let name = name.to_uppercase();
         // A LAMBDA called where it is written: =LAMBDA(x,x+1)(2)
-        let lambda = matches!(name.to_uppercase().as_str(), "LAMBDA" | "_XLFN.LAMBDA");
+        let lambda = crate::evaluator::function_name(&name) == "LAMBDA";
+        let call = FormulaExpr::Function { name, args };
         if lambda && matches!(self.current_token(), Token::LeftParen) {
             let mut args = vec![call];
             args.extend(self.parse_call_args()?);
