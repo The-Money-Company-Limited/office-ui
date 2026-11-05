@@ -43,7 +43,7 @@ export class Builder extends DurableObject<Env> {
     const box = await this.box();
     // The shell changes to cwd itself: given a directory that isn't there, exec reports `bash` as
     // not found.
-    const enter = 'cd -- "$1" 2>/dev/null || { echo "$1 is not on the box. Run r sync first: a box that stopped starts empty." >&2; exit 1; }; exec bash -lc "$2"';
+    const enter = '[ -d "$1" ] && cd -- "$1" || { echo "$1 is not on the box. Run r sync first: a box that stopped starts empty." >&2; exit 1; }; exec bash -lc "$2"';
     const process = await box.exec(["bash", "-c", enter, "bash", cwd, command], {
       cwd: "/",
       stdin: stdin ?? undefined,
