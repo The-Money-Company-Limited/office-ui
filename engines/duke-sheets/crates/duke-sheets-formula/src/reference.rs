@@ -64,6 +64,7 @@ pub(crate) fn reference_of(
             Sheet::External(book) => return Err(external(book)),
             _ => Ok((r.sheet.clone(), r.range)),
         },
+        FormulaExpr::StructuredRef(sr) => ctx.structured_target(sr)?,
         FormulaExpr::NameRef(name) if ctx.local(name).is_none() => {
             match name_formula(name, ctx) {
                 Some(ast @ (FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_))) => return reference_of(&ast, ctx),

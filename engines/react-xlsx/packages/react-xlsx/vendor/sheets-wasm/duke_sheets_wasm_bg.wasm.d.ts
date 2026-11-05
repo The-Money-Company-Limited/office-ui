@@ -35,6 +35,7 @@ export const cellvalue_is_text: (a: number) => number;
 export const cellvalue_toJs: (a: number) => any;
 export const cellvalue_toString: (a: number) => [number, number];
 export const init: () => void;
+export const setLocale: (a: number, b: number) => void;
 export const workbook_addSheet: (a: number, b: number, c: number) => [number, number, number];
 export const workbook_calculate: (a: number, b: number) => [number, number, number];
 export const workbook_defineName: (a: number, b: number, c: number, d: number, e: number) => [number, number];

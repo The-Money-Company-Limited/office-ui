@@ -868,6 +868,15 @@ export class Worksheet {
 
 export function init(): void;
 
+/**
+ * Sets the regional settings formulas compute with in workbooks opened or created from now on,
+ * from a language tag such as `en-GB` (the browser's `navigator.language`): the order of day and
+ * month in dates written as text, the language of TEXT's month and day names and date codes, and
+ * the decimal separator. The default is en-US. The grid's own number display doesn't follow it
+ * yet.
+ */
+export function setLocale(tag: string): void;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -906,6 +915,7 @@ export interface InitOutput {
     readonly cellvalue_toJs: (a: number) => any;
     readonly cellvalue_toString: (a: number) => [number, number];
     readonly init: () => void;
+    readonly setLocale: (a: number, b: number) => void;
     readonly workbook_addSheet: (a: number, b: number, c: number) => [number, number, number];
     readonly workbook_calculate: (a: number, b: number) => [number, number, number];
     readonly workbook_defineName: (a: number, b: number, c: number, d: number, e: number) => [number, number];

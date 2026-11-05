@@ -1,9 +1,15 @@
 //! Text read as a number, the way Excel reads it wherever a number is needed (`="12%"*2`,
 //! `VALUE("1,234")`, `MONTH("2024-03-15")`, `="6:30 PM"+0`): numbers with thousands separators,
 //! a currency sign, a percent sign or parentheses for negatives, dates, times, and dates with
-//! times. Dates are 1900-system serials and en-US month-first, the engine's default locale.
+//! times. Dates are 1900-system serials. The workbook's regional settings (crate::regional) decide
+//! the order of day and month, the month names besides English ones, and the decimal separator.
+
+use std::borrow::Cow;
 
 use chrono::{Datelike, NaiveDate};
+use duke_sheets_core::DateOrder;
+
+use crate::regional::month_named;
 
 /// The number `text` stands for, or `None` when Excel would give #VALUE!.
 pub fn text_to_number(text: &str) -> Option<f64> {
@@ -32,6 +38,24 @@ fn plain_number(text: &str) -> Option<f64> {
         _ => (1.0, text),
     };
     let text = text.strip_prefix('$').map(str::trim_start).unwrap_or(text);
+    // Text written with the regional separators (1.234,5 or 1'234.5), read as 1,234.5. The other
+    // separator in it, where it isn't one of the regional ones, makes it not a number.
+    let settings = crate::regional::current();
+    let text: Cow<str> = if (settings.decimal_separator, settings.thousands_separator) == ('.', ',') {
+        text.into()
+    } else {
+        let space_grouped = settings.thousands_separator == '\u{a0}';
+        text.chars()
+            .map(|c| match c {
+                c if c == settings.decimal_separator => Some('.'),
+                c if c == settings.thousands_separator || (space_grouped && matches!(c, ' ' | '\u{202f}')) => Some(','),
+                '.' | ',' => None,
+                c => Some(c),
+            })
+            .collect::<Option<String>>()?
+            .into()
+    };
+    let text = text.as_ref();
     if text.is_empty() || !text.starts_with(|c: char| c.is_ascii_digit() || c == '.') {
         return None;
     }
@@ -70,22 +94,6 @@ fn plain_number(text: &str) -> Option<f64> {
         number /= 100.0;
     }
     Some(if negated { -number } else { sign * number })
-}
-
-const MONTHS: [&str; 12] = [
-    "january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
-    "november", "december",
-];
-
-fn month_named(word: &str) -> Option<u32> {
-    let word = word.trim_end_matches('.').to_ascii_lowercase();
-    if word.len() < 3 {
-        return None;
-    }
-    MONTHS
-        .iter()
-        .position(|m| m.starts_with(&word) && (word.len() == 3 || *m == word))
-        .map(|i| i as u32 + 1)
 }
 
 /// The date in text that is a date, or a date followed by a time (DATEVALUE).
@@ -160,7 +168,11 @@ fn time_of_day(text: &str) -> Option<f64> {
 
 /// `2024-03-15`, `2024/3/15`, `3/15/2024`, `3-15-24`, `15-Mar-2024`, `15 March 2024`,
 /// `Mar 15, 2024`, `March 15 2024`, `Mar-2024` (the 1st), `1Jan2016` (a month name needs no separators).
+/// Three numbers are month first, day first or year first, as the regional settings order them,
+/// and may also be separated by the regional date separator (`15.3.2024`); a four-digit first
+/// number is always the year.
 fn date(text: &str) -> Option<f64> {
+    let settings = crate::regional::current();
     let boundary = |a: u8, b: u8| a.is_ascii_alphanumeric() && b.is_ascii_alphanumeric() && a.is_ascii_digit() != b.is_ascii_digit();
     let spaced: std::borrow::Cow<str> = if text.as_bytes().windows(2).any(|w| boundary(w[0], w[1])) {
         let mut spaced = String::with_capacity(text.len() + 4);
@@ -177,14 +189,18 @@ fn date(text: &str) -> Option<f64> {
         text.into()
     };
     let parts: Vec<&str> = spaced
-        .split(|c: char| c == '/' || c == '-' || c == ' ' || c == ',')
+        .split(|c: char| matches!(c, '/' | '-' | ' ' | ',') || c == settings.date_separator)
         .filter(|p| !p.is_empty())
         .collect();
     let numeric = |s: &str| (s.chars().all(|c| c.is_ascii_digit()) && !s.is_empty()).then(|| s.parse::<i32>().ok()).flatten();
     let (year, month, day) = match parts.as_slice() {
         [a, b, c] => match (numeric(a), numeric(b), numeric(c)) {
             (Some(y), Some(m), Some(d)) if a.len() == 4 => (y, m as u32, d),
-            (Some(m), Some(d), Some(y)) => (full_year(y, c.len())?, m as u32, d),
+            (Some(x), Some(y), Some(z)) => match settings.date_order {
+                DateOrder::MonthFirst => (full_year(z, c.len())?, x as u32, y),
+                DateOrder::DayFirst => (full_year(z, c.len())?, y as u32, x),
+                DateOrder::YearFirst => (full_year(x, a.len())?, y as u32, z),
+            },
             (Some(d), None, Some(y)) => (full_year(y, c.len())?, month_named(b)?, d),
             (None, Some(d), Some(y)) => (full_year(y, c.len())?, month_named(a)?, d),
             _ => return None,
@@ -223,8 +239,16 @@ pub fn round_15(n: f64) -> f64 {
 
 /// A number as Excel writes it as text (`&`, CONCATENATE, a text argument): at most 15
 /// significant digits, so `=1/3&""` is "0.333333333333333" and `=0.1+0.2&""` is "0.3", in
-/// scientific notation from 1E+15 up and below 1E-09.
+/// scientific notation from 1E+15 up and below 1E-09. The decimal separator is the regional one.
 pub fn number_text(n: f64) -> String {
+    let text = number_text_with_point(n);
+    match crate::regional::current().decimal_separator {
+        '.' => text,
+        separator => text.replace('.', &separator.to_string()),
+    }
+}
+
+fn number_text_with_point(n: f64) -> String {
     if n == 0.0 || !n.is_finite() {
         return "0".to_string();
     }
@@ -294,5 +318,32 @@ mod tests {
         for text in ["2024-02-30", "13/1/2024", "12:60", "13:00 PM", "Marchy 5, 2024"] {
             assert_eq!(text_to_number(text), None, "{text}");
         }
+    }
+
+    #[test]
+    fn reads_text_in_the_regional_settings() {
+        use crate::regional::with_settings;
+        with_settings("en-GB", || {
+            assert_eq!(text_to_number("13/3/2024"), Some(45364.0));
+            assert_eq!(text_to_number("2024-03-13"), Some(45364.0));
+            assert_eq!(text_to_number("3/13/2024"), None);
+            assert_eq!(text_to_number("1,234.5"), Some(1234.5));
+        });
+        with_settings("de-DE", || {
+            assert_eq!(text_to_number("13.3.2024"), Some(45364.0));
+            assert_eq!(text_to_number("1.234,5"), Some(1234.5));
+            assert_eq!(text_to_number("1,5"), Some(1.5));
+            assert_eq!(super::number_text(1.5), "1,5");
+        });
+        with_settings("sv-SE", || {
+            assert_eq!(text_to_number("24-03-13"), Some(45364.0));
+            assert_eq!(text_to_number("1 234,5"), Some(1234.5));
+        });
+        with_settings("es-ES", || assert_eq!(text_to_number("13 marzo 2024"), Some(45364.0)));
+        with_settings("de-CH", || {
+            assert_eq!(text_to_number("1'234.5"), Some(1234.5));
+            assert_eq!(text_to_number("13.3.2024"), Some(45364.0));
+            assert_eq!(text_to_number("1,5"), None);
+        });
     }
 }

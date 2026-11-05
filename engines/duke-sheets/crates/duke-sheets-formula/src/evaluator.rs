@@ -420,6 +420,14 @@ impl<'a> EvaluationContext<'a> {
     /// `Table1[[#Headers],[Col]]`, etc. by finding the named table
     /// across all worksheets and computing the target cell range.
     pub fn resolve_structured_ref(&self, sr: &StructuredReference) -> FormulaResult<FormulaValue> {
+        Ok(match self.structured_target(sr)? {
+            Ok(target) => reference::read(self, &target),
+            Err(e) => FormulaValue::Error(e),
+        })
+    }
+
+    /// The cells a structured reference covers, or the error Excel gives for it.
+    pub(crate) fn structured_target(&self, sr: &StructuredReference) -> FormulaResult<Result<reference::Target, CellError>> {
         let workbook = self.workbook.ok_or_else(|| {
             FormulaError::InvalidReference(
                 "No workbook context for structured reference".to_string(),
@@ -435,13 +443,12 @@ impl<'a> EvaluationContext<'a> {
         if sr.specifiers.contains(&crate::ast::StructuredRefSpecifier::ThisRow)
             && sr.span(table, None).is_some_and(|rows| !(rows.start.row..=rows.end.row).contains(&self.current_row))
         {
-            return Ok(FormulaValue::Error(CellError::Value));
+            return Ok(Err(CellError::Value));
         }
         let Some(cells) = sr.span(table, Some(self.current_row)) else {
-            return Ok(FormulaValue::Error(CellError::Ref));
+            return Ok(Err(CellError::Ref));
         };
-        let sheet = self.sheet_name_for(workbook, sheet_idx);
-        Ok(reference::read(self, &(sheet, cells)))
+        Ok(Ok((self.sheet_name_for(workbook, sheet_idx), cells)))
     }
 
     /// Find a table by name across all worksheets.
@@ -506,6 +513,7 @@ impl<'a> EvaluationContext<'a> {
 
 /// Evaluate a formula expression
 pub fn evaluate(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    let _regional = crate::regional::enter(ctx);
     match expr {
         FormulaExpr::Number(n) => Ok(FormulaValue::Number(*n)),
         FormulaExpr::String(s) => Ok(FormulaValue::String(s.clone())),

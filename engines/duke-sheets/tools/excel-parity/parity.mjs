@@ -34,11 +34,17 @@ function same(a, b) {
 // Functions whose result legitimately differs from the saved one: the clock, randomness, the file's own location.
 const volatile = /\b(NOW|TODAY|RAND|RANDBETWEEN|RANDARRAY|CELL|INFO|OFFSET\(.*TODAY)\s*\(/i
 
+// The regional settings each workbook was computed with. Excel takes them from the computer and
+// the file doesn't record them, so these come from the results Excel saved: day-first date text,
+// Spanish month names, Swedish TEXT codes. Every other workbook is en-US.
+const locales = { 49196: "en-GB", 33157: "en-GB", 31202: "es-ES", 45896: "sv-SE" }
+
 const report = { files: 0, failedToOpen: [], formulas: 0, compared: 0, mismatches: [] }
 for await (const file of walk(dir)) {
   report.files++
   let wb
   try {
+    wasm.setLocale(locales[path.basename(path.dirname(file))] ?? "en-US")
     wb = wasm.Workbook.fromBytes(new Uint8Array(await readFile(file)))
   } catch (error) {
     report.failedToOpen.push({ file: path.relative(dir, file), error: String(error).slice(0, 200) })

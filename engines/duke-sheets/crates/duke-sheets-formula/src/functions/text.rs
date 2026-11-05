@@ -71,6 +71,18 @@ fn format_fixed_number(number: f64, decimals: i64, with_commas: bool) -> String 
     if with_commas {
         out = add_thousands_separators(&out);
     }
+    // FIXED and DOLLAR write the regional separators, so VALUE reads them back.
+    let regional = crate::regional::current();
+    if (regional.decimal_separator, regional.thousands_separator) != ('.', ',') {
+        out = out
+            .chars()
+            .map(|c| match c {
+                '.' => regional.decimal_separator,
+                ',' => regional.thousands_separator,
+                c => c,
+            })
+            .collect();
+    }
     out
 }
 
@@ -586,7 +598,8 @@ pub fn fn_text(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     }
 
     // TEXT formats with the same number-format engine as the grid, so every format code Excel
-    // accepts works: dates, times, sections, conditions, scaling, fractions and literals.
+    // accepts works: dates, times, sections, conditions, scaling, fractions and literals. The
+    // format and the month and day names are in the regional settings' language.
     let format_code = format_text.as_string();
     if format_code.is_empty() {
         // An empty format shows text as it is and a number as nothing.
@@ -595,10 +608,10 @@ pub fn fn_text(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
             _ => String::new(),
         }));
     }
-    let Ok(format) = ssfmt::NumberFormat::parse(&format_code) else {
+    let Ok(format) = ssfmt::NumberFormat::parse(&crate::regional::format_code(&format_code)) else {
         return Ok(FormulaValue::Error(CellError::Value));
     };
-    let options = ssfmt::FormatOptions::default();
+    let options = ssfmt::FormatOptions { locale: crate::regional::current().format_locale(), ..Default::default() };
     let text = match value {
         FormulaValue::String(text) => match value.as_number() {
             Some(number) => format.format(number, &options),
@@ -763,9 +776,17 @@ pub fn fn_numbervalue(
     if matches!(text_arg, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
+    // A number needs no reading; text written out from one would carry the regional separator.
+    if let FormulaValue::Number(n) = text_arg {
+        if args.len() == 1 {
+            return Ok(FormulaValue::Number(*n));
+        }
+    }
 
+    // Left out, the separators are the regional ones.
+    let regional = crate::regional::current();
     let decimal_separator = match args.get(1) {
-        None => ".".to_string(),
+        None => regional.decimal_separator.to_string(),
         Some(v) => {
             if let FormulaValue::Error(e) = v {
                 return Ok(FormulaValue::Error(*e));
@@ -782,7 +803,7 @@ pub fn fn_numbervalue(
     };
 
     let group_separator = match args.get(2) {
-        None => ",".to_string(),
+        None => regional.thousands_separator.to_string(),
         Some(v) => {
             if let FormulaValue::Error(e) = v {
                 return Ok(FormulaValue::Error(*e));

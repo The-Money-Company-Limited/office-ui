@@ -16,9 +16,10 @@ const same = (got, want) =>
     ? Math.abs(got - want) <= 1e-9 * Math.max(1, Math.abs(want))
     : want === "" ? got === "" || got === null : got === want
 const results = []
-for (const [name, cells, f, want, at = "Z1", fmt] of cases) {
+for (const [name, cells, f, want, at = "Z1", fmt, locale = "en-US"] of cases) {
   const r = { name, f, want }
   try {
+    wasm.setLocale(locale)
     const wb = new wasm.Workbook()
     const sheet = (n) => wb.sheetIndex(n) ?? wb.addSheet(n)
     for (const [key, v] of Object.entries(cells)) {

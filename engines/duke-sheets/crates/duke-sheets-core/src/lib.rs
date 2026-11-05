@@ -39,6 +39,7 @@ pub mod locale;
 pub mod named_range;
 pub mod protection;
 pub mod range;
+pub mod regional;
 pub mod rich_text;
 pub mod row;
 pub mod style;
@@ -79,6 +80,7 @@ pub use form_control::{
 pub use hyperlink::Hyperlink;
 pub use locale::Locale;
 pub use protection::{hash_legacy_protection_password, ProtectedRange, WorkbookProtection};
+pub use regional::{DateOrder, Language, RegionalSettings};
 pub use rich_text::{rich_text_to_plain, RichTextRun, RunFont};
 pub use table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};
 pub use validation::{DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType};

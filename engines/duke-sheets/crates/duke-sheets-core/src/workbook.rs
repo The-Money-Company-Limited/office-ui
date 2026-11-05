@@ -1275,6 +1275,8 @@ pub struct WorkbookSettings {
     pub calc_on_open: bool,
     /// Default theme name
     pub theme: Option<String>,
+    /// The regional settings formulas compute with. Files don't record them: the host sets them.
+    pub regional: crate::RegionalSettings,
 }
 
 impl Default for WorkbookSettings {
@@ -1285,6 +1287,7 @@ impl Default for WorkbookSettings {
             password_hash: None,
             calc_on_open: true,
             theme: None,
+            regional: crate::RegionalSettings::default(),
         }
     }
 }
