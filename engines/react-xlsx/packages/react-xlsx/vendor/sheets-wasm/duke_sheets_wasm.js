@@ -1797,6 +1797,19 @@ export function init() {
     wasm.init();
 }
 
+/**
+ * Sets the regional settings formulas compute with in workbooks opened or created from now on,
+ * from a language tag such as `en-GB` (the browser's `navigator.language`): the order of day and
+ * month in dates written as text, the language of TEXT's month and day names and date codes, and
+ * the decimal separator. The default is en-US.
+ * @param {string} tag
+ */
+export function setLocale(tag) {
+    const ptr0 = passStringToWasm0(tag, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    wasm.setLocale(ptr0, len0);
+}
+
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
