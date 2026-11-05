@@ -41,8 +41,11 @@ export class Builder extends DurableObject<Env> {
    */
   async run(command: string, cwd: string, stdin: ReadableStream | null, output: "exit" | "raw"): Promise<ReadableStream> {
     const box = await this.box();
-    const process = await box.exec(["bash", "-lc", command], {
-      cwd,
+    // The shell changes to cwd itself: given a directory that isn't there, exec reports `bash` as
+    // not found.
+    const enter = 'cd -- "$1" 2>/dev/null || { echo "$1 is not on the box. Run r sync first: a box that stopped starts empty." >&2; exit 1; }; exec bash -lc "$2"';
+    const process = await box.exec(["bash", "-c", enter, "bash", cwd, command], {
+      cwd: "/",
       stdin: stdin ?? undefined,
       stderr: output === "exit" ? "combined" : "ignore",
     });
