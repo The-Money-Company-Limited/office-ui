@@ -1,5 +1,5 @@
 # The build box for office-ui: Rust with wasm-pack for the engines, Node with pnpm for the apps,
-# and Playwright's Chromium for the browser tests. GitHub Actions builds it (wrangler deploy).
+# and Playwright's Chromium for the browser tests. GitHub Actions builds it (cf deploy).
 FROM docker.io/library/debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

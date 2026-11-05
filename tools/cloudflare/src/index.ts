@@ -68,7 +68,7 @@ export class Builder extends DurableObject<Env> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (!env.RUNNER_TOKEN) {
-      return new Response("RUNNER_TOKEN is not set on the office-builds Worker (wrangler secret put RUNNER_TOKEN)\n", { status: 500 });
+      return new Response("RUNNER_TOKEN is not set on the office-builds Worker (see tools/cloudflare/r for setup)\n", { status: 500 });
     }
     if (request.headers.get("authorization") !== `Bearer ${env.RUNNER_TOKEN}`) {
       return new Response("unauthorized\n", { status: 401 });

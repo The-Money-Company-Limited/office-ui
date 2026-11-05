@@ -19,8 +19,8 @@ stops.
 Setup, once per laptop:
   1. The office-builds workflow (.github/workflows/office-builds.yml) deploys the Worker and
      its image from main, or on demand (workflow_dispatch). Its token is the Worker's
-     RUNNER_TOKEN secret: set it once with `wrangler secret put RUNNER_TOKEN` in
-     tools/cloudflare, or ask whoever did.
+     RUNNER_TOKEN secret: set it once with `cf workers secrets update RUNNER_TOKEN --worker
+     office-builds --text <token>`, or ask whoever did.
   2. Write the Worker's URL (https://office-builds.<subdomain>.workers.dev) to
      ~/.config/office-builds/url and the token to ~/.config/office-builds/token.
 """
