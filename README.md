@@ -233,7 +233,7 @@ and `engines/react-pptx`, imported with full history using Git subtrees.
 subtree with full history; it is not a pnpm package, and react-xlsx vendors
 its wasm build.
 
-From the repository root, on Modal:
+From the repository root, on the build box:
 
 ```bash
 pnpm install
@@ -246,13 +246,13 @@ apps are excluded from the workspace. After building, `pnpm v4:dev` serves
 the site at `http://localhost:4000`. The existing v4 scripts also work,
 including `pnpm --filter v4 build` after the engines have been built.
 
-Builds, tests, and Rust/wasm rebuilds run on Modal, not on the laptop, through
-`tools/modal/r`. From the root of the checkout (main or worktree), `.` names it.
+Builds, tests, and Rust/wasm rebuilds run on the Cloudflare build box, not on the laptop,
+through `tools/cloudflare/r` (see `tools/cloudflare/r` for its setup). From the root of the checkout (main or worktree), `.` names it.
 In a worktree `.git` is a file and is not uploaded, so builds that stamp
 `git describe` need a `git init` in the sandbox copy first:
 
 ```bash
-r=tools/modal/r
+r=tools/cloudflare/r
 repo=.
 "$r" up
 "$r" sync "$repo"
@@ -265,14 +265,14 @@ repo=.
 ```
 
 When intentionally updating dependencies, use `pnpm install --no-frozen-lockfile`
-on Modal and `"$r" pull "$repo" pnpm-lock.yaml` before shutting it down.
+on the box and `"$r" pull "$repo" pnpm-lock.yaml` before shutting it down.
 Normal CI installs use the checked-in root lockfile.
 
 DOCX and PPTX ordinary builds use their checked-in wasm and generated JavaScript.
 PPTX keeps its generated runtime in `packages/wasm/src/generated/`; `pkg/` is
 temporary wasm-pack output and stays ignored. XLSX copies its vendored Duke Sheets
 wasm via `scripts/copy-duke-wasm.mjs`. A fresh clone installs and builds without
-Rust. To update these binaries, run the explicit rebuild commands on Modal:
+Rust. To update these binaries, run the explicit rebuild commands on the box:
 
 ```bash
 pnpm --filter @extend-ai/react-docx-wasm build:wasm
@@ -282,7 +282,7 @@ pnpm --filter @extend-ai/react-pptx-wasm build:wasm
 
 Rebuilds require Rust, the `wasm32-unknown-unknown` target, and `wasm-pack`
 (the remote helper supplies them). Pull the generated files back before shutting
-Modal down. For PPTX, from the laptop using the helper variables above:
+the box down. For PPTX, from the laptop using the helper variables above:
 
 ```bash
 "$r" run "$repo" 'pnpm --filter @extend-ai/react-pptx-wasm build:wasm'
@@ -305,7 +305,7 @@ git subtree pull --prefix=engines/duke-sheets https://github.com/guseggert/duke-
 Keep full history: do not add `--squash`. Resolve workspace/configuration
 conflicts by retaining the single root workspace and lockfile, merging new
 pnpm settings into the root, and removing any reintroduced engine lockfiles
-or workspace files. Install/build/test on Modal and bring the root lockfile
+or workspace files. Install/build/test on the box and bring the root lockfile
 back before committing the update.
 
 Engine changes are made here; the old The-Money-Company-Limited forks are

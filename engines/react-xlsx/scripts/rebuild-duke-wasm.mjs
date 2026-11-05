@@ -4,7 +4,7 @@ import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const source = fileURLToPath(new URL("../../duke-sheets/", import.meta.url));
-const remote = fileURLToPath(new URL("../../../tools/modal/r", import.meta.url));
+const remote = fileURLToPath(new URL("../../../tools/cloudflare/r", import.meta.url));
 const vendor = new URL("../packages/react-xlsx/vendor/sheets-wasm/", import.meta.url);
 const git = (...args) => execFileSync("git", ["-C", source, ...args], { encoding: "utf8" });
 const run = (...args) => execFileSync(remote, args, { stdio: "inherit" });
@@ -42,6 +42,6 @@ for (const file of ["duke_sheets_wasm.js", "duke_sheets_wasm.d.ts", "duke_sheets
 copyFileSync(`${source}/LICENSE`, new URL("LICENSE", vendor));
 writeFileSync(new URL("BUILD.json", vendor), JSON.stringify({
   dukeSheets: before,
-  build: { command, platform: "Modal Linux" },
+  build: { command, platform: "Cloudflare Linux" },
   artifact: { file: "duke_sheets_wasm_bg.wasm", sha256: sha256(readFileSync(new URL("duke_sheets_wasm_bg.wasm", vendor))) },
 }, null, 2) + "\n");

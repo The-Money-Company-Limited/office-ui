@@ -1,7 +1,7 @@
 #!/bin/sh
-# Run through tools/modal/r; all browser dependencies stay inside this repo.
+# Run through tools/cloudflare/r; all browser dependencies stay inside this repo.
 set -eu
-case "$PWD" in /work/*/engines/react-xlsx) ;; *) echo 'Run on Modal in /work/<repo>/engines/react-xlsx'; exit 1 ;; esac
+case "$PWD" in /work/*/engines/react-xlsx) ;; *) echo 'Run on the build box in /work/<repo>/engines/react-xlsx'; exit 1 ;; esac
 npm install --prefix tests/.browser-tools --no-save --package-lock=false playwright@1.58.2
 PLAYWRIGHT_BROWSERS_PATH="$PWD/tests/.browser-cache" tests/.browser-tools/node_modules/.bin/playwright install chromium
 mkdir -p tests/.browser-libs

@@ -112,7 +112,7 @@ Keep `slides-check.mjs`, `validate.js`, `charts.js` and `slides.css` together; o
 Run `node slides-check.mjs <deck-dir>`; add `--json` for per-element findings and fix hints, or `--png <dir>` for 1920×1080 screenshots.
 Exit 1 means fix the errors and rerun; outside-slide and 128px margin findings are warnings only (exit 0). Margin checks use border boxes with 1px tolerance, report only the outermost offending text-bearing group, and skip decoration. Use the same installed fonts as the artifact.
 
-See [tests/README.md](./tests/README.md) for the exact Modal build and browser
+See [tests/README.md](./tests/README.md) for the exact build-box build and browser
 verification commands, including the negative control.
 
 Phase 2 remaining: save integration (COD-1462), live data and a PPTX

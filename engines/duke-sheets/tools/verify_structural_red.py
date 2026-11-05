@@ -1,4 +1,4 @@
-"""Run on Modal: prove the structural boundary tests detect disabled mutations."""
+"""Run on the build box: prove the structural boundary tests detect disabled mutations."""
 from pathlib import Path
 import re
 import subprocess

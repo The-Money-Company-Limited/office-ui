@@ -1,4 +1,4 @@
-// Run on Modal: node --test tests/drawings.browser.mjs (DRAWINGS_BASELINE=1 for HEAD).
+// Run on the build box: node --test tests/drawings.browser.mjs (DRAWINGS_BASELINE=1 for HEAD).
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import path from "node:path";

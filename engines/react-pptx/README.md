@@ -1,7 +1,7 @@
 # react-pptx
 
 > In office-ui, this fork is part of the root pnpm workspace. Install and build
-> from the office-ui root on Modal (`pnpm install`, `pnpm build`). Package builds
+> from the office-ui root on the build box (`pnpm install`, `pnpm build`). Package builds
 > and unit tests can also run from this directory after the root install.
 > Playground apps and their dev/visual-test flows are not included in the default
 > workspace. See [office-ui development](../../README.md#development) for the
@@ -35,7 +35,7 @@ runtime from the checked-in wasm, presentation model, and React viewer before st
 Vite. It also refreshes Vite's dependency cache and generates a deterministic
 two-slide fixture automatically. You can drop any `.ppt` or `.pptx` file onto the viewer.
 After changing Rust code, run `pnpm --filter @extend-ai/react-pptx-wasm build:wasm`
-on Modal, pull `engines/react-pptx/packages/wasm/src/generated/` back, and include
+on the build box, pull `engines/react-pptx/packages/wasm/src/generated/` back, and include
 the generated files in the change. Ordinary builds need no Rust; see the root
 [rebuild instructions](../../README.md#development).
 
