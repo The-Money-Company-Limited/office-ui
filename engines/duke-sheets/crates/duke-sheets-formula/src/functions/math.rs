@@ -1000,9 +1000,6 @@ pub fn fn_sumifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 
         // Get criteria and create matcher
         let criteria = &args[criteria_idx];
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
-        }
         matchers.push(CriteriaMatcher::new(criteria));
     }
 
@@ -1055,9 +1052,6 @@ fn fn_sumifs_single(
         let criteria = &criteria_args[criteria_idx];
 
         if let FormulaValue::Error(e) = range_value {
-            return Ok(FormulaValue::Error(*e));
-        }
-        if let FormulaValue::Error(e) = criteria {
             return Ok(FormulaValue::Error(*e));
         }
 

@@ -6,6 +6,7 @@
 //! - A comparison expression: ">5", ">=10", "<100", "<=50", "<>0", "=5"
 //! - Wildcards: "*" matches any characters, "?" matches single character
 //! - Empty string: matches empty cells
+//! - An error, or its text ("#N/A"): matches cells holding that error
 
 use crate::evaluator::FormulaValue;
 
@@ -31,6 +32,8 @@ enum CriteriaType {
     TextComparison(ComparisonOp, String),
     /// Match empty values
     Empty,
+    /// An error (`NA()`, `"#N/A"`): matches cells holding that error
+    Error(duke_sheets_core::CellError),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -51,7 +54,7 @@ impl CriteriaMatcher {
             FormulaValue::Boolean(b) => CriteriaType::Boolean(*b),
             FormulaValue::String(s) => Self::parse_string_criteria(s),
             FormulaValue::Empty => CriteriaType::Empty,
-            FormulaValue::Error(_) => CriteriaType::Empty, // Errors don't match anything
+            FormulaValue::Error(e) => CriteriaType::Error(*e),
             FormulaValue::Array { .. } => CriteriaType::Empty, // Arrays as criteria not supported
         };
 
@@ -63,6 +66,10 @@ impl CriteriaMatcher {
         // and dates in it are read as Excel reads them (">=1/1/2024", "5%").
         if s.is_empty() {
             return CriteriaType::Empty;
+        }
+
+        if let Some(error) = duke_sheets_core::CellError::parse(s) {
+            return CriteriaType::Error(error);
         }
 
         // Try to parse as comparison operator + number
@@ -113,11 +120,13 @@ impl CriteriaMatcher {
     /// Check if a value matches the criteria
     pub fn matches(&self, value: &FormulaValue) -> bool {
         match &self.criteria_type {
-            CriteriaType::Number(criteria_num) => {
-                // Only match actual numeric values, not booleans or strings that look like
-                // numbers: SUMIF(A:A, 5) won't match TRUE or the text "5"
-                matches!(value, FormulaValue::Number(n) if (n - criteria_num).abs() < 1e-10)
-            }
+            // A number matches the number and text that reads as it: SUMIFS(K:K,A:A,DATE(2021,3,1))
+            // adds the rows whose date is the text "3-1-21". Booleans never match.
+            CriteriaType::Number(criteria_num) => match value {
+                FormulaValue::Number(n) => (n - criteria_num).abs() < 1e-10,
+                FormulaValue::String(s) => crate::coerce::text_to_number(s).is_some_and(|n| (n - criteria_num).abs() < 1e-10),
+                _ => false,
+            },
 
             CriteriaType::NumberOrText(criteria_num, text) => match value {
                 FormulaValue::Number(n) => (n - criteria_num).abs() < 1e-10,
@@ -166,6 +175,8 @@ impl CriteriaMatcher {
                 matches!(value, FormulaValue::Empty)
                     || matches!(value, FormulaValue::String(s) if s.is_empty())
             }
+
+            CriteriaType::Error(error) => matches!(value, FormulaValue::Error(e) if e == error),
         }
     }
 
@@ -177,11 +188,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_error_criteria() {
+        use duke_sheets_core::CellError;
+        for criteria in [FormulaValue::Error(CellError::Na), FormulaValue::String("#N/A".into())] {
+            let matcher = CriteriaMatcher::new(&criteria);
+            assert!(matcher.matches(&FormulaValue::Error(CellError::Na)));
+            assert!(!matcher.matches(&FormulaValue::Error(CellError::Value)));
+            assert!(!matcher.matches(&FormulaValue::Empty));
+        }
+    }
+
+    #[test]
     fn test_number_criteria() {
         let matcher = CriteriaMatcher::new(&FormulaValue::Number(5.0));
         assert!(matcher.matches(&FormulaValue::Number(5.0)));
         assert!(!matcher.matches(&FormulaValue::Number(4.0)));
-        assert!(!matcher.matches(&FormulaValue::String("5".into())));
+        assert!(matcher.matches(&FormulaValue::String("5".into())));
+        assert!(!matcher.matches(&FormulaValue::String("x".into())));
+        assert!(!matcher.matches(&FormulaValue::Boolean(true)));
     }
 
     #[test]

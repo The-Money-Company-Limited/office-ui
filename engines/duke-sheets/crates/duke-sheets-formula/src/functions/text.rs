@@ -627,9 +627,13 @@ pub fn fn_textjoin(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
-    let ignore_empty = match ignore_empty_arg.as_bool() {
-        Some(v) => v,
-        None => return Ok(FormulaValue::Error(CellError::Value)),
+    // Left out, as in TEXTJOIN(",",,A1:A3), it skips empty text, as Excel does.
+    let ignore_empty = match ignore_empty_arg {
+        FormulaValue::Empty => true,
+        _ => match ignore_empty_arg.as_bool() {
+            Some(v) => v,
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
     };
 
     let mut pieces = Vec::new();

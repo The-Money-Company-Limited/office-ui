@@ -27,7 +27,9 @@ function same(a, b) {
   if ((a === null || a === "") && (b === null || b === "")) return true
   if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(b)) || Math.abs(a - b) < 1e-12
   if (typeof a === "boolean" || typeof b === "boolean") return String(a).toUpperCase() === String(b).toUpperCase()
-  return String(a) === String(b)
+  // Excel saves a formula's text result without trailing spaces (CONCATENATE(A2," ") is stored as "AA"),
+  // so the engine's value matches when it differs only there.
+  return String(a) === String(b) || (typeof a === "string" && a.trimEnd() === b)
 }
 // Functions whose result legitimately differs from the saved one: the clock, randomness, the file's own location.
 const volatile = /\b(NOW|TODAY|RAND|RANDBETWEEN|RANDARRAY|CELL|INFO|OFFSET\(.*TODAY)\s*\(/i

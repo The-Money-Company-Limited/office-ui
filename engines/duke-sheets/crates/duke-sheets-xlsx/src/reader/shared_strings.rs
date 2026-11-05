@@ -118,7 +118,7 @@ pub(crate) fn parse_shared_strings<R: Read>(reader: R) -> XlsxResult<Vec<SharedS
             }
             Ok(Event::Text(e)) => {
                 if in_t {
-                    match e.unescape() {
+                    match super::xml_text(&e) {
                         Ok(text) => plain_text.push_str(&text),
                         Err(err) => log::warn!(
                             "Shared string {}: XML unescape failed: {}",
@@ -127,7 +127,7 @@ pub(crate) fn parse_shared_strings<R: Read>(reader: R) -> XlsxResult<Vec<SharedS
                         ),
                     }
                 } else if in_run_t {
-                    match e.unescape() {
+                    match super::xml_text(&e) {
                         Ok(text) => run_text.push_str(&text),
                         Err(err) => log::warn!(
                             "Shared string {}: run text unescape failed: {}",

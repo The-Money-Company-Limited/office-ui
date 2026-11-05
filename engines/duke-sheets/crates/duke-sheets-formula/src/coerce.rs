@@ -120,9 +120,11 @@ fn date_time(text: &str) -> Option<f64> {
 /// `18:30`, `18:30:15`, `6:30 PM`, `6 PM`, `1:05:00.5 am`: a fraction of a day.
 fn time_of_day(text: &str) -> Option<f64> {
     let lower = text.to_ascii_lowercase();
-    let (clock, meridiem) = if let Some(rest) = lower.strip_suffix("am").or_else(|| lower.strip_suffix('a')) {
+    // "8 a" is 8 AM, but "8A" (a room, a grade) is text.
+    let letter = |suffix: char| lower.strip_suffix(suffix).filter(|rest| rest.ends_with(char::is_whitespace));
+    let (clock, meridiem) = if let Some(rest) = lower.strip_suffix("am").or_else(|| letter('a')) {
         (rest.trim_end(), Some(false))
-    } else if let Some(rest) = lower.strip_suffix("pm").or_else(|| lower.strip_suffix('p')) {
+    } else if let Some(rest) = lower.strip_suffix("pm").or_else(|| letter('p')) {
         (rest.trim_end(), Some(true))
     } else {
         (lower.as_str(), None)
@@ -157,9 +159,16 @@ fn time_of_day(text: &str) -> Option<f64> {
 }
 
 /// `2024-03-15`, `2024/3/15`, `3/15/2024`, `3-15-24`, `15-Mar-2024`, `15 March 2024`,
-/// `Mar 15, 2024`, `March 15 2024`, `Mar-2024` (the 1st).
+/// `Mar 15, 2024`, `March 15 2024`, `Mar-2024` (the 1st), `1Jan2016` (a month name needs no separators).
 fn date(text: &str) -> Option<f64> {
-    let parts: Vec<&str> = text
+    let mut spaced = String::with_capacity(text.len() + 2);
+    for c in text.chars() {
+        if spaced.chars().next_back().is_some_and(|last| last.is_ascii_digit() != c.is_ascii_digit() && last.is_alphanumeric() && c.is_alphanumeric()) {
+            spaced.push(' ');
+        }
+        spaced.push(c);
+    }
+    let parts: Vec<&str> = spaced
         .split(|c: char| c == '/' || c == '-' || c == ' ' || c == ',')
         .filter(|p| !p.is_empty())
         .collect();

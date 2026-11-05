@@ -685,9 +685,11 @@ pub fn fn_lookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         return Ok(FormulaValue::Error(CellError::Na));
     }
 
+    // Like the approximate MATCH, blanks and values of another type are passed over:
+    // LOOKUP(9^9,A1:E1) is the last number in the row.
     let mut best: Option<usize> = None;
     for (i, item) in lookup_vec.iter().enumerate() {
-        if let Some(ord) = compare_lookup_values(item, &lookup_value) {
+        if let Some(ord) = super::lookup::compare_lookup_values(item, &lookup_value) {
             if ord == Ordering::Equal || ord == Ordering::Less {
                 best = Some(i);
             }
@@ -1439,7 +1441,8 @@ fn pick_index(nodes: Vec<&XmlNode>, index: Option<usize>) -> Vec<&XmlNode> {
     }
 }
 
-fn evaluate_xpath(root: &XmlNode, steps: &[XPathStep]) -> Option<String> {
+/// The text of every node `steps` select, in document order; `None` when none match.
+fn evaluate_xpath(root: &XmlNode, steps: &[XPathStep]) -> Option<Vec<String>> {
     let mut current: Vec<&XmlNode> = Vec::new();
 
     for step in steps {
@@ -1479,17 +1482,13 @@ fn evaluate_xpath(root: &XmlNode, steps: &[XPathStep]) -> Option<String> {
                 current = next;
             }
             XPathStep::Attribute(name) => {
-                for node in &current {
-                    if let Some(value) = node.attributes.get(name) {
-                        return Some(value.clone());
-                    }
-                }
-                return None;
+                let values: Vec<String> = current.iter().filter_map(|node| node.attributes.get(name).cloned()).collect();
+                return (!values.is_empty()).then_some(values);
             }
         }
     }
 
-    current.first().map(|node| node.text_content())
+    (!current.is_empty()).then(|| current.iter().map(|node| node.text_content()).collect())
 }
 
 fn xml_result_to_value(text: String) -> FormulaValue {
@@ -1527,11 +1526,18 @@ pub fn fn_filterxml(
     let Some(steps) = parse_xpath(&xpath) else {
         return Ok(FormulaValue::Error(CellError::Value));
     };
-    let Some(result) = evaluate_xpath(&document, &steps) else {
+    let Some(mut results) = evaluate_xpath(&document, &steps) else {
         return Ok(FormulaValue::Error(CellError::Value));
     };
 
-    Ok(xml_result_to_value(result))
+    // Every match, one per row: FILTERXML("<k><m>1</m><m>2</m></k>","//m") is {1;2}.
+    if results.len() == 1 {
+        return Ok(xml_result_to_value(results.remove(0)));
+    }
+    Ok(FormulaValue::Array {
+        data: results.into_iter().map(|text| vec![xml_result_to_value(text)]).collect(),
+        source: None,
+    })
 }
 
 /// WEBSERVICE(url)

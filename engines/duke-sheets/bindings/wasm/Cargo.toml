@@ -10,7 +10,9 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-duke-sheets = { path = "../../crates/duke-sheets", features = ["full"] }
+# Everything but "parallel": a browser has no threads, and building rayon's thread pool there
+# aborts the engine on workbooks with 5,000 or more formulas.
+duke-sheets = { path = "../../crates/duke-sheets", default-features = false, features = ["xlsx", "xls", "xlsb", "csv"] }
 duke-sheets-core = { path = "../../crates/duke-sheets-core" }
 duke-sheets-crypto = { path = "../../crates/duke-sheets-crypto" }
 duke-sheets-csv = { path = "../../crates/duke-sheets-csv" }

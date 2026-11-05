@@ -101,9 +101,13 @@ fn excel1904_date_from_serial(serial: i64) -> Option<NaiveDate> {
 }
 
 fn excel1900_date_from_serial(serial: i64) -> Option<(i32, u32, u32)> {
-    // Serial 60 is the fictional 1900-02-29.
-    if serial == 60 {
-        return Some((1900, 2, 29));
+    // Serial 0 is Excel's 1900-01-00 (MONTH(0) is 1, DAY(0) is 0), serial 60 the fictional 1900-02-29,
+    // and the calendar ends on 9999-12-31.
+    match serial {
+        ..0 | 2_958_466.. => return None,
+        0 => return Some((1900, 1, 0)),
+        60 => return Some((1900, 2, 29)),
+        _ => {}
     }
     let base = NaiveDate::from_ymd_opt(1899, 12, 31)?;
     let adjusted = if serial > 60 { serial - 1 } else { serial };

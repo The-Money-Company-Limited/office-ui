@@ -309,7 +309,7 @@ pub fn fn_match(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult
             }
             Ok(FormulaValue::Error(CellError::Na))
         }
-        1 | -1 => match approximate_position(vec.iter(), lookup_value, match_type == -1) {
+        1 | -1 => match approximate_position(vec.iter().copied(), lookup_value, match_type == -1) {
             Some(i) => Ok(FormulaValue::Number((i + 1) as f64)),
             None => Ok(FormulaValue::Error(CellError::Na)),
         },

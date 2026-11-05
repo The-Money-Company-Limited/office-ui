@@ -108,13 +108,17 @@ fn calc_ipmt(
     Ok(ipmt)
 }
 
+/// The cash flows in an argument: a number given directly, or the numbers in an array or range,
+/// where text, logical values and blanks are passed over (NPV(0.1,{100,"",100})).
 fn collect_numbers(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
         FormulaValue::Array { data: rows, .. } => {
-            for row in rows {
-                for cell in row {
-                    collect_numbers(cell, out)?;
+            for cell in rows.iter().flatten() {
+                match cell {
+                    FormulaValue::Number(n) => out.push(*n),
+                    FormulaValue::Error(e) => return Err(FormulaValue::Error(*e)),
+                    _ => {}
                 }
             }
             Ok(())

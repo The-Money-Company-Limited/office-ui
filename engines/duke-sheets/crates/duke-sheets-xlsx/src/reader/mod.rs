@@ -45,6 +45,7 @@ mod data_validation;
 mod drawing;
 mod form_controls;
 mod formulas;
+mod rich_errors;
 mod shared_strings;
 mod table;
 mod theme;
@@ -56,6 +57,14 @@ use shared_strings::SharedStringEntry;
 use workbook::{read_part_rels, read_workbook_rels, read_workbook_xml};
 
 /// Resolve a relative path from a drawing's .rels against the drawing's own path.
+
+/// An element's text as an XML parser reads it: a line break written raw in the file (`\r\n` or
+/// `\r`) is `\n`, as Excel reads it, while `&#13;` and `_x000D_` stay carriage returns.
+pub(crate) fn xml_text(text: &quick_xml::events::BytesText) -> Result<String, quick_xml::escape::EscapeError> {
+    let raw = String::from_utf8_lossy(text.as_ref());
+    let raw = if raw.contains('\r') { raw.replace("\r\n", "\n").replace('\r', "\n").into() } else { raw };
+    quick_xml::escape::unescape(&raw).map(|t| t.into_owned())
+}
 
 /// Decode Excel's `_xHHHH_` escape sequences in strings.
 ///
@@ -589,6 +598,17 @@ fn log_package_diagnostics(diagnostics: &[crate::opc::XlsxDiagnostic]) {
     }
 }
 
+/// A part next to the workbook part, if the file has it.
+fn optional_part<R: Read + Seek>(package: &mut OpcPackage<R>, workbook: &str, name: &str) -> Option<Vec<u8>> {
+    let path = resolve_internal_target(workbook, name).ok()?;
+    if !package.part_exists(&PartName::from_zip_name(&path).ok()?) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    package.open_zip_name(&path).ok()?.read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
 fn workbook_resource_path<R: Read + Seek>(
     package: &mut OpcPackage<R>,
     workbook_path: &PartName,
@@ -833,6 +853,15 @@ impl XlsxReader {
             Some(path) => shared_strings::parse_shared_strings(package.open_zip_name(path)?)?,
             None => Vec::new(),
         };
+        let mut workbook_part = |name: &str| optional_part(&mut package, workbook_path.zip_name(), name);
+        let value_errors = match workbook_part("metadata.xml") {
+            Some(metadata) => rich_errors::value_errors(
+                &metadata,
+                &workbook_part("richData/rdrichvalue.xml").unwrap_or_default(),
+                &workbook_part("richData/rdrichvaluestructure.xml").unwrap_or_default(),
+            ),
+            None => HashMap::new(),
+        };
         let parsed_styles = match styles_path.as_deref() {
             Some(path) => read_styles_xml(package.open_zip_name(path)?)?,
             None => Self::default_styles(),
@@ -897,6 +926,7 @@ impl XlsxReader {
                     &cell_styles,
                     &dxf_styles,
                     &sheet_rels,
+                    &value_errors,
                 )?);
 
                 // Read comments for this worksheet (if present).
@@ -1441,6 +1471,7 @@ impl XlsxReader {
         cell_styles: &[Style],
         dxf_styles: &[Style],
         sheet_rels: &RelationshipSet,
+        value_errors: &HashMap<u32, CellError>,
     ) -> XlsxResult<Vec<form_controls::PendingControl>> {
         let mut xml_reader = Reader::from_reader(BufReader::new(reader));
         xml_reader.config_mut().trim_text(false);
@@ -1455,6 +1486,8 @@ impl XlsxReader {
         let mut current_cell_type: Option<String> = None;
         let mut current_cell_style: Option<u32> = None;
         let mut current_cell_cm: Option<u32> = None;
+        // The error a cell's `vm` names, such as #SPILL!, which Excel saves as #VALUE!.
+        let mut current_cell_error: Option<CellError> = None;
         let mut current_value: Option<String> = None;
         let mut current_formula: Option<String> = None;
         let mut current_formula_state = CellFormulaState::default();
@@ -2022,6 +2055,7 @@ impl XlsxReader {
                             current_cell_type = None;
                             current_cell_style = None;
                             current_cell_cm = None;
+                            current_cell_error = None;
                             current_value = None;
                             current_formula = None;
                             current_formula_state = CellFormulaState::default();
@@ -2048,6 +2082,13 @@ impl XlsxReader {
                                             .unescape_value()
                                             .ok()
                                             .and_then(|s| s.parse::<u32>().ok());
+                                    }
+                                    b"vm" => {
+                                        current_cell_error = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u32>().ok())
+                                            .and_then(|vm| value_errors.get(&vm).copied());
                                     }
                                     _ => {}
                                 }
@@ -2247,11 +2288,15 @@ impl XlsxReader {
                                         &current_formula_state,
                                         &mut shared_formula_masters,
                                     );
+                                    let value = match current_cell_error {
+                                        Some(error) if current_cell_type.as_deref() == Some("e") => Some(error.as_str()),
+                                        _ => current_value.as_deref(),
+                                    };
                                     Self::process_cell(
                                         worksheet,
                                         addr,
                                         current_cell_type.as_deref(),
-                                        current_value.as_deref(),
+                                        value,
                                         resolved_formula.as_deref(),
                                         current_cell_style,
                                         shared_strings,
@@ -2481,7 +2526,7 @@ impl XlsxReader {
                         }
                     }
                     if in_value {
-                        match e.unescape() {
+                        match xml_text(&e) {
                             Ok(text) => current_value = Some(text.to_string()),
                             Err(err) => log::warn!(
                                 "Cell {:?}: value unescape failed: {}",
@@ -2490,7 +2535,7 @@ impl XlsxReader {
                             ),
                         }
                     } else if in_formula {
-                        match e.unescape() {
+                        match xml_text(&e) {
                             Ok(text) => current_formula = Some(text.to_string()),
                             Err(err) => log::warn!(
                                 "Cell {:?}: formula unescape failed: {}",
@@ -2499,7 +2544,7 @@ impl XlsxReader {
                             ),
                         }
                     } else if in_inline_run_t {
-                        match e.unescape() {
+                        match xml_text(&e) {
                             Ok(text) => inline_run_text.push_str(&text),
                             Err(err) => log::warn!(
                                 "Cell {:?}: inline run text unescape failed: {}",
@@ -2508,7 +2553,7 @@ impl XlsxReader {
                             ),
                         }
                     } else if in_inline_text {
-                        match e.unescape() {
+                        match xml_text(&e) {
                             Ok(text) => {
                                 // Inline string - store directly as value
                                 current_value = Some(text.to_string());

@@ -456,9 +456,6 @@ pub fn fn_maxifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         criteria_ranges.push(range);
 
         let criteria = &args[criteria_idx];
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
-        }
         matchers.push(CriteriaMatcher::new(criteria));
     }
 
@@ -530,9 +527,6 @@ pub fn fn_minifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         criteria_ranges.push(range);
 
         let criteria = &args[criteria_idx];
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
-        }
         matchers.push(CriteriaMatcher::new(criteria));
     }
 
@@ -930,9 +924,6 @@ fn fn_maxifs_single(
         if let FormulaValue::Error(e) = range_value {
             return Ok(FormulaValue::Error(*e));
         }
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
-        }
 
         let matcher = CriteriaMatcher::new(criteria);
         if !matcher.matches(range_value) {
@@ -961,9 +952,6 @@ fn fn_minifs_single(
         let criteria = &criteria_args[criteria_idx];
 
         if let FormulaValue::Error(e) = range_value {
-            return Ok(FormulaValue::Error(*e));
-        }
-        if let FormulaValue::Error(e) = criteria {
             return Ok(FormulaValue::Error(*e));
         }
 
@@ -1156,9 +1144,6 @@ pub fn fn_countifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
 
         // Get criteria and create matcher
         let criteria = &args[criteria_idx];
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
-        }
         matchers.push(CriteriaMatcher::new(criteria));
     }
 
@@ -1216,9 +1201,6 @@ fn fn_countifs_single(
         let criteria = &remaining_args[criteria_idx];
 
         if let FormulaValue::Error(e) = range_value {
-            return Ok(FormulaValue::Error(*e));
-        }
-        if let FormulaValue::Error(e) = criteria {
             return Ok(FormulaValue::Error(*e));
         }
 
@@ -1293,9 +1275,6 @@ pub fn fn_averageifs(
 
         // Get criteria and create matcher
         let criteria = &args[criteria_idx];
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
-        }
         matchers.push(CriteriaMatcher::new(criteria));
     }
 
@@ -1353,9 +1332,6 @@ fn fn_averageifs_single(
         let criteria = &criteria_args[criteria_idx];
 
         if let FormulaValue::Error(e) = range_value {
-            return Ok(FormulaValue::Error(*e));
-        }
-        if let FormulaValue::Error(e) = criteria {
             return Ok(FormulaValue::Error(*e));
         }
 

@@ -87,7 +87,7 @@ impl FormulaValue {
         match self {
             FormulaValue::Boolean(b) => Some(*b),
             FormulaValue::Number(n) => Some(*n != 0.0),
-            // A left-out argument, as in TEXTJOIN(",",,A1:A3), is FALSE
+            // A left-out argument, as in IF(A1,,1), is FALSE
             FormulaValue::Empty => Some(false),
             FormulaValue::String(s) => {
                 let upper = s.to_uppercase();
@@ -433,6 +433,12 @@ impl<'a> EvaluationContext<'a> {
         // that contains the current cell (unqualified ref like [Column]).
         let (table, sheet_idx) = self.find_table(workbook, sr)?;
 
+        // [#This Row] from a row outside the table's data rows meets none of them: #VALUE!.
+        if sr.specifiers.contains(&crate::ast::StructuredRefSpecifier::ThisRow)
+            && sr.span(table, None).is_some_and(|rows| !(rows.start.row..=rows.end.row).contains(&self.current_row))
+        {
+            return Ok(FormulaValue::Error(CellError::Value));
+        }
         let Some(cells) = sr.span(table, Some(self.current_row)) else {
             return Ok(FormulaValue::Error(CellError::Ref));
         };
