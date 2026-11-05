@@ -1,6 +1,6 @@
 //! Formula Abstract Syntax Tree types
 
-use duke_sheets_core::{CellAddress, CellError, CellRange};
+use duke_sheets_core::{CellAddress, CellError, CellRange, Table};
 
 /// Formula expression AST
 #[derive(Debug, Clone, PartialEq)]
@@ -108,8 +108,59 @@ pub struct StructuredReference {
     pub table: Option<String>,
     /// Column name (e.g., "Column1"). None when only specifiers are used
     pub column: Option<String>,
+    /// Last column of a column range (`Table1[[A]:[C]]`); None for one column
+    pub last_column: Option<String>,
     /// Special item specifiers (#All, #Data, #Headers, #Totals, #This Row)
     pub specifiers: Vec<StructuredRefSpecifier>,
+}
+
+impl StructuredReference {
+    /// The cells this reference covers in `table`: one column, a column range (`[[A]:[C]]`) or
+    /// every column, over the data rows unless the specifiers say otherwise (#Headers, #Data and
+    /// #Totals combine; #All is all three). `this_row` is the formula's row for `[#This Row]`;
+    /// dependency tracking passes `None` and gets every data row. `None` when a column doesn't
+    /// exist or the rows asked for aren't there (Excel's #REF!).
+    pub fn span(&self, table: &Table, this_row: Option<u32>) -> Option<CellRange> {
+        let position = |name: &str| table.columns.iter().position(|c| c.name.eq_ignore_ascii_case(name));
+        let base = table.reference.start.col;
+        let (col_start, col_end) = match (&self.column, &self.last_column) {
+            (Some(first), last) => {
+                let a = position(first)?;
+                let b = match last {
+                    Some(last) => position(last)?,
+                    None => a,
+                };
+                (base + a.min(b) as u16, base + a.max(b) as u16)
+            }
+            (None, _) => (base, table.reference.end.col),
+        };
+
+        let (top, bottom) = (table.reference.start.row, table.reference.end.row);
+        let (headers, totals) = (table.header_row_count, table.totals_row_count);
+        let has = |spec| self.specifiers.contains(&spec);
+        let (row_start, row_end) = if has(StructuredRefSpecifier::All) {
+            (top, bottom)
+        } else {
+            let want_headers = has(StructuredRefSpecifier::Headers);
+            let want_totals = has(StructuredRefSpecifier::Totals);
+            let want_data = has(StructuredRefSpecifier::Data)
+                || has(StructuredRefSpecifier::ThisRow)
+                || (!want_headers && !want_totals);
+            if (want_headers && headers == 0 && !want_data) || (want_totals && totals == 0 && !want_data) {
+                return None;
+            }
+            let first = if want_headers { top } else if want_data { top + headers } else { (bottom + 1).checked_sub(totals)? };
+            let last = if want_totals { bottom } else if want_data { bottom.checked_sub(totals)? } else { (top + headers).checked_sub(1)? };
+            if first > last {
+                return None; // a table with no data rows
+            }
+            match this_row {
+                Some(row) if has(StructuredRefSpecifier::ThisRow) => (row, row),
+                _ => (first, last),
+            }
+        };
+        Some(CellRange::from_indices(row_start, col_start, row_end, col_end))
+    }
 }
 
 /// Structured reference specifier keywords

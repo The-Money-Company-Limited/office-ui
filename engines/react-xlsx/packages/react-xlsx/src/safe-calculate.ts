@@ -113,8 +113,7 @@ export type SafeCalculateOptions = {
 // instance). On trap, `reparse` is used to return a fresh usable instance.
 //
 // Also falls back to the saved values when calculating turns a formula that
-// had a saved value into an error — e.g. a reference to a name defined as a
-// formula (`Total = SUM(A1:A3)`), which the engine evaluates to #VALUE! —
+// had a saved value into an error — e.g. a function the engine doesn't have —
 // instead of showing errors the file never had.
 export function safeCalculate(workbook: Workbook, options: SafeCalculateOptions = {}): SafeCalculateResult {
   if (hasUnresolvedSheetReferences(workbook)) {

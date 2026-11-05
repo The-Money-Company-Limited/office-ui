@@ -2293,6 +2293,14 @@ impl Worksheet {
         self.cells.clear_spill_targets(row, col);
     }
 
+    /// Record that the formula at (row, col) spills over `rows` x `cols` cells, as a file read
+    /// with its spilled values does, so recalculating it replaces those cells instead of being
+    /// blocked by them.
+    pub fn register_spill(&mut self, row: u32, col: u16, rows: u32, cols: u16) {
+        self.cells
+            .register_spill_source(row, col, crate::cell::SpillInfo::new(rows, cols));
+    }
+
     /// Check if a cell is a spill target
     pub fn is_spill_target(&self, row: u32, col: u16) -> bool {
         self.cells

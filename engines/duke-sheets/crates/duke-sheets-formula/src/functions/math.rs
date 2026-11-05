@@ -217,10 +217,13 @@ pub fn fn_round(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     // Use "round half away from zero" - the standard Excel behavior
     // For positive numbers: round(2.5) = 3, round(2.4) = 2
     // For negative numbers: round(-2.5) = -3, round(-2.4) = -2
+    // The scaled value is taken at 15 digits first, so ROUND(1.005,2) is 1.01 as in Excel even
+    // though 1.005 * 100 is 100.49999999999999 in binary.
+    let scaled = crate::coerce::round_15(number * multiplier);
     let result = if number >= 0.0 {
-        (number * multiplier + 0.5).floor() / multiplier
+        (scaled + 0.5).floor() / multiplier
     } else {
-        (number * multiplier - 0.5).ceil() / multiplier
+        (scaled - 0.5).ceil() / multiplier
     };
 
     Ok(FormulaValue::Number(result))
@@ -300,7 +303,7 @@ pub fn fn_trunc(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     };
 
     let multiplier = 10_f64.powi(num_digits);
-    let result = (number * multiplier).trunc() / multiplier;
+    let result = crate::coerce::round_15(number * multiplier).trunc() / multiplier;
     Ok(FormulaValue::Number(result))
 }
 
@@ -615,9 +618,9 @@ pub fn fn_roundup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
 
     // Round away from zero
     let result = if number >= 0.0 {
-        (number * multiplier).ceil() / multiplier
+        crate::coerce::round_15(number * multiplier).ceil() / multiplier
     } else {
-        (number * multiplier).floor() / multiplier
+        crate::coerce::round_15(number * multiplier).floor() / multiplier
     };
 
     Ok(FormulaValue::Number(result))
@@ -646,7 +649,7 @@ pub fn fn_rounddown(
     let multiplier = 10_f64.powi(num_digits);
 
     // Round toward zero (truncate)
-    let result = (number * multiplier).trunc() / multiplier;
+    let result = crate::coerce::round_15(number * multiplier).trunc() / multiplier;
 
     Ok(FormulaValue::Number(result))
 }
@@ -892,58 +895,27 @@ pub fn fn_sumproduct(
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
-    // Get dimensions from first array
-    let first = &args[0];
-    let (base_rows, base_cols, base_values) = match first {
-        FormulaValue::Array { data: arr, .. } => {
-            let rows = arr.len();
-            let cols = arr.first().map(|r| r.len()).unwrap_or(0);
-            if rows == 0 || cols == 0 {
-                return Ok(FormulaValue::Error(CellError::Value));
-            }
-            // Flatten to values
-            let values: Vec<f64> = arr
-                .iter()
-                .flat_map(|row| {
-                    row.iter().map(|v| match v {
-                        FormulaValue::Number(n) => *n,
-                        FormulaValue::Boolean(true) => 1.0,
-                        FormulaValue::Boolean(false) => 0.0,
-                        FormulaValue::Error(_) => f64::NAN,
-                        _ => 0.0, // Non-numeric treated as 0
-                    })
-                })
-                .collect();
-            (rows, cols, values)
-        }
-        FormulaValue::Number(n) => (1, 1, vec![*n]),
-        FormulaValue::Boolean(b) => (1, 1, vec![if *b { 1.0 } else { 0.0 }]),
-        FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
-        FormulaValue::Empty => (1, 1, vec![0.0]),
-        _ => return Ok(FormulaValue::Error(CellError::Value)),
-    };
-
-    // Start with base values as the product accumulator
-    let mut products = base_values;
-
-    // Multiply with each subsequent array
-    for arg in args.iter().skip(1) {
+    // Each argument as a grid of numbers. Inside an array, only numbers count: text, TRUE and
+    // FALSE are 0 (so `SUMPRODUCT((A1:A5="x"),B1:B5)` is 0 and needs `--`), and an error is the
+    // result.
+    let mut dims = None;
+    let mut products: Vec<f64> = Vec::new();
+    for arg in args {
         let (rows, cols, values) = match arg {
             FormulaValue::Array { data: arr, .. } => {
                 let rows = arr.len();
                 let cols = arr.first().map(|r| r.len()).unwrap_or(0);
-                let values: Vec<f64> = arr
-                    .iter()
-                    .flat_map(|row| {
-                        row.iter().map(|v| match v {
-                            FormulaValue::Number(n) => *n,
-                            FormulaValue::Boolean(true) => 1.0,
-                            FormulaValue::Boolean(false) => 0.0,
-                            FormulaValue::Error(_) => f64::NAN,
-                            _ => 0.0,
-                        })
-                    })
-                    .collect();
+                if rows == 0 || cols == 0 {
+                    return Ok(FormulaValue::Error(CellError::Value));
+                }
+                let mut values = Vec::with_capacity(rows * cols);
+                for v in arr.iter().flatten() {
+                    match v {
+                        FormulaValue::Number(n) => values.push(*n),
+                        FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
+                        _ => values.push(0.0),
+                    }
+                }
                 (rows, cols, values)
             }
             FormulaValue::Number(n) => (1, 1, vec![*n]),
@@ -952,30 +924,21 @@ pub fn fn_sumproduct(
             FormulaValue::Empty => (1, 1, vec![0.0]),
             _ => return Ok(FormulaValue::Error(CellError::Value)),
         };
-
-        // Check dimensions match
-        if rows != base_rows || cols != base_cols {
-            return Ok(FormulaValue::Error(CellError::Value));
-        }
-
-        // Multiply element-wise
-        for (i, val) in values.iter().enumerate() {
-            products[i] *= val;
+        match dims {
+            None => {
+                dims = Some((rows, cols));
+                products = values;
+            }
+            Some(d) if d != (rows, cols) => return Ok(FormulaValue::Error(CellError::Value)),
+            Some(_) => {
+                for (product, value) in products.iter_mut().zip(values) {
+                    *product *= value;
+                }
+            }
         }
     }
 
-    // Sum all products, propagating any NaN (errors)
-    let mut sum = 0.0;
-    for p in &products {
-        if p.is_nan() {
-            // Error in array element - for now treat as 0 like Excel does for text
-            // (actual errors should have been caught earlier)
-            continue;
-        }
-        sum += p;
-    }
-
-    Ok(FormulaValue::Number(sum))
+    Ok(FormulaValue::Number(products.iter().sum()))
 }
 
 /// SUMIFS(sum_range, criteria_range1, criteria1, [criteria_range2, criteria2], ...)
@@ -1037,9 +1000,6 @@ pub fn fn_sumifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 
         // Get criteria and create matcher
         let criteria = &args[criteria_idx];
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
-        }
         matchers.push(CriteriaMatcher::new(criteria));
     }
 
@@ -1092,9 +1052,6 @@ fn fn_sumifs_single(
         let criteria = &criteria_args[criteria_idx];
 
         if let FormulaValue::Error(e) = range_value {
-            return Ok(FormulaValue::Error(*e));
-        }
-        if let FormulaValue::Error(e) = criteria {
             return Ok(FormulaValue::Error(*e));
         }
 

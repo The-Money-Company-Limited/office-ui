@@ -6,6 +6,7 @@
 //! - A comparison expression: ">5", ">=10", "<100", "<=50", "<>0", "=5"
 //! - Wildcards: "*" matches any characters, "?" matches single character
 //! - Empty string: matches empty cells
+//! - An error, or its text ("#N/A"): matches cells holding that error
 
 use crate::evaluator::FormulaValue;
 
@@ -20,6 +21,10 @@ pub struct CriteriaMatcher {
 enum CriteriaType {
     /// Exact number match
     Number(f64),
+    /// A number written as text (`"5"`): matches the number and the same text
+    NumberOrText(f64, String),
+    /// TRUE or FALSE: matches only that boolean
+    Boolean(bool),
     /// Comparison with number (operator, value)
     Comparison(ComparisonOp, f64),
     /// Text match (case-insensitive, with wildcards)
@@ -27,6 +32,8 @@ enum CriteriaType {
     TextComparison(ComparisonOp, String),
     /// Match empty values
     Empty,
+    /// An error (`NA()`, `"#N/A"`): matches cells holding that error
+    Error(duke_sheets_core::CellError),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -44,10 +51,10 @@ impl CriteriaMatcher {
     pub fn new(criteria: &FormulaValue) -> Self {
         let criteria_type = match criteria {
             FormulaValue::Number(n) => CriteriaType::Number(*n),
-            FormulaValue::Boolean(b) => CriteriaType::Number(if *b { 1.0 } else { 0.0 }),
+            FormulaValue::Boolean(b) => CriteriaType::Boolean(*b),
             FormulaValue::String(s) => Self::parse_string_criteria(s),
             FormulaValue::Empty => CriteriaType::Empty,
-            FormulaValue::Error(_) => CriteriaType::Empty, // Errors don't match anything
+            FormulaValue::Error(e) => CriteriaType::Error(*e),
             FormulaValue::Array { .. } => CriteriaType::Empty, // Arrays as criteria not supported
         };
 
@@ -55,10 +62,14 @@ impl CriteriaMatcher {
     }
 
     fn parse_string_criteria(s: &str) -> CriteriaType {
-        let s = s.trim();
-
+        // Text is matched as written, spaces included: "  2E" finds only "  2E". Numbers, percents
+        // and dates in it are read as Excel reads them (">=1/1/2024", "5%").
         if s.is_empty() {
             return CriteriaType::Empty;
+        }
+
+        if let Some(error) = duke_sheets_core::CellError::parse(s) {
+            return CriteriaType::Error(error);
         }
 
         // Try to parse as comparison operator + number
@@ -67,8 +78,13 @@ impl CriteriaMatcher {
         }
 
         // Try to parse as plain number
-        if let Ok(n) = s.parse::<f64>() {
-            return CriteriaType::Number(n);
+        if let Some(n) = crate::coerce::text_to_number(s) {
+            return CriteriaType::NumberOrText(n, s.trim().to_lowercase());
+        }
+        match s.to_ascii_uppercase().as_str() {
+            "TRUE" => return CriteriaType::Boolean(true),
+            "FALSE" => return CriteriaType::Boolean(false),
+            _ => {}
         }
 
         // Text match (case-insensitive, supports wildcards)
@@ -94,8 +110,7 @@ impl CriteriaMatcher {
         };
 
         // Try to parse the number part
-        let rest = rest.trim();
-        if let Ok(n) = rest.parse::<f64>() {
+        if let Some(n) = crate::coerce::text_to_number(rest) {
             Some(CriteriaType::Comparison(op, n))
         } else {
             Some(CriteriaType::TextComparison(op, rest.to_lowercase()))
@@ -105,31 +120,21 @@ impl CriteriaMatcher {
     /// Check if a value matches the criteria
     pub fn matches(&self, value: &FormulaValue) -> bool {
         match &self.criteria_type {
-            CriteriaType::Number(criteria_num) => {
-                // Only match actual numeric values, not strings that look like numbers
-                // This matches Excel behavior where SUMIF(A:A, 5) won't match text "5"
-                match value {
-                    FormulaValue::Number(n) => (n - criteria_num).abs() < 1e-10,
-                    FormulaValue::Boolean(b) => {
-                        let n = if *b { 1.0 } else { 0.0 };
-                        (n - criteria_num).abs() < 1e-10
-                    }
-                    _ => false,
-                }
+            CriteriaType::Number(criteria_num) => is_number(value, *criteria_num),
+
+            CriteriaType::NumberOrText(criteria_num, text) => {
+                is_number(value, *criteria_num)
+                    || matches!(value, FormulaValue::String(s) if s.trim().to_lowercase() == *text)
             }
 
+            CriteriaType::Boolean(b) => matches!(value, FormulaValue::Boolean(v) if v == b),
+
             CriteriaType::Comparison(op, criteria_num) => {
-                // Comparisons also only work on numeric values
+                // Comparisons only work on numeric values: ">0" doesn't count TRUE, but "<>5"
+                // counts everything that isn't the number 5, text and blanks included
                 let n = match value {
                     FormulaValue::Number(n) => *n,
-                    FormulaValue::Boolean(b) => {
-                        if *b {
-                            1.0
-                        } else {
-                            0.0
-                        }
-                    }
-                    _ => return false,
+                    _ => return matches!(op, ComparisonOp::NotEqual),
                 };
                 match op {
                     ComparisonOp::Equal => (n - criteria_num).abs() < 1e-10,
@@ -141,14 +146,31 @@ impl CriteriaMatcher {
                 }
             }
 
-            CriteriaType::Text(pattern) => {
-                let text = value.as_string().to_lowercase();
-                Self::wildcard_match(pattern, &text)
-            }
+            // Text criteria test text only: "*" counts no blanks or numbers, while "<>x" counts
+            // everything that isn't x. "=" alone matches blanks.
+            CriteriaType::Text(pattern) => match value {
+                FormulaValue::String(s) => super::wildcard::matches(pattern, &s.to_lowercase()),
+                _ => false,
+            },
 
             CriteriaType::TextComparison(op, pattern) => {
-                let text = value.as_string().to_lowercase();
-                let matched = Self::wildcard_match(pattern, &text);
+                let text = match value {
+                    FormulaValue::String(s) => s.to_lowercase(),
+                    // An error is compared as written, without wildcards or ordering: "<>#N/A"
+                    // passes over #N/A and keeps every other error, "<>*" keeps them all, and
+                    // "<m" counts none.
+                    FormulaValue::Error(e) => {
+                        let same = e.as_str().eq_ignore_ascii_case(pattern);
+                        return match op {
+                            ComparisonOp::Equal => same,
+                            ComparisonOp::NotEqual => !same,
+                            _ => false,
+                        };
+                    }
+                    FormulaValue::Empty if pattern.is_empty() => String::new(),
+                    _ => return matches!(op, ComparisonOp::NotEqual),
+                };
+                let matched = super::wildcard::matches(pattern, &text);
                 match op {
                     ComparisonOp::Equal => matched,
                     ComparisonOp::NotEqual => !matched,
@@ -163,69 +185,52 @@ impl CriteriaMatcher {
                 matches!(value, FormulaValue::Empty)
                     || matches!(value, FormulaValue::String(s) if s.is_empty())
             }
+
+            CriteriaType::Error(error) => matches!(value, FormulaValue::Error(e) if e == error),
         }
-    }
-
-    /// Match with wildcards: * = any characters, ? = single character
-    fn wildcard_match(pattern: &str, text: &str) -> bool {
-        // If no wildcards, do exact match
-        if !pattern.contains('*') && !pattern.contains('?') {
-            return pattern == text;
-        }
-
-        // Wildcard matching using iterative approach with backtracking
-        let pattern_chars: Vec<char> = pattern.chars().collect();
-        let text_chars: Vec<char> = text.chars().collect();
-
-        Self::wildcard_match_impl(&pattern_chars, &text_chars)
-    }
-
-    fn wildcard_match_impl(pattern: &[char], text: &[char]) -> bool {
-        let mut pi = 0; // pattern index
-        let mut ti = 0; // text index
-        let mut star_pi = None; // position of last * in pattern
-        let mut star_ti = 0; // position in text when we matched last *
-
-        while ti < text.len() {
-            if pi < pattern.len() && (pattern[pi] == '?' || pattern[pi] == text[ti]) {
-                // Characters match or pattern has ?
-                pi += 1;
-                ti += 1;
-            } else if pi < pattern.len() && pattern[pi] == '*' {
-                // Star found, record position
-                star_pi = Some(pi);
-                star_ti = ti;
-                pi += 1; // Try matching * with empty string first
-            } else if let Some(sp) = star_pi {
-                // Mismatch, but we have a star to backtrack to
-                pi = sp + 1;
-                star_ti += 1;
-                ti = star_ti;
-            } else {
-                // No match and no star to backtrack to
-                return false;
-            }
-        }
-
-        // Check remaining pattern characters (must all be *)
-        while pi < pattern.len() && pattern[pi] == '*' {
-            pi += 1;
-        }
-
-        pi == pattern.len()
     }
 }
+
+/// A number, or text that reads as it: SUMIFS(K:K,A:A,DATE(2021,3,1)) adds the rows whose date
+/// is the text "3-1-21". Booleans never match.
+fn is_number(value: &FormulaValue, number: f64) -> bool {
+    let same = |n: f64| (n - number).abs() < 1e-10;
+    match value {
+        FormulaValue::Number(n) => same(*n),
+        FormulaValue::String(s) => crate::coerce::text_to_number(s).is_some_and(same),
+        _ => false,
+    }
+
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn test_error_criteria() {
+        use duke_sheets_core::CellError;
+        for criteria in [FormulaValue::Error(CellError::Na), FormulaValue::String("#N/A".into())] {
+            let matcher = CriteriaMatcher::new(&criteria);
+            assert!(matcher.matches(&FormulaValue::Error(CellError::Na)));
+            assert!(!matcher.matches(&FormulaValue::Error(CellError::Value)));
+            assert!(!matcher.matches(&FormulaValue::Empty));
+        }
+        let na = FormulaValue::Error(CellError::Na);
+        for (criteria, expected) in [("<>#N/A", false), ("<>#REF!", true), ("<>*", true), ("*", false), ("<m", false), ("=#n/a", true)] {
+            assert_eq!(CriteriaMatcher::new(&FormulaValue::String(criteria.into())).matches(&na), expected, "{criteria}");
+        }
+    }
+
+    #[test]
     fn test_number_criteria() {
         let matcher = CriteriaMatcher::new(&FormulaValue::Number(5.0));
         assert!(matcher.matches(&FormulaValue::Number(5.0)));
         assert!(!matcher.matches(&FormulaValue::Number(4.0)));
-        assert!(!matcher.matches(&FormulaValue::String("5".into())));
+        assert!(matcher.matches(&FormulaValue::String("5".into())));
+        assert!(!matcher.matches(&FormulaValue::String("x".into())));
+        assert!(!matcher.matches(&FormulaValue::Boolean(true)));
     }
 
     #[test]
@@ -306,6 +311,34 @@ mod tests {
         assert!(matcher.matches(&FormulaValue::String("apple".into())));
         assert!(matcher.matches(&FormulaValue::String("app".into())));
         assert!(!matcher.matches(&FormulaValue::String("ap".into())));
+    }
+
+    #[test]
+    fn test_text_criteria_skip_blanks_and_numbers() {
+        let any = CriteriaMatcher::new(&FormulaValue::String("*".into()));
+        assert!(any.matches(&FormulaValue::String("x".into())));
+        assert!(!any.matches(&FormulaValue::Empty));
+        assert!(!any.matches(&FormulaValue::Number(1.0)));
+        let before_m = CriteriaMatcher::new(&FormulaValue::String("<m".into()));
+        assert!(before_m.matches(&FormulaValue::String("a".into())));
+        assert!(!before_m.matches(&FormulaValue::Empty));
+        let not_x = CriteriaMatcher::new(&FormulaValue::String("<>x".into()));
+        assert!(not_x.matches(&FormulaValue::Empty));
+        assert!(not_x.matches(&FormulaValue::Number(1.0)));
+        assert!(!not_x.matches(&FormulaValue::String("X".into())));
+        let not_na = CriteriaMatcher::new(&FormulaValue::String("<>#N/A".into()));
+        assert!(!not_na.matches(&FormulaValue::Error(duke_sheets_core::CellError::Na)));
+        assert!(not_na.matches(&FormulaValue::Error(duke_sheets_core::CellError::Ref)));
+        let equals = CriteriaMatcher::new(&FormulaValue::String("=".into()));
+        assert!(equals.matches(&FormulaValue::Empty));
+        assert!(!equals.matches(&FormulaValue::String("x".into())));
+    }
+
+    #[test]
+    fn test_number_text_criteria_reads_text_as_numbers() {
+        let matcher = CriteriaMatcher::new(&FormulaValue::String("5".into()));
+        assert!(matcher.matches(&FormulaValue::String("5.0".into())));
+        assert!(matcher.matches(&FormulaValue::Number(5.0)));
     }
 
     #[test]

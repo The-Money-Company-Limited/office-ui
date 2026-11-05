@@ -1,4 +1,4 @@
-// On Modal: sh tests/formula-point.setup.sh && node --test tests/formula-point.browser.mjs
+// On the build box: sh tests/formula-point.setup.sh && node --test tests/formula-point.browser.mjs
 // Set EVERYDAY_BASELINE=1 to exercise HEAD without the fixes.
 import assert from "node:assert/strict";
 import { test } from "node:test";

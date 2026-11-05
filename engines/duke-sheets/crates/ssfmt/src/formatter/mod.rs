@@ -179,9 +179,17 @@ impl NumberFormat {
     pub fn format_text(&self, text: &str, _opts: &FormatOptions) -> String {
         let sections = self.sections();
 
-        // Text section is the 4th section if present
-        if sections.len() >= 4 {
-            let text_section = &sections[3];
+        // Text section is the 4th section if present, or a lone section with an `@` in it
+        let text_section = if sections.len() >= 4 {
+            Some(&sections[3])
+        } else if sections.len() == 1
+            && sections[0].parts.iter().any(|p| matches!(p, FormatPart::TextPlaceholder))
+        {
+            Some(&sections[0])
+        } else {
+            None
+        };
+        if let Some(text_section) = text_section {
             let mut result = String::new();
 
             for part in &text_section.parts {

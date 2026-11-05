@@ -112,6 +112,11 @@ impl<'a> Parser<'a> {
     fn parse_section(&mut self) -> Result<Section, ParseError> {
         let mut builder = SectionBuilder::new();
         self.seen_hour = false;
+        // A section left empty (`0;;` for negatives, the second of `[<3]"x"0;`) shows nothing,
+        // unlike `General`, which also has no parts.
+        if matches!(self.current.token, Token::Eof | Token::SectionSep) {
+            builder.add_part(FormatPart::Literal(String::new()));
+        }
 
         loop {
             match &self.current.token {

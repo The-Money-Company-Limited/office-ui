@@ -1335,7 +1335,7 @@ pub fn fn_sumxmy2(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
 
 pub fn fn_aggregate(
     args: &[FormulaValue],
-    _ctx: &EvaluationContext,
+    ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
     if args.len() < 3 {
         return Ok(FormulaValue::Error(CellError::Value));
@@ -1347,6 +1347,19 @@ pub fn fn_aggregate(
     let option = match get_number(args.get(1)).and_then(to_int_trunc) {
         Ok(v) => v,
         Err(e) => return Ok(e),
+    };
+    // Options 0 to 3 leave out cells that are themselves SUBTOTAL or AGGREGATE results, so a
+    // grand total over subtotals counts each value once.
+    let stripped: Vec<FormulaValue>;
+    let args = if (0..=3).contains(&option) {
+        stripped = args
+            .iter()
+            .enumerate()
+            .map(|(i, arg)| if i >= 2 { without_nested_totals(arg, ctx) } else { arg.clone() })
+            .collect();
+        &stripped[..]
+    } else {
+        args
     };
     // Options that skip errors: 2,3,6,7 (and combinations)
     let skip_errors = matches!(option, 2 | 3 | 6 | 7);
@@ -1549,6 +1562,49 @@ pub fn fn_aggregate(
         }
         _ => Ok(FormulaValue::Error(CellError::Num)),
     }
+}
+
+/// Whether a formula calls SUBTOTAL or AGGREGATE (and not, say, MYSUBTOTAL), outside its strings.
+fn calls_total(formula: &str) -> bool {
+    let mut in_string = false;
+    let bytes = formula.as_bytes();
+    for (i, &c) in bytes.iter().enumerate() {
+        if c == b'"' {
+            in_string = !in_string;
+        } else if !in_string && (i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_')) {
+            let rest = &formula[i..];
+            if rest.starts_with("SUBTOTAL(") || rest.starts_with("AGGREGATE(") || rest.starts_with("_XLFN.AGGREGATE(") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn without_nested_totals(value: &FormulaValue, ctx: &EvaluationContext) -> FormulaValue {
+    let FormulaValue::Array { data, source: Some(source) } = value else {
+        return value.clone();
+    };
+    let Some(sheet) = ctx.workbook.and_then(|workbook| workbook.worksheet(source.sheet)) else {
+        return value.clone();
+    };
+    let is_total = |row: usize, col: usize| {
+        sheet
+            .get_formula_at(source.start_row + row as u32, source.start_col + col as u16)
+            .map(|formula| calls_total(&formula.to_ascii_uppercase()))
+            .unwrap_or(false)
+    };
+    let data = data
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            line.iter()
+                .enumerate()
+                .map(|(j, v)| if is_total(i, j) { FormulaValue::Empty } else { v.clone() })
+                .collect()
+        })
+        .collect();
+    FormulaValue::Array { data, source: Some(source.clone()) }
 }
 
 pub fn fn_subtotal(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -2998,11 +3054,8 @@ mod tests {
         assert_eq!(num(eval("=CEILING(2.5, 1)").unwrap()), 3.0);
         // =CEILING(-2.5, -2) = -4
         assert_eq!(num(eval("=CEILING(-2.5, -2)").unwrap()), -4.0);
-        // =CEILING(-2.5, 2) = #NUM! (compat: different signs)
-        assert_eq!(
-            eval("=CEILING(-2.5, 2)").unwrap(),
-            FormulaValue::Error(CellError::Num)
-        );
+        // =CEILING(-2.5, 2) = -2 (rounds toward zero, Excel 2010 on)
+        assert_eq!(num(eval("=CEILING(-2.5, 2)").unwrap()), -2.0);
         // =CEILING(1.5, 0.1) = 1.5
         assert!((num(eval("=CEILING(1.5, 0.1)").unwrap()) - 1.5).abs() < 1e-10);
         // =CEILING(0.234, 0.01) = 0.24
@@ -3017,11 +3070,8 @@ mod tests {
         assert_eq!(num(eval("=FLOOR(-2.5, -2)").unwrap()), -2.0);
         // =FLOOR(0.234, 0.01) = 0.23
         assert!((num(eval("=FLOOR(0.234, 0.01)").unwrap()) - 0.23).abs() < 1e-10);
-        // =FLOOR(-2.5, 2) = #NUM! (different signs in Excel)
-        assert_eq!(
-            eval("=FLOOR(-2.5, 2)").unwrap(),
-            FormulaValue::Error(CellError::Num)
-        );
+        // =FLOOR(-2.5, 2) = -4 (rounds away from zero, Excel 2010 on)
+        assert_eq!(num(eval("=FLOOR(-2.5, 2)").unwrap()), -4.0);
     }
 
     // ── SERIESSUM docs ──

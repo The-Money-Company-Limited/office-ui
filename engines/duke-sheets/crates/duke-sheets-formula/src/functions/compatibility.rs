@@ -10,7 +10,7 @@ fn scalar_number(value: &FormulaValue) -> Result<f64, CellError> {
         FormulaValue::Number(n) => Ok(*n),
         FormulaValue::Boolean(true) => Ok(1.0),
         FormulaValue::Boolean(false) => Ok(0.0),
-        FormulaValue::String(s) => s.parse::<f64>().map_err(|_| CellError::Value),
+        FormulaValue::String(s) => crate::coerce::text_to_number(s).ok_or(CellError::Value),
         FormulaValue::Empty => Ok(0.0),
         FormulaValue::Error(e) => Err(*e),
         FormulaValue::Array { data: arr, .. } => {
@@ -1347,11 +1347,13 @@ pub fn fn_ceiling(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
     if significance == 0.0 {
         return Ok(FormulaValue::Number(0.0));
     }
-    if (number > 0.0 && significance < 0.0) || (number < 0.0 && significance > 0.0) {
+    // A negative number with a positive significance rounds toward zero (Excel 2010 on); only a
+    // positive number with a negative significance is an error.
+    if number > 0.0 && significance < 0.0 {
         return Ok(FormulaValue::Error(CellError::Num));
     }
     Ok(FormulaValue::Number(
-        (number / significance).ceil() * significance,
+        crate::coerce::round_15(number / significance).ceil() * significance,
     ))
 }
 
@@ -1367,11 +1369,13 @@ pub fn fn_floor(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     if significance == 0.0 {
         return Ok(FormulaValue::Number(0.0));
     }
-    if (number > 0.0 && significance < 0.0) || (number < 0.0 && significance > 0.0) {
+    // A negative number with a positive significance rounds away from zero (Excel 2010 on); only
+    // a positive number with a negative significance is an error.
+    if number > 0.0 && significance < 0.0 {
         return Ok(FormulaValue::Error(CellError::Num));
     }
     Ok(FormulaValue::Number(
-        (number / significance).floor() * significance,
+        crate::coerce::round_15(number / significance).floor() * significance,
     ))
 }
 
@@ -2613,12 +2617,17 @@ mod tests {
         );
     }
 
-    // CEILING: mixed signs (negative number, positive significance) = #NUM! for compatibility CEILING
+    // CEILING: a negative number with a positive significance rounds toward zero (Excel 2010 on);
+    // a positive number with a negative significance is #NUM!
     #[test]
     fn test_ceiling_docs_neg_pos() {
         let ctx = EvaluationContext::simple();
         assert_eq!(
             fn_ceiling(&[n(-2.5), n(2.0)], &ctx).unwrap(),
+            FormulaValue::Number(-2.0),
+        );
+        assert_eq!(
+            fn_ceiling(&[n(2.5), n(-2.0)], &ctx).unwrap(),
             FormulaValue::Error(CellError::Num),
         );
     }

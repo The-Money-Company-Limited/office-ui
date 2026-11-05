@@ -9,6 +9,7 @@ description = "Formula parser and evaluator for duke-sheets spreadsheet library"
 
 [dependencies]
 duke-sheets-core.workspace = true
+ssfmt.workspace = true
 thiserror.workspace = true
 ahash.workspace = true
 chrono.workspace = true

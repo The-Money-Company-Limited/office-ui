@@ -103,14 +103,14 @@ fn format_cell_value_inner(
     match effective {
         CellValue::Number(n) => format_number(*n, format, date_1904, locale),
         CellValue::String(s) => {
-            // Apply text section of format if it has one (the @ placeholder)
+            // Apply the format's text section, if it has one (`0;-0;0;"x "@`, `"Code: "@`)
             let code = format.format_string();
-            if code != "General" && code != "@" {
-                // ssfmt can handle text formatting for formats with a text section
-                // but for most formats, just return the string as-is
-                s.to_string()
-            } else {
-                s.to_string()
+            if code == "General" || code == "@" {
+                return s.to_string();
+            }
+            match ssfmt::NumberFormat::parse(&code) {
+                Ok(parsed) => parsed.format_text(s.as_str(), &ssfmt::FormatOptions::default()),
+                Err(_) => s.to_string(),
             }
         }
         CellValue::Boolean(b) => {

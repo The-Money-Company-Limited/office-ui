@@ -1,7 +1,7 @@
 # react-xlsx
 
 > In office-ui, this fork is part of the root pnpm workspace. Install and build
-> from the office-ui root on Modal (`pnpm install`, `pnpm build`). Package builds
+> from the office-ui root on the build box (`pnpm install`, `pnpm build`). Package builds
 > and unit tests can also run from this directory after the root install.
 > Playground apps and their dev/visual-test flows are not included in the default
 > workspace. See [office-ui development](../../README.md#development) for the

@@ -1,4 +1,4 @@
-// Run through tools/modal/r. Disable only the new transaction to check the boundary tests.
+// Run through tools/cloudflare/r. Disable only the new transaction to check the boundary tests.
 import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 const path = new URL("../packages/react-xlsx/src/structural-edits.ts", import.meta.url);

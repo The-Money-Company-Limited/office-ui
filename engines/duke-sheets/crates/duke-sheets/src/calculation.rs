@@ -26,10 +26,10 @@ use crate::{
 };
 use ahash::{AHashMap, AHashSet};
 use dashmap::DashMap;
-use duke_sheets_core::CellAddress;
+use duke_sheets_core::{CellAddress, CellRange};
 use duke_sheets_formula::dependency::CellKey;
 use duke_sheets_formula::functions::FunctionRegistry;
-use duke_sheets_formula::{StructuredRefSpecifier, StructuredReference};
+use duke_sheets_formula::StructuredReference;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, OnceLock};
@@ -380,6 +380,15 @@ fn emit_calculation_trace(trace: &CalculationTrace) {
     }
 }
 
+/// A formula that returns an empty cell (`=A1` with A1 empty, or `INDEX` landing on one) shows 0,
+/// as in Excel, and counts as a number for the formulas that read it.
+fn shown_result(value: FormulaValue) -> CellValue {
+    match value {
+        FormulaValue::Empty => CellValue::Number(0.0),
+        other => other.into(),
+    }
+}
+
 #[derive(Clone)]
 struct ParsedFormulaTemplate {
     base_row: u32,
@@ -387,12 +396,39 @@ struct ParsedFormulaTemplate {
     volatile: bool,
 }
 
+/// The sheets a reference reads: its own sheet, every sheet of a span (`Jan:Dec!B2`), or none
+/// for another workbook (`[1]May!A1`) or a sheet that doesn't exist.
+fn ref_sheets(sheet: Option<&String>, workbook: &Workbook, current_sheet: usize) -> Vec<usize> {
+    match sheet {
+        None => vec![current_sheet],
+        Some(name) if name.starts_with('[') => Vec::new(),
+        Some(name) => match name.split_once(':') {
+            Some((first, last)) => match (workbook.sheet_index(first), workbook.sheet_index(last)) {
+                (Some(a), Some(b)) => (a.min(b)..=a.max(b)).collect(),
+                _ => Vec::new(),
+            },
+            None => workbook.sheet_index(name).into_iter().collect(),
+        },
+    }
+}
+
+/// A formula that reads another workbook keeps the value saved in the file (`None`), as Excel shows
+/// it until the link is refreshed; one with no saved value, such as a formula just typed, is #REF!
+/// because that workbook isn't open.
+fn unsaved_external(workbook: &Workbook, cell_key: CellKey) -> Option<FormulaValue> {
+    let saved = workbook.worksheet(cell_key.sheet).map(|sheet| sheet.get_value_at(cell_key.row, cell_key.col));
+    matches!(saved, None | Some(CellValue::Empty)).then_some(FormulaValue::Error(duke_sheets_core::CellError::Ref))
+}
+
 fn shift_formula_rows(expr: &mut FormulaExpr, row_delta: i32) {
     match expr {
         FormulaExpr::CellRef(cell_ref) => shift_cell_address_row(&mut cell_ref.address, row_delta),
         FormulaExpr::RangeRef(range_ref) => {
-            shift_cell_address_row(&mut range_ref.range.start, row_delta);
-            shift_cell_address_row(&mut range_ref.range.end, row_delta);
+            let (mut start, mut end) = (range_ref.range.start, range_ref.range.end);
+            shift_cell_address_row(&mut start, row_delta);
+            shift_cell_address_row(&mut end, row_delta);
+            // A fixed end and a moving end can pass each other, as in `$A$9:A1` shifted down.
+            range_ref.range = CellRange::new(start, end);
         }
         FormulaExpr::ExternalRef(ext) => shift_cell_address_row(&mut ext.address, row_delta),
         FormulaExpr::BinaryOp { left, right, .. } => {
@@ -644,12 +680,61 @@ fn normalize_formula_row_template(formula: &str, current_row: u32) -> (String, u
     (shift_a1_references_rows(formula, shift), base_row)
 }
 
+/// Whether formula text has a whole-row reference (`1:1`, `$2:$5`) outside its strings.
+fn mentions_whole_rows(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut in_string = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'"' {
+            in_string = !in_string;
+        } else if !in_string
+            && (c.is_ascii_digit() || c == b'$')
+            && (i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || matches!(bytes[i - 1], b'_' | b'.' | b'$')))
+        {
+            let digits = |mut j: usize| {
+                if bytes.get(j) == Some(&b'$') {
+                    j += 1;
+                }
+                let start = j;
+                while bytes.get(j).is_some_and(u8::is_ascii_digit) {
+                    j += 1;
+                }
+                (j > start).then_some(j)
+            };
+            if let Some(j) = digits(i) {
+                if bytes.get(j) == Some(&b':') {
+                    if let Some(k) = digits(j + 1) {
+                        if !bytes.get(k).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'.') {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 fn parse_with_row_template_cache(
     text: &str,
     row: u32,
     check_volatile: bool,
     template_cache: &DashMap<(String, u32), ParsedFormulaTemplate>,
 ) -> (Option<FormulaExpr>, bool) {
+    // The row template shifts only A1-style references; a formula with whole rows (`1:1`, `$2:5`)
+    // is parsed as written.
+    if mentions_whole_rows(text) {
+        return match parse_formula(text) {
+            Ok(ast) => {
+                let volatile = check_volatile && contains_volatile_function(&ast);
+                (Some(ast), volatile)
+            }
+            Err(_) => (None, false),
+        };
+    }
     let (template_text, base_row) = normalize_formula_row_template(text, row);
     let cache_key = (template_text, base_row);
 
@@ -1145,7 +1230,7 @@ impl CalculationEngine {
         let sheet_names: ahash::AHashMap<String, usize> = (0..workbook.sheet_count())
             .filter_map(|i| workbook.worksheet(i).map(|ws| (ws.name().to_string(), i)))
             .collect();
-        let eval_cache = duke_sheets_formula::EvalCache::new(sheet_names);
+        let eval_cache = duke_sheets_formula::EvalCache::new(sheet_names.clone());
 
         if let Some(flags) = affected_flags {
             if !flags.iter().any(|&v| v) && self.volatile_cells.is_empty() {
@@ -1193,6 +1278,9 @@ impl CalculationEngine {
         // ASTs reference cells inside a spill range.
         let t_spill = now();
         if !spill_ranges.is_empty() {
+            // Spills changed cells the first pass read and cached (ranges, the used area), so the
+            // fixup reads the sheets afresh.
+            let eval_cache = duke_sheets_formula::EvalCache::new(sheet_names);
             for &cell_key in &plan.eval_order {
                 let include = affected_flags.is_none_or(|flags| {
                     plan.cell_to_idx
@@ -1260,6 +1348,9 @@ impl CalculationEngine {
 
             match evaluate(ast, &ctx) {
                 Ok(value) => Some(value),
+                Err(duke_sheets_formula::FormulaError::ExternalReference(_)) => {
+                    unsaved_external(wb_ref, cell_key)
+                }
                 Err(duke_sheets_formula::FormulaError::ExternalFunctionUnresolved(_)) => None,
                 Err(_e) => {
                     stats.errors += 1;
@@ -1282,12 +1373,12 @@ impl CalculationEngine {
                 FormulaValue::Array { data: array, .. } => {
                     let cell_array: Vec<Vec<CellValue>> = array
                         .into_iter()
-                        .map(|row| row.into_iter().map(|v| v.into()).collect())
+                        .map(|row| row.into_iter().map(shown_result).collect())
                         .collect();
                     let _ = sheet.set_array_formula_result(cell_key.row, cell_key.col, cell_array);
                 }
                 _ => {
-                    let _ = sheet.set_formula_result(cell_key.row, cell_key.col, result.into());
+                    let _ = sheet.set_formula_result(cell_key.row, cell_key.col, shown_result(result));
                 }
             }
         }
@@ -1369,6 +1460,9 @@ impl CalculationEngine {
         ctx.eval_cache = Some(eval_cache);
         match evaluate(ast, &ctx) {
             Ok(value) => Some((value, false)),
+            Err(duke_sheets_formula::FormulaError::ExternalReference(_)) => {
+                unsaved_external(workbook, cell_key).map(|value| (value, false))
+            }
             Err(duke_sheets_formula::FormulaError::ExternalFunctionUnresolved(_)) => None,
             Err(_) => Some((
                 FormulaValue::Error(duke_sheets_core::CellError::Value),
@@ -1387,12 +1481,12 @@ impl CalculationEngine {
                 FormulaValue::Array { data: array, .. } => {
                     let cell_array: Vec<Vec<CellValue>> = array
                         .into_iter()
-                        .map(|row| row.into_iter().map(|v| v.into()).collect())
+                        .map(|row| row.into_iter().map(shown_result).collect())
                         .collect();
                     let _ = sheet.set_array_formula_result(cell_key.row, cell_key.col, cell_array);
                 }
                 _ => {
-                    let _ = sheet.set_formula_result(cell_key.row, cell_key.col, result.into());
+                    let _ = sheet.set_formula_result(cell_key.row, cell_key.col, shown_result(result));
                 }
             }
         }
@@ -1566,30 +1660,21 @@ fn ast_touches_spill_range(
 ) -> bool {
     match expr {
         FormulaExpr::CellRef(cr) => {
-            let si = cr
-                .sheet
-                .as_ref()
-                .and_then(|n| workbook.sheet_index(n))
-                .unwrap_or(current_sheet);
-            let r = cr.address.row;
-            let c = cr.address.col;
-            spill_ranges
-                .iter()
-                .any(|&(s, r1, c1, r2, c2)| s == si && r >= r1 && r <= r2 && c >= c1 && c <= c2)
+            let (r, c) = (cr.address.row, cr.address.col);
+            ref_sheets(cr.sheet.as_ref(), workbook, current_sheet).into_iter().any(|si| {
+                spill_ranges
+                    .iter()
+                    .any(|&(s, r1, c1, r2, c2)| s == si && r >= r1 && r <= r2 && c >= c1 && c <= c2)
+            })
         }
         FormulaExpr::RangeRef(rr) => {
-            let si = rr
-                .sheet
-                .as_ref()
-                .and_then(|n| workbook.sheet_index(n))
-                .unwrap_or(current_sheet);
-            let sr = rr.range.start.row;
-            let er = rr.range.end.row;
-            let sc = rr.range.start.col;
-            let ec = rr.range.end.col;
-            spill_ranges
-                .iter()
-                .any(|&(s, r1, c1, r2, c2)| s == si && sr <= r2 && er >= r1 && sc <= c2 && ec >= c1)
+            let (sr, er) = (rr.range.start.row, rr.range.end.row);
+            let (sc, ec) = (rr.range.start.col, rr.range.end.col);
+            ref_sheets(rr.sheet.as_ref(), workbook, current_sheet).into_iter().any(|si| {
+                spill_ranges
+                    .iter()
+                    .any(|&(s, r1, c1, r2, c2)| s == si && sr <= r2 && er >= r1 && sc <= c2 && ec >= c1)
+            })
         }
         FormulaExpr::BinaryOp { left, right, .. } => {
             ast_touches_spill_range(left, current_sheet, workbook, spill_ranges)
@@ -1649,40 +1734,28 @@ fn extract_references_recursive(
 ) {
     match expr {
         FormulaExpr::CellRef(cell_ref) => {
-            let sheet_idx = cell_ref
-                .sheet
-                .as_ref()
-                .and_then(|name| workbook.sheet_index(name))
-                .unwrap_or(current_sheet);
-
-            let key = CellKey::new(sheet_idx, cell_ref.address.row, cell_ref.address.col);
-            // Only track deps on formula cells - static cells never change
-            if formula_cells.contains(&key) {
-                refs.push(key);
+            for sheet_idx in ref_sheets(cell_ref.sheet.as_ref(), workbook, current_sheet) {
+                let key = CellKey::new(sheet_idx, cell_ref.address.row, cell_ref.address.col);
+                // Only track deps on formula cells - static cells never change
+                if formula_cells.contains(&key) {
+                    refs.push(key);
+                }
             }
         }
         FormulaExpr::RangeRef(range_ref) => {
-            let sheet_idx = range_ref
-                .sheet
-                .as_ref()
-                .and_then(|name| workbook.sheet_index(name))
-                .unwrap_or(current_sheet);
-
-            let start_row = range_ref.range.start.row;
-            let end_row = range_ref.range.end.row;
-            let start_col = range_ref.range.start.col;
-            let end_col = range_ref.range.end.col;
-            push_range_references(
-                sheet_idx,
-                start_row,
-                end_row,
-                start_col,
-                end_col,
-                formula_cells,
-                formula_cell_index,
-                range_dep_cache,
-                refs,
-            );
+            for sheet_idx in ref_sheets(range_ref.sheet.as_ref(), workbook, current_sheet) {
+                push_range_references(
+                    sheet_idx,
+                    range_ref.range.start.row,
+                    range_ref.range.end.row,
+                    range_ref.range.start.col,
+                    range_ref.range.end.col,
+                    formula_cells,
+                    formula_cell_index,
+                    range_dep_cache,
+                    refs,
+                );
+            }
         }
         FormulaExpr::BinaryOp { left, right, .. } => {
             extract_references_recursive(
@@ -1734,10 +1807,9 @@ fn extract_references_recursive(
                         );
                     }
 
-                    let sheet_idx = range_ref
-                        .sheet
-                        .as_ref()
-                        .and_then(|name| workbook.sheet_index(name))
+                    let sheet_idx = ref_sheets(range_ref.sheet.as_ref(), workbook, current_sheet)
+                        .first()
+                        .copied()
                         .unwrap_or(current_sheet);
 
                     let mut row_start = range_ref.range.start.row;
@@ -1880,33 +1952,17 @@ fn collect_value_sensitive_ranges(
 ) -> bool {
     match expr {
         FormulaExpr::CellRef(cell_ref) => {
-            let sheet_idx = cell_ref
-                .sheet
-                .as_ref()
-                .and_then(|name| workbook.sheet_index(name))
-                .unwrap_or(current_sheet);
-            ranges.push((
-                sheet_idx,
-                cell_ref.address.row,
-                cell_ref.address.col,
-                cell_ref.address.row,
-                cell_ref.address.col,
-            ));
+            let (row, col) = (cell_ref.address.row, cell_ref.address.col);
+            for sheet_idx in ref_sheets(cell_ref.sheet.as_ref(), workbook, current_sheet) {
+                ranges.push((sheet_idx, row, col, row, col));
+            }
             true
         }
         FormulaExpr::RangeRef(range_ref) => {
-            let sheet_idx = range_ref
-                .sheet
-                .as_ref()
-                .and_then(|name| workbook.sheet_index(name))
-                .unwrap_or(current_sheet);
-            ranges.push((
-                sheet_idx,
-                range_ref.range.start.row,
-                range_ref.range.start.col,
-                range_ref.range.end.row,
-                range_ref.range.end.col,
-            ));
+            let r = range_ref.range;
+            for sheet_idx in ref_sheets(range_ref.sheet.as_ref(), workbook, current_sheet) {
+                ranges.push((sheet_idx, r.start.row, r.start.col, r.end.row, r.end.col));
+            }
             true
         }
         FormulaExpr::BinaryOp { left, right, .. } => {
@@ -2014,35 +2070,18 @@ fn collect_input_ranges(
 ) {
     match expr {
         FormulaExpr::CellRef(cell_ref) => {
-            let sheet_idx = cell_ref
-                .sheet
-                .as_ref()
-                .and_then(|name| workbook.sheet_index(name))
-                .unwrap_or(current_sheet);
-            let key = CellKey::new(sheet_idx, cell_ref.address.row, cell_ref.address.col);
-            if !formula_cells.contains(&key) {
-                ranges.push((
-                    sheet_idx,
-                    cell_ref.address.row,
-                    cell_ref.address.col,
-                    cell_ref.address.row,
-                    cell_ref.address.col,
-                ));
+            let (row, col) = (cell_ref.address.row, cell_ref.address.col);
+            for sheet_idx in ref_sheets(cell_ref.sheet.as_ref(), workbook, current_sheet) {
+                if !formula_cells.contains(&CellKey::new(sheet_idx, row, col)) {
+                    ranges.push((sheet_idx, row, col, row, col));
+                }
             }
         }
         FormulaExpr::RangeRef(range_ref) => {
-            let sheet_idx = range_ref
-                .sheet
-                .as_ref()
-                .and_then(|name| workbook.sheet_index(name))
-                .unwrap_or(current_sheet);
-            ranges.push((
-                sheet_idx,
-                range_ref.range.start.row,
-                range_ref.range.start.col,
-                range_ref.range.end.row,
-                range_ref.range.end.col,
-            ));
+            let r = range_ref.range;
+            for sheet_idx in ref_sheets(range_ref.sheet.as_ref(), workbook, current_sheet) {
+                ranges.push((sheet_idx, r.start.row, r.start.col, r.end.row, r.end.col));
+            }
         }
         FormulaExpr::BinaryOp { left, right, .. } => {
             collect_input_ranges(left, current_sheet, workbook, formula_cells, ranges);
@@ -2087,97 +2126,24 @@ fn collect_structured_ref_input_ranges(
     workbook: &Workbook,
     ranges: &mut Vec<SensitiveRange>,
 ) {
-    let (reference, columns, header_rows, totals_rows, sheet_idx) = match &sr.table {
-        Some(table_name) => {
-            let mut found = None;
-            for idx in 0..workbook.sheet_count() {
-                if let Some(ws) = workbook.worksheet(idx) {
-                    if let Some(t) = ws.table_by_name(table_name) {
-                        found = Some((
-                            t.reference,
-                            t.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
-                            t.header_row_count,
-                            t.totals_row_count,
-                            idx,
-                        ));
-                        break;
-                    }
-                }
-            }
-            match found {
-                Some(f) => f,
-                None => return,
-            }
-        }
-        None => {
-            if let Some(ws) = workbook.worksheet(current_sheet) {
-                match ws.tables().first() {
-                    Some(t) => (
-                        t.reference,
-                        t.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
-                        t.header_row_count,
-                        t.totals_row_count,
-                        current_sheet,
-                    ),
-                    None => return,
-                }
-            } else {
-                return;
-            }
-        }
+    if let Some((sheet, cells)) = structured_ref_cells(sr, current_sheet, workbook) {
+        ranges.push((sheet, cells.start.row, cells.start.col, cells.end.row, cells.end.col));
+    }
+}
+
+/// The sheet and cells a structured reference covers (every data row for `[#This Row]`, which
+/// depends on the formula's row), for dependency tracking.
+fn structured_ref_cells(
+    sr: &StructuredReference,
+    current_sheet: usize,
+    workbook: &Workbook,
+) -> Option<(usize, CellRange)> {
+    let (table, sheet) = match &sr.table {
+        Some(name) => (0..workbook.sheet_count())
+            .find_map(|i| workbook.worksheet(i)?.table_by_name(name).map(|t| (t, i)))?,
+        None => (workbook.worksheet(current_sheet)?.tables().first()?, current_sheet),
     };
-
-    let (col_start, col_end) = match &sr.column {
-        Some(col_name) => {
-            match columns
-                .iter()
-                .position(|c| c.eq_ignore_ascii_case(col_name))
-            {
-                Some(i) => {
-                    let col = reference.start.col + i as u16;
-                    (col, col)
-                }
-                None => return,
-            }
-        }
-        None => (reference.start.col, reference.end.col),
-    };
-
-    let ref_start = reference.start.row;
-    let ref_end = reference.end.row;
-    let data_start = ref_start + header_rows;
-    let data_end = if totals_rows > 0 {
-        ref_end - totals_rows
-    } else {
-        ref_end
-    };
-
-    let has_all = sr.specifiers.contains(&StructuredRefSpecifier::All);
-    let has_headers = sr.specifiers.contains(&StructuredRefSpecifier::Headers);
-    let has_data = sr.specifiers.contains(&StructuredRefSpecifier::Data);
-    let has_totals = sr.specifiers.contains(&StructuredRefSpecifier::Totals);
-    let has_this_row = sr.specifiers.contains(&StructuredRefSpecifier::ThisRow);
-
-    let (row_start, row_end) = if has_all {
-        (ref_start, ref_end)
-    } else if has_this_row {
-        (data_start, data_end)
-    } else if has_headers && has_data && has_totals {
-        (ref_start, ref_end)
-    } else if has_headers && has_data {
-        let end = if has_totals { ref_end } else { data_end };
-        (ref_start, end)
-    } else if has_data && has_totals {
-        (data_start, ref_end)
-    } else if has_headers {
-        (ref_start, ref_start + header_rows.saturating_sub(1))
-    } else if has_totals && totals_rows > 0 {
-        (ref_end - totals_rows + 1, ref_end)
-    } else {
-        (data_start, data_end)
-    };
-
-    ranges.push((sheet_idx, row_start, col_start, row_end, col_end));
+    Some((sheet, sr.span(table, None)?))
 }
 
 #[cfg(debug_assertions)]
@@ -2441,19 +2407,12 @@ fn extract_sheet_refs_recursive(
     sheets: &mut HashSet<usize>,
 ) {
     match expr {
-        FormulaExpr::CellRef(cell_ref) => {
-            if let Some(name) = &cell_ref.sheet {
-                if let Some(idx) = workbook.sheet_index(name) {
-                    sheets.insert(idx);
-                }
-            }
+        // Only references that name a sheet (or a span of sheets) point elsewhere.
+        FormulaExpr::CellRef(cell_ref) if cell_ref.sheet.is_some() => {
+            sheets.extend(ref_sheets(cell_ref.sheet.as_ref(), workbook, 0));
         }
-        FormulaExpr::RangeRef(range_ref) => {
-            if let Some(name) = &range_ref.sheet {
-                if let Some(idx) = workbook.sheet_index(name) {
-                    sheets.insert(idx);
-                }
-            }
+        FormulaExpr::RangeRef(range_ref) if range_ref.sheet.is_some() => {
+            sheets.extend(ref_sheets(range_ref.sheet.as_ref(), workbook, 0));
         }
         FormulaExpr::BinaryOp { left, right, .. } => {
             extract_sheet_refs_recursive(left, workbook, sheets);
@@ -2512,112 +2471,19 @@ fn extract_structured_ref_deps(
     _value_sensitive_ranges: &mut Vec<SensitiveRange>,
     refs: &mut Vec<CellKey>,
 ) {
-    // Find the table and its sheet index.
-    let (reference, columns, header_rows, totals_rows, sheet_idx) = match &sr.table {
-        Some(table_name) => {
-            let mut found = None;
-            for idx in 0..workbook.sheet_count() {
-                if let Some(ws) = workbook.worksheet(idx) {
-                    if let Some(t) = ws.table_by_name(table_name) {
-                        found = Some((
-                            t.reference,
-                            t.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
-                            t.header_row_count,
-                            t.totals_row_count,
-                            idx,
-                        ));
-                        break;
-                    }
-                }
-            }
-            match found {
-                Some(f) => f,
-                None => return,
-            }
-        }
-        None => {
-            if let Some(ws) = workbook.worksheet(current_sheet) {
-                match ws.tables().first() {
-                    Some(t) => (
-                        t.reference,
-                        t.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
-                        t.header_row_count,
-                        t.totals_row_count,
-                        current_sheet,
-                    ),
-                    None => return,
-                }
-            } else {
-                return;
-            }
-        }
-    };
-
-    // Determine column range.
-    let (col_start, col_end) = match &sr.column {
-        Some(col_name) => {
-            match columns
-                .iter()
-                .position(|c| c.eq_ignore_ascii_case(col_name))
-            {
-                Some(i) => {
-                    let col = reference.start.col + i as u16;
-                    (col, col)
-                }
-                None => return, // column not found
-            }
-        }
-        None => (reference.start.col, reference.end.col),
-    };
-
-    // Determine row range based on specifiers.
-    let ref_start = reference.start.row;
-    let ref_end = reference.end.row;
-    let data_start = ref_start + header_rows;
-    let data_end = if totals_rows > 0 {
-        ref_end - totals_rows
-    } else {
-        ref_end
-    };
-
-    let has_all = sr.specifiers.contains(&StructuredRefSpecifier::All);
-    let has_headers = sr.specifiers.contains(&StructuredRefSpecifier::Headers);
-    let has_data = sr.specifiers.contains(&StructuredRefSpecifier::Data);
-    let has_totals = sr.specifiers.contains(&StructuredRefSpecifier::Totals);
-    let has_this_row = sr.specifiers.contains(&StructuredRefSpecifier::ThisRow);
-
-    let (row_start, row_end) = if has_all {
-        (ref_start, ref_end)
-    } else if has_this_row {
-        // ThisRow depends on context; conservatively include all data rows.
-        (data_start, data_end)
-    } else if has_headers && has_data && has_totals {
-        (ref_start, ref_end)
-    } else if has_headers && has_data {
-        let end = if has_totals { ref_end } else { data_end };
-        (ref_start, end)
-    } else if has_data && has_totals {
-        (data_start, ref_end)
-    } else if has_headers {
-        (ref_start, ref_start + header_rows.saturating_sub(1))
-    } else if has_totals && totals_rows > 0 {
-        (ref_end - totals_rows + 1, ref_end)
-    } else {
-        // Default: #Data (implicit)
-        (data_start, data_end)
-    };
-
-    push_range_references(
-        sheet_idx,
-        row_start,
-        row_end,
-        col_start,
-        col_end,
-        formula_cells,
-        formula_cell_index,
-        range_dep_cache,
-        refs,
-    );
+    if let Some((sheet, cells)) = structured_ref_cells(sr, current_sheet, workbook) {
+        push_range_references(
+            sheet,
+            cells.start.row,
+            cells.end.row,
+            cells.start.col,
+            cells.end.col,
+            formula_cells,
+            formula_cell_index,
+            range_dep_cache,
+            refs,
+        );
+    }
 }
 
 /// Check if a formula contains any volatile functions

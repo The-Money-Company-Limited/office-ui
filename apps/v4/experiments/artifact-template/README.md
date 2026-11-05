@@ -39,10 +39,10 @@ workspace and lockfile; v4 uses `workspace:*` dependencies. One root install
 and `pnpm build` build the engines in dependency order before the app.
 Their `dist` outputs are what this template bundles.
 
-See the root [development guide](../../../../README.md#development) for Modal
+See the root [development guide](../../../../README.md#development) for build-box
 commands, `git subtree pull`/`git subtree push`, and pnpm configuration decisions.
 Ordinary builds of all three engines reuse checked-in binaries and need no Rust.
-Explicit Rust/wasm rebuilds run on Modal, from the repository root:
+Explicit Rust/wasm rebuilds run on the build box, from the repository root:
 
 ```bash
 pnpm --filter @extend-ai/react-docx-wasm build:wasm
@@ -50,12 +50,12 @@ pnpm --filter @extend-ai/react-pptx-wasm build:wasm
 (cd engines/react-xlsx && bash scripts/rebuild-duke-wasm.sh)
 ```
 
-Pull PPTX’s `engines/react-pptx/packages/wasm/src/generated/` back from Modal
+Pull PPTX’s `engines/react-pptx/packages/wasm/src/generated/` back from the box
 and include its wasm, JavaScript, and declarations when updating the Rust parser.
 
 ## Build and stage
 
-From the repository root on Modal:
+From the repository root on the build box:
 
 ```sh
 pnpm install
@@ -124,7 +124,8 @@ slide IDs, referenced images and the 25/64 MiB limits, and retains 32 receipts
 for 24 hours (`advance` moves its receipt clock in milliseconds).
 The production bridge still owns authorization, size limits and atomic releases.
 
-Run checks on Modal only, from `tools/modal`:
+Run checks on the build box only, from `tools/cloudflare` (from a worktree, set
+`repo` to its path):
 
 ```sh
 repo=office-ui

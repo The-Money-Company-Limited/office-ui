@@ -2,6 +2,7 @@
 
 use crate::error::FormulaResult;
 use crate::evaluator::{EvaluationContext, FormulaValue, ImageInfo, ImageSizing};
+use super::lookup::compare_lookup_values;
 use chrono::{Datelike, Duration, NaiveDate};
 use duke_sheets_core::CellError;
 use quick_xml::events::{BytesStart, Event};
@@ -69,7 +70,9 @@ fn flat_vector(a: &[Vec<FormulaValue>], by_col: bool) -> Vec<FormulaValue> {
     out
 }
 
-fn compare_lookup_values(a: &FormulaValue, b: &FormulaValue) -> Option<Ordering> {
+/// The order SORT and SORTBY put two keys in: numbers compare with numeric text, and a blank
+/// sorts as 0 or "".
+fn compare_sort_values(a: &FormulaValue, b: &FormulaValue) -> Option<Ordering> {
     match (a, b) {
         (FormulaValue::Number(x), FormulaValue::Number(y)) => x.partial_cmp(y),
         (FormulaValue::Boolean(x), FormulaValue::Boolean(y)) => Some(x.cmp(y)),
@@ -685,6 +688,9 @@ pub fn fn_lookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         return Ok(FormulaValue::Error(CellError::Na));
     }
 
+    // Blanks and values of another type are passed over, as in the approximate MATCH:
+    // LOOKUP(9^9,A1:E1) is the last number in the row. Unlike MATCH, a larger value doesn't end
+    // the search, so LOOKUP(2,1/(A1:A9=x),B1:B9) finds the last match.
     let mut best: Option<usize> = None;
     for (i, item) in lookup_vec.iter().enumerate() {
         if let Some(ord) = compare_lookup_values(item, &lookup_value) {
@@ -739,7 +745,7 @@ pub fn fn_sort(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
             if tr.is_empty() || idx >= tr[0].len() {
                 return Ok(FormulaValue::Error(CellError::Value));
             }
-            tr.sort_by(|a, b| compare_lookup_values(&a[idx], &b[idx]).unwrap_or(Ordering::Equal));
+            tr.sort_by(|a, b| compare_sort_values(&a[idx], &b[idx]).unwrap_or(Ordering::Equal));
             if sort_order == -1 {
                 tr.reverse();
             }
@@ -758,7 +764,7 @@ pub fn fn_sort(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     if arr.is_empty() || idx >= arr[0].len() {
         return Ok(FormulaValue::Error(CellError::Value));
     }
-    arr.sort_by(|a, b| compare_lookup_values(&a[idx], &b[idx]).unwrap_or(Ordering::Equal));
+    arr.sort_by(|a, b| compare_sort_values(&a[idx], &b[idx]).unwrap_or(Ordering::Equal));
     if sort_order == -1 {
         arr.reverse();
     }
@@ -801,7 +807,7 @@ pub fn fn_sortby(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
     let mut idxs: Vec<usize> = (0..arr.len()).collect();
     idxs.sort_by(|&a, &b| {
         for (key, order) in &keys {
-            let ord = compare_lookup_values(&key[a], &key[b]).unwrap_or(Ordering::Equal);
+            let ord = compare_sort_values(&key[a], &key[b]).unwrap_or(Ordering::Equal);
             if ord != Ordering::Equal {
                 return if *order == -1 { ord.reverse() } else { ord };
             }
@@ -1439,7 +1445,8 @@ fn pick_index(nodes: Vec<&XmlNode>, index: Option<usize>) -> Vec<&XmlNode> {
     }
 }
 
-fn evaluate_xpath(root: &XmlNode, steps: &[XPathStep]) -> Option<String> {
+/// The text of every node `steps` select, in document order; `None` when none match.
+fn evaluate_xpath(root: &XmlNode, steps: &[XPathStep]) -> Option<Vec<String>> {
     let mut current: Vec<&XmlNode> = Vec::new();
 
     for step in steps {
@@ -1471,7 +1478,12 @@ fn evaluate_xpath(root: &XmlNode, steps: &[XPathStep]) -> Option<String> {
                 for node in sources {
                     let mut matches = Vec::new();
                     node.descendant_elements_named(name, &mut matches);
-                    next.extend(pick_index(matches, *index));
+                    // Nested sources share descendants; each node is one match.
+                    for found in pick_index(matches, *index) {
+                        if !next.iter().any(|seen: &&XmlNode| std::ptr::eq(*seen, found)) {
+                            next.push(found);
+                        }
+                    }
                 }
                 if next.is_empty() {
                     return None;
@@ -1479,17 +1491,13 @@ fn evaluate_xpath(root: &XmlNode, steps: &[XPathStep]) -> Option<String> {
                 current = next;
             }
             XPathStep::Attribute(name) => {
-                for node in &current {
-                    if let Some(value) = node.attributes.get(name) {
-                        return Some(value.clone());
-                    }
-                }
-                return None;
+                let values: Vec<String> = current.iter().filter_map(|node| node.attributes.get(name).cloned()).collect();
+                return (!values.is_empty()).then_some(values);
             }
         }
     }
 
-    current.first().map(|node| node.text_content())
+    (!current.is_empty()).then(|| current.iter().map(|node| node.text_content()).collect())
 }
 
 fn xml_result_to_value(text: String) -> FormulaValue {
@@ -1527,11 +1535,18 @@ pub fn fn_filterxml(
     let Some(steps) = parse_xpath(&xpath) else {
         return Ok(FormulaValue::Error(CellError::Value));
     };
-    let Some(result) = evaluate_xpath(&document, &steps) else {
+    let Some(mut results) = evaluate_xpath(&document, &steps) else {
         return Ok(FormulaValue::Error(CellError::Value));
     };
 
-    Ok(xml_result_to_value(result))
+    // Every match, one per row: FILTERXML("<k><m>1</m><m>2</m></k>","//m") is {1;2}.
+    if results.len() == 1 {
+        return Ok(xml_result_to_value(results.remove(0)));
+    }
+    Ok(FormulaValue::Array {
+        data: results.into_iter().map(|text| vec![xml_result_to_value(text)]).collect(),
+        source: None,
+    })
 }
 
 /// WEBSERVICE(url)

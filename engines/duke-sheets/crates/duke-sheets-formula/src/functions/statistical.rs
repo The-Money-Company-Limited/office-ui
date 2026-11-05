@@ -17,12 +17,8 @@ pub fn fn_counta(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         match arg {
             // Count numbers
             FormulaValue::Number(_) => count += 1,
-            // Count text (non-empty strings)
-            FormulaValue::String(s) => {
-                if !s.is_empty() {
-                    count += 1;
-                }
-            }
+            // Count text, "" from a formula included, as Excel does
+            FormulaValue::String(_) => count += 1,
             // Count booleans
             FormulaValue::Boolean(_) => count += 1,
             // Count errors (COUNTA counts error cells as non-empty)
@@ -35,11 +31,7 @@ pub fn fn_counta(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
                     for cell in row {
                         match cell {
                             FormulaValue::Number(_) => count += 1,
-                            FormulaValue::String(s) => {
-                                if !s.is_empty() {
-                                    count += 1;
-                                }
-                            }
+                            FormulaValue::String(_) => count += 1,
                             FormulaValue::Boolean(_) => count += 1,
                             FormulaValue::Error(_) => count += 1,
                             FormulaValue::Empty => {}
@@ -66,6 +58,7 @@ pub fn fn_countblank(
     let mut count = 0;
 
     for arg in args {
+        count += arg.blank_cells_past();
         match arg {
             FormulaValue::Empty => count += 1,
             FormulaValue::String(s) if s.is_empty() => count += 1,
@@ -99,7 +92,8 @@ pub fn fn_countif(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
     // Get the range (first argument)
     let range = match args.first() {
         Some(FormulaValue::Array { data: arr, .. }) => arr,
-        Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
+        // A broken reference is an error; a cell holding an error is a value the criteria can match.
+        Some(FormulaValue::Error(CellError::Ref)) => return Ok(FormulaValue::Error(CellError::Ref)),
         Some(v) => {
             // Single value - check if it matches criteria
             let criteria = match args.get(1) {
@@ -121,8 +115,12 @@ pub fn fn_countif(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
 
     let matcher = CriteriaMatcher::new(criteria);
 
-    // Count cells that match criteria
+    // Count cells that match criteria; blanks past the cells read count when the criteria match
+    // a blank (`COUNTIF(A:A,"")`, `COUNTIF(A:A,"<>x")`).
     let mut count = 0;
+    if matcher.matches(&FormulaValue::Empty) {
+        count += args[0].blank_cells_past();
+    }
 
     for row in range {
         for cell in row {
@@ -459,9 +457,6 @@ pub fn fn_maxifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         criteria_ranges.push(range);
 
         let criteria = &args[criteria_idx];
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
-        }
         matchers.push(CriteriaMatcher::new(criteria));
     }
 
@@ -533,9 +528,6 @@ pub fn fn_minifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         criteria_ranges.push(range);
 
         let criteria = &args[criteria_idx];
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
-        }
         matchers.push(CriteriaMatcher::new(criteria));
     }
 
@@ -930,11 +922,8 @@ fn fn_maxifs_single(
         let range_value = &criteria_args[range_idx];
         let criteria = &criteria_args[criteria_idx];
 
-        if let FormulaValue::Error(e) = range_value {
-            return Ok(FormulaValue::Error(*e));
-        }
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
+        if let FormulaValue::Error(CellError::Ref) = range_value {
+            return Ok(FormulaValue::Error(CellError::Ref));
         }
 
         let matcher = CriteriaMatcher::new(criteria);
@@ -963,11 +952,8 @@ fn fn_minifs_single(
         let range_value = &criteria_args[range_idx];
         let criteria = &criteria_args[criteria_idx];
 
-        if let FormulaValue::Error(e) = range_value {
-            return Ok(FormulaValue::Error(*e));
-        }
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
+        if let FormulaValue::Error(CellError::Ref) = range_value {
+            return Ok(FormulaValue::Error(CellError::Ref));
         }
 
         let matcher = CriteriaMatcher::new(criteria);
@@ -1121,7 +1107,8 @@ pub fn fn_countifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
     // Get first criteria range to establish dimensions
     let first_range = match &args[0] {
         FormulaValue::Array { data: arr, .. } => arr,
-        FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
+        // As in COUNTIF, only a broken reference is an error here.
+        FormulaValue::Error(CellError::Ref) => return Ok(FormulaValue::Error(CellError::Ref)),
         v => {
             // Single value
             return fn_countifs_single(v, &args[1..]);
@@ -1159,14 +1146,15 @@ pub fn fn_countifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
 
         // Get criteria and create matcher
         let criteria = &args[criteria_idx];
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
-        }
         matchers.push(CriteriaMatcher::new(criteria));
     }
 
-    // Count cells where ALL criteria match
+    // Count cells where ALL criteria match; blanks past the cells read (whole columns) count when
+    // every criterion matches a blank.
     let mut count = 0.0;
+    if matchers.iter().all(|m| m.matches(&FormulaValue::Empty)) {
+        count += args[0].blank_cells_past() as f64;
+    }
 
     for row_idx in 0..rows {
         for col_idx in 0..cols {
@@ -1196,10 +1184,6 @@ fn fn_countifs_single(
 ) -> FormulaResult<FormulaValue> {
     // First pair: first_value is the range, remaining_args[0] is criteria
     let first_criteria = &remaining_args[0];
-    if let FormulaValue::Error(e) = first_criteria {
-        return Ok(FormulaValue::Error(*e));
-    }
-
     let first_matcher = CriteriaMatcher::new(first_criteria);
     if !first_matcher.matches(first_value) {
         return Ok(FormulaValue::Number(0.0));
@@ -1214,11 +1198,8 @@ fn fn_countifs_single(
         let range_value = &remaining_args[range_idx];
         let criteria = &remaining_args[criteria_idx];
 
-        if let FormulaValue::Error(e) = range_value {
-            return Ok(FormulaValue::Error(*e));
-        }
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
+        if let FormulaValue::Error(CellError::Ref) = range_value {
+            return Ok(FormulaValue::Error(CellError::Ref));
         }
 
         let matcher = CriteriaMatcher::new(criteria);
@@ -1292,9 +1273,6 @@ pub fn fn_averageifs(
 
         // Get criteria and create matcher
         let criteria = &args[criteria_idx];
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
-        }
         matchers.push(CriteriaMatcher::new(criteria));
     }
 
@@ -1351,11 +1329,8 @@ fn fn_averageifs_single(
         let range_value = &criteria_args[range_idx];
         let criteria = &criteria_args[criteria_idx];
 
-        if let FormulaValue::Error(e) = range_value {
-            return Ok(FormulaValue::Error(*e));
-        }
-        if let FormulaValue::Error(e) = criteria {
-            return Ok(FormulaValue::Error(*e));
+        if let FormulaValue::Error(CellError::Ref) = range_value {
+            return Ok(FormulaValue::Error(CellError::Ref));
         }
 
         let matcher = CriteriaMatcher::new(criteria);

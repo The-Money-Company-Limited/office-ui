@@ -7,7 +7,7 @@ use crate::ast::{
     StructuredRefSpecifier, StructuredReference, UnaryOperator,
 };
 use crate::error::{FormulaError, FormulaResult};
-use duke_sheets_core::{CellAddress, CellError, CellRange};
+use duke_sheets_core::{CellAddress, CellError, CellRange, MAX_COLS, MAX_ROWS};
 
 /// Parse a formula string into an AST
 ///
@@ -493,6 +493,22 @@ impl<'a> FormulaParser<'a> {
             return Token::SheetRef(sheet_name);
         }
 
+        // A span of sheets (3D reference): Sheet1:Sheet3!A1
+        if self.peek_char() == Some(':') {
+            let rest = &self.input[self.pos + 1..];
+            let span = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
+                .unwrap_or(rest.len());
+            if span > 0 && rest[span..].starts_with('!') {
+                let last = rest[..span].to_string();
+                let first = text.to_string();
+                for _ in 0..span + 2 {
+                    self.advance();
+                }
+                return Token::SheetRef(format!("{}:{}", first, last));
+            }
+        }
+
         // Check for boolean literals (but not if followed by '(' - then it's a function call)
         let upper = text.to_uppercase();
         if upper == "TRUE" && self.peek_char() != Some('(') {
@@ -711,16 +727,17 @@ impl<'a> FormulaParser<'a> {
     }
 
     fn parse_exponent(&mut self) -> FormulaResult<FormulaExpr> {
-        let left = self.parse_unary()?;
+        let mut left = self.parse_unary()?;
 
-        if matches!(self.current_token(), Token::Caret) {
+        // Excel evaluates ^ left to right: =2^3^2 is (2^3)^2 = 64.
+        while matches!(self.current_token(), Token::Caret) {
             self.consume();
-            let right = self.parse_exponent()?; // Right associative
-            return Ok(FormulaExpr::BinaryOp {
+            let right = self.parse_unary()?;
+            left = FormulaExpr::BinaryOp {
                 op: BinaryOperator::Power,
                 left: Box::new(left),
                 right: Box::new(right),
-            });
+            };
         }
 
         Ok(left)
@@ -824,6 +841,10 @@ impl<'a> FormulaParser<'a> {
         if matches!(self.current_token(), Token::Colon) {
             self.consume();
             let right = self.parse_primary()?;
+
+            if let Some(range) = whole_lines(&left, &right) {
+                return Ok(FormulaExpr::RangeRef(RangeReference { sheet: None, range }));
+            }
 
             // Try to convert to a RangeRef if both are cell references
             if let (FormulaExpr::CellRef(start_ref), FormulaExpr::CellRef(end_ref)) =
@@ -1004,10 +1025,16 @@ impl<'a> FormulaParser<'a> {
 
     fn parse_function_call(&mut self, name: String) -> FormulaResult<FormulaExpr> {
         let args = self.parse_call_args()?;
-        Ok(FormulaExpr::Function {
-            name: name.to_uppercase(),
-            args,
-        })
+        let name = name.to_uppercase();
+        // A LAMBDA called where it is written: =LAMBDA(x,x+1)(2)
+        let lambda = crate::evaluator::function_name(&name) == "LAMBDA";
+        let call = FormulaExpr::Function { name, args };
+        if lambda && matches!(self.current_token(), Token::LeftParen) {
+            let mut args = vec![call];
+            args.extend(self.parse_call_args()?);
+            return Ok(FormulaExpr::Function { name: LAMBDA_CALL.to_string(), args });
+        }
+        Ok(call)
     }
 
     /// Parse a parenthesized, comma-separated argument list (supports empty/omitted args,
@@ -1041,11 +1068,26 @@ impl<'a> FormulaParser<'a> {
     }
 
     fn parse_sheet_reference(&mut self, sheet: String) -> FormulaResult<FormulaExpr> {
-        // After Sheet1!, we expect a cell reference
+        // After Sheet1!, we expect a cell reference, or whole columns or rows (Sheet1!A:C, Sheet1!1:3)
         match self.current_token().clone() {
             Token::CellRef(ref_str) => {
                 self.consume();
                 self.parse_cell_reference(Some(sheet), &ref_str)
+            }
+            token @ (Token::Identifier(_) | Token::Number(_)) => {
+                self.consume();
+                let left = token_as_line(&token);
+                if left.is_some() && matches!(self.current_token(), Token::Colon) {
+                    self.consume();
+                    let right = token_as_line(&self.current_token().clone());
+                    if let Some(range) = left.zip(right).and_then(|(l, r)| lines_range(l, r)) {
+                        self.consume();
+                        return Ok(FormulaExpr::RangeRef(RangeReference { sheet: Some(sheet), range }));
+                    }
+                }
+                Err(FormulaError::Parse(
+                    "Expected cell reference after sheet name".into(),
+                ))
             }
             _ => Err(FormulaError::Parse(
                 "Expected cell reference after sheet name".into(),
@@ -1159,6 +1201,7 @@ impl<'a> FormulaParser<'a> {
             let inner = &content[1..content.len() - 1];
             let mut specifiers = Vec::new();
             let mut column = None;
+            let mut last_column = None;
 
             // Split on "],[" to separate bracket groups
             for part in Self::split_bracket_groups(inner) {
@@ -1167,18 +1210,23 @@ impl<'a> FormulaParser<'a> {
                     specifiers.push(Self::parse_specifier_keyword(part)?);
                 } else if let Some(stripped) = part.strip_prefix('@') {
                     specifiers.push(StructuredRefSpecifier::ThisRow);
-                    let col_name = stripped.trim();
+                    let col_name = stripped.trim().trim_start_matches('[').trim_end_matches(']');
                     if !col_name.is_empty() {
-                        column = Some(col_name.to_string());
+                        column = Some(unescape_column(col_name));
                     }
+                } else if let Some((first, last)) = part.split_once("]:[") {
+                    // A column range: [First]:[Last]
+                    column = Some(unescape_column(first));
+                    last_column = Some(unescape_column(last));
                 } else {
-                    column = Some(part.to_string());
+                    column = Some(unescape_column(part));
                 }
             }
 
             Ok(FormulaExpr::StructuredRef(StructuredReference {
                 table,
                 column,
+                last_column,
                 specifiers,
             }))
         } else if content.starts_with('#') {
@@ -1187,25 +1235,28 @@ impl<'a> FormulaParser<'a> {
             Ok(FormulaExpr::StructuredRef(StructuredReference {
                 table,
                 column: None,
+                last_column: None,
                 specifiers: vec![spec],
             }))
         } else if let Some(stripped) = content.strip_prefix('@') {
-            // This-row shorthand: [@Column1]
-            let col_name = stripped.trim();
+            // This-row shorthand: [@Column1], [@[Column 1]]
+            let col_name = stripped.trim().trim_start_matches('[').trim_end_matches(']');
             Ok(FormulaExpr::StructuredRef(StructuredReference {
                 table,
                 column: if col_name.is_empty() {
                     None
                 } else {
-                    Some(col_name.to_string())
+                    Some(unescape_column(col_name))
                 },
+                last_column: None,
                 specifiers: vec![StructuredRefSpecifier::ThisRow],
             }))
         } else {
-            // Plain column name: [Column1]
+            // Plain column name: [Column1], or the whole table: Table1[]
             Ok(FormulaExpr::StructuredRef(StructuredReference {
                 table,
-                column: Some(content.to_string()),
+                column: (!content.is_empty()).then(|| unescape_column(content)),
+                last_column: None,
                 specifiers: vec![],
             }))
         }
@@ -1247,6 +1298,89 @@ impl<'a> FormulaParser<'a> {
                 s
             ))),
         }
+    }
+}
+
+/// The function name a LAMBDA called in place parses to: its first argument is the LAMBDA, the rest
+/// are the values it is called with. No real function has this name.
+pub const LAMBDA_CALL: &str = "_LAMBDA.CALL";
+
+/// A table column name as written in a formula, with Excel's `'` escapes removed: `'[`, `']`,
+/// `'#` and `''` stand for `[`, `]`, `#` and `'`.
+fn unescape_column(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut chars = name.trim().chars();
+    while let Some(c) = chars.next() {
+        if c == '\'' {
+            if let Some(next) = chars.next() {
+                out.push(next);
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// One end of a whole-column (`A:C`, `$A:$A`) or whole-row (`1:3`, `$1:$1`) reference.
+#[derive(Clone, Copy)]
+enum Line {
+    Column(u16, bool),
+    Row(u32, bool),
+}
+
+fn token_as_line(token: &Token) -> Option<Line> {
+    match token {
+        Token::Identifier(text) => text_as_line(text),
+        Token::Number(n) => number_as_row(*n).map(|row| Line::Row(row, false)),
+        _ => None,
+    }
+}
+
+fn expr_as_line(expr: &FormulaExpr) -> Option<Line> {
+    match expr {
+        FormulaExpr::NameRef(text) => text_as_line(text),
+        FormulaExpr::Number(n) => number_as_row(*n).map(|row| Line::Row(row, false)),
+        _ => None,
+    }
+}
+
+fn text_as_line(text: &str) -> Option<Line> {
+    let (absolute, rest) = match text.strip_prefix('$') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    if !rest.is_empty() && rest.len() <= 3 && rest.chars().all(|c| c.is_ascii_alphabetic()) {
+        return CellAddress::letters_to_column(rest).ok().map(|col| Line::Column(col, absolute));
+    }
+    if absolute && !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
+        return number_as_row(rest.parse().ok()?).map(|row| Line::Row(row, true));
+    }
+    None
+}
+
+fn number_as_row(n: f64) -> Option<u32> {
+    (n.fract() == 0.0 && n >= 1.0 && n <= MAX_ROWS as f64).then(|| n as u32 - 1)
+}
+
+fn whole_lines(left: &FormulaExpr, right: &FormulaExpr) -> Option<CellRange> {
+    lines_range(expr_as_line(left)?, expr_as_line(right)?)
+}
+
+/// A whole column's rows are fixed (copying `A:A` down leaves it `A:A`) and so are a whole row's
+/// columns; the other axis keeps its `$`, so `A:A` copied right is `B:B` and `1:1` copied down is
+/// `2:2`.
+fn lines_range(left: Line, right: Line) -> Option<CellRange> {
+    match (left, right) {
+        (Line::Column(a, a_abs), Line::Column(b, b_abs)) => Some(CellRange::new(
+            CellAddress::with_absolute(0, a, true, a_abs),
+            CellAddress::with_absolute(MAX_ROWS - 1, b, true, b_abs),
+        )),
+        (Line::Row(a, a_abs), Line::Row(b, b_abs)) => Some(CellRange::new(
+            CellAddress::with_absolute(a, 0, a_abs, true),
+            CellAddress::with_absolute(b, MAX_COLS - 1, b_abs, true),
+        )),
+        _ => None,
     }
 }
 

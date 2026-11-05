@@ -60,6 +60,10 @@ pub struct EvalCache {
     /// Tier 3: Sheet name → index mapping.
     /// Pre-built before the eval loop; immutable during evaluation.
     pub sheet_names: AHashMap<String, usize>,
+
+    /// The workbook's last used row and column, which bound whole-column and whole-row references.
+    /// Spills move it, so the pass that recalculates formulas reading spills uses a new cache.
+    pub used_extent: std::sync::OnceLock<(u32, u16)>,
 }
 
 impl EvalCache {
@@ -70,6 +74,7 @@ impl EvalCache {
             lookup_indexes: DashMap::new(),
             source_lookup_indexes: DashMap::new(),
             sheet_names,
+            used_extent: std::sync::OnceLock::new(),
         }
     }
 }
@@ -121,7 +126,11 @@ impl LookupIndex {
 
     /// Look up a value and return its 0-based index, or None if not found.
     pub fn find(&self, value: &FormulaValue) -> Option<usize> {
+        // Nothing matches an empty cell, so looking up a blank finds nothing (#N/A in Excel).
         let key = LookupKey::from(value);
+        if matches!(key, LookupKey::Empty) {
+            return None;
+        }
         self.index.get(&key).copied()
     }
 }
@@ -268,7 +277,8 @@ mod tests {
         assert_eq!(idx.find(&FormulaValue::Number(1.0)), Some(0));
         assert_eq!(idx.find(&FormulaValue::String("TEXT".to_string())), Some(1));
         assert_eq!(idx.find(&FormulaValue::Boolean(true)), Some(2));
-        assert_eq!(idx.find(&FormulaValue::Empty), Some(3));
+        // Nothing matches an empty cell: looking up a blank is #N/A in Excel
+        assert_eq!(idx.find(&FormulaValue::Empty), None);
     }
 
     #[test]

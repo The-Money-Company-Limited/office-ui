@@ -9,7 +9,7 @@
 
 use crate::error::FormulaResult;
 use crate::evaluator::{EvaluationContext, FormulaValue};
-use chrono::{Datelike, Duration, NaiveDate, Timelike};
+use chrono::{Datelike, Duration, NaiveDate};
 use duke_sheets_core::CellError;
 use std::collections::HashSet;
 
@@ -86,7 +86,7 @@ fn excel1900_serial_month_start(year: i32, month: u32) -> i64 {
     }
 }
 
-fn excel1900_serial_from_ymd(year: i32, month: u32, day: i32) -> i64 {
+pub(crate) fn excel1900_serial_from_ymd(year: i32, month: u32, day: i32) -> i64 {
     excel1900_serial_month_start(year, month) + (day as i64) - 1
 }
 
@@ -101,9 +101,13 @@ fn excel1904_date_from_serial(serial: i64) -> Option<NaiveDate> {
 }
 
 fn excel1900_date_from_serial(serial: i64) -> Option<(i32, u32, u32)> {
-    // Serial 60 is the fictional 1900-02-29.
-    if serial == 60 {
-        return Some((1900, 2, 29));
+    // Serial 0 is Excel's 1900-01-00 (MONTH(0) is 1, DAY(0) is 0), serial 60 the fictional 1900-02-29,
+    // and the calendar ends on 9999-12-31.
+    match serial {
+        ..0 | 2_958_466.. => return None,
+        0 => return Some((1900, 1, 0)),
+        60 => return Some((1900, 2, 29)),
+        _ => {}
     }
     let base = NaiveDate::from_ymd_opt(1899, 12, 31)?;
     let adjusted = if serial > 60 { serial - 1 } else { serial };
@@ -193,15 +197,12 @@ fn weekday_sun0_from_serial(serial: i64, ctx: &EvaluationContext) -> Result<u32,
         let date = excel1904_date_from_serial(serial).ok_or(FormulaValue::Error(CellError::Num))?;
         Ok(date.weekday().num_days_from_sunday())
     } else {
-        if serial == 60 {
-            return Ok(4);
+        if serial < 0 {
+            return Err(FormulaValue::Error(CellError::Num));
         }
-        let base = NaiveDate::from_ymd_opt(1899, 12, 31).unwrap();
-        let adjusted = if serial > 60 { serial - 1 } else { serial };
-        let date = base
-            .checked_add_signed(Duration::days(adjusted))
-            .ok_or(FormulaValue::Error(CellError::Num))?;
-        Ok(date.weekday().num_days_from_sunday())
+        // Excel's 1900 calendar has a 29 February 1900, so its weekdays run evenly from serial 1,
+        // a Sunday: before March 1900 they are one day off the real calendar, as in Excel.
+        Ok(((serial + 6) % 7) as u32)
     }
 }
 
@@ -320,9 +321,12 @@ pub fn fn_date(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<
         Ok(FormulaValue::Number(excel1904_serial_from_date(date) as f64))
     } else {
         // 1900 system with bug calendar: compute directly in the buggy serial system.
-        Ok(FormulaValue::Number(
-            excel1900_serial_from_ymd(norm_year, norm_month, day) as f64,
-        ))
+        // Excel's dates run from 0 (1900-01-00) to 9999-12-31 (2958465); outside is #NUM!
+        let serial = excel1900_serial_from_ymd(norm_year, norm_month, day);
+        if !(0..=2_958_465).contains(&serial) {
+            return Ok(FormulaValue::Error(CellError::Num));
+        }
+        Ok(FormulaValue::Number(serial as f64))
     }
 }
 
@@ -530,9 +534,13 @@ pub fn fn_weeknum(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
         Err(e) => return Ok(e),
     };
 
+    // 1 and 17 start weeks on Sunday, 2 and 11 on Monday, 12 to 16 on Tuesday to Saturday; 21 is
+    // the ISO week.
     let week_start_sun0 = match return_type {
-        1 => 0,
-        2 => 1,
+        1 | 17 => 0,
+        2 | 11 => 1,
+        12..=16 => return_type - 10,
+        21 => return fn_isoweeknum(&args[..1], ctx),
         _ => return Ok(FormulaValue::Error(CellError::Num)),
     };
 
@@ -745,7 +753,10 @@ pub fn fn_datedif(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
             if ed >= sd {
                 (ed - sd) as f64
             } else {
-                let dim = match days_in_month_ctx(sy, sm, ctx) {
+                // Days left in the month before the end date's month, as Excel counts them:
+                // 15 January to 10 March 2024 is 24 (February 2024 has 29 days).
+                let (py, pm) = if em == 1 { (ey - 1, 12) } else { (ey, em - 1) };
+                let dim = match days_in_month_ctx(py, pm, ctx) {
                     Some(v) => v,
                     None => return Ok(FormulaValue::Error(CellError::Num)),
                 };
@@ -898,25 +909,12 @@ pub fn fn_datevalue(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaRe
         Ok(s) => s,
         Err(e) => return Ok(e),
     };
-    let text = text.trim();
-
-    let parsed = NaiveDate::parse_from_str(text, "%m/%d/%Y")
-        .or_else(|_| NaiveDate::parse_from_str(text, "%Y-%m-%d"))
-        .or_else(|_| NaiveDate::parse_from_str(text, "%Y/%m/%d"))
-        .or_else(|_| NaiveDate::parse_from_str(text, "%d-%b-%y"))
-        .or_else(|_| NaiveDate::parse_from_str(text, "%d-%b-%Y"));
-
-    let date = match parsed {
-        Ok(d) => d,
-        Err(_) => return Ok(FormulaValue::Error(CellError::Value)),
+    // The date part of text Excel reads as a date, a time after it ignored (crate::coerce)
+    let Some(serial) = crate::coerce::date_text(&text) else {
+        return Ok(FormulaValue::Error(CellError::Value));
     };
-
-    let serial = if ctx_date_1904(ctx) {
-        excel1904_serial_from_date(date)
-    } else {
-        excel1900_serial_from_ymd(date.year(), date.month(), date.day() as i32)
-    };
-    Ok(FormulaValue::Number(serial as f64))
+    // 1904-system serials count from 1904-01-01, 1462 days later
+    Ok(FormulaValue::Number(if ctx_date_1904(ctx) { serial - 1462.0 } else { serial }))
 }
 
 pub fn fn_timevalue(
@@ -927,36 +925,11 @@ pub fn fn_timevalue(
         Ok(s) => s,
         Err(e) => return Ok(e),
     };
-    let t = text.trim();
-    let upper = t.to_uppercase();
-
-    let parsed = chrono::NaiveTime::parse_from_str(t, "%H:%M:%S")
-        .or_else(|_| chrono::NaiveTime::parse_from_str(t, "%H:%M"))
-        .or_else(|_| chrono::NaiveTime::parse_from_str(&upper, "%I:%M:%S %p"))
-        .or_else(|_| chrono::NaiveTime::parse_from_str(&upper, "%I:%M %p"))
-        .or_else(|_| {
-            // "Date information in time_text is ignored" - try datetime formats
-            // and extract just the time portion.
-            chrono::NaiveDateTime::parse_from_str(&upper, "%d-%b-%Y %I:%M %p")
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&upper, "%d-%b-%Y %I:%M:%S %p"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&upper, "%d-%b-%Y %H:%M:%S"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&upper, "%d-%b-%Y %H:%M"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(t, "%m/%d/%Y %H:%M:%S"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(t, "%m/%d/%Y %H:%M"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(t, "%Y/%m/%d %H:%M:%S"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(t, "%Y/%m/%d %H:%M"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(t, "%Y-%m-%d %H:%M:%S"))
-                .or_else(|_| chrono::NaiveDateTime::parse_from_str(t, "%Y-%m-%d %H:%M"))
-                .map(|dt| dt.time())
-        });
-
-    let tm = match parsed {
-        Ok(v) => v,
-        Err(_) => return Ok(FormulaValue::Error(CellError::Value)),
-    };
-
-    let total_seconds = tm.num_seconds_from_midnight() as f64;
-    Ok(FormulaValue::Number(total_seconds / 86400.0))
+    // The time part of text Excel reads as a time, a date before it ignored (crate::coerce)
+    match crate::coerce::time_text(&text) {
+        Some(time) => Ok(FormulaValue::Number(time.fract())),
+        None => Ok(FormulaValue::Error(CellError::Value)),
+    }
 }
 
 pub fn fn_networkdays(
@@ -1514,8 +1487,10 @@ mod tests {
             FormulaValue::Number(49.0)
         );
         assert_eq!(
+            // Excel counts from the same day in the month before the end date, so 31 January to
+            // 2 March 2024 is 0 (and 31 January to 1 March 2015 is Excel's documented -2).
             eval("=DATEDIF(DATE(2024,1,31),DATE(2024,3,2),\"MD\")").unwrap(),
-            FormulaValue::Number(2.0)
+            FormulaValue::Number(0.0)
         );
         assert_eq!(
             eval("=DATEDIF(DATE(2024,1,31),DATE(2024,3,2),\"YM\")").unwrap(),

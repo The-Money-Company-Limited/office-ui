@@ -15,19 +15,8 @@ pub(crate) fn values_equal(a: &FormulaValue, b: &FormulaValue) -> bool {
         (FormulaValue::Boolean(x), FormulaValue::Boolean(y)) => x == y,
         (FormulaValue::String(x), FormulaValue::String(y)) => x.eq_ignore_ascii_case(y),
 
-        // Try numeric coercion between string/number
-        (FormulaValue::Number(x), FormulaValue::String(s))
-        | (FormulaValue::String(s), FormulaValue::Number(x)) => {
-            s.parse::<f64>().ok().map(|n| n == *x).unwrap_or(false)
-        }
-
-        // Empty coercions
-        (FormulaValue::Empty, FormulaValue::Empty) => true,
-        (FormulaValue::Empty, FormulaValue::Number(n))
-        | (FormulaValue::Number(n), FormulaValue::Empty) => *n == 0.0,
-        (FormulaValue::Empty, FormulaValue::String(s))
-        | (FormulaValue::String(s), FormulaValue::Empty) => s.is_empty(),
-
+        // A number never matches text that looks like it (2 doesn't find "2"), and nothing matches
+        // an empty cell, so looking up a blank is #N/A as in Excel.
         _ => false,
     }
 }
@@ -69,52 +58,47 @@ pub(crate) fn index_resolve_coords(
     }
 }
 
+/// How two values order in an approximate lookup. Only values of the same type compare: a number
+/// never matches text that looks like it, and blanks and other types are passed over (`None`).
 pub(crate) fn compare_lookup_values(a: &FormulaValue, b: &FormulaValue) -> Option<Ordering> {
     match (a, b) {
         (FormulaValue::Number(x), FormulaValue::Number(y)) => x.partial_cmp(y),
         (FormulaValue::Boolean(x), FormulaValue::Boolean(y)) => Some(x.cmp(y)),
         (FormulaValue::String(x), FormulaValue::String(y)) => {
-            Some(x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase()))
-        }
-        (FormulaValue::Number(x), FormulaValue::String(s)) => {
-            s.parse::<f64>().ok().and_then(|n| x.partial_cmp(&n))
-        }
-        (FormulaValue::String(s), FormulaValue::Number(x)) => {
-            s.parse::<f64>().ok().and_then(|n| n.partial_cmp(x))
-        }
-        (FormulaValue::Empty, FormulaValue::Empty) => Some(Ordering::Equal),
-        (FormulaValue::Empty, FormulaValue::Number(n)) => 0.0f64.partial_cmp(n),
-        (FormulaValue::Number(n), FormulaValue::Empty) => n.partial_cmp(&0.0),
-        (FormulaValue::Empty, FormulaValue::String(s)) => {
-            Some("".cmp(s.to_ascii_lowercase().as_str()))
-        }
-        (FormulaValue::String(s), FormulaValue::Empty) => {
-            Some(s.to_ascii_lowercase().as_str().cmp(""))
+            Some(x.to_lowercase().cmp(&y.to_lowercase()))
         }
         _ => None,
     }
 }
 
+/// The position of the last value at or below `lookup_value` (or at or above it, `descending`) in
+/// an ascending (descending) list, as Excel's approximate MATCH, VLOOKUP and HLOOKUP find it.
+/// Values of another type, and blanks, are passed over; the first value past the lookup value
+/// ends the search.
+pub(crate) fn approximate_position<'a>(
+    values: impl IntoIterator<Item = &'a FormulaValue>,
+    lookup_value: &FormulaValue,
+    descending: bool,
+) -> Option<usize> {
+    let (within, past) = if descending {
+        (Ordering::Greater, Ordering::Less)
+    } else {
+        (Ordering::Less, Ordering::Greater)
+    };
+    let mut best = None;
+    for (i, value) in values.into_iter().enumerate() {
+        match compare_lookup_values(value, lookup_value) {
+            Some(Ordering::Equal) => best = Some(i),
+            Some(ord) if ord == within => best = Some(i),
+            Some(ord) if ord == past => break,
+            _ => {}
+        }
+    }
+    best
+}
+
 pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
-    let p: Vec<char> = pattern.chars().collect();
-    let t: Vec<char> = text.chars().collect();
-    let mut dp = vec![vec![false; t.len() + 1]; p.len() + 1];
-    dp[0][0] = true;
-    for i in 1..=p.len() {
-        if p[i - 1] == '*' {
-            dp[i][0] = dp[i - 1][0];
-        }
-    }
-    for i in 1..=p.len() {
-        for j in 1..=t.len() {
-            if p[i - 1] == '*' {
-                dp[i][j] = dp[i - 1][j] || dp[i][j - 1];
-            } else if p[i - 1] == '?' || p[i - 1].eq_ignore_ascii_case(&t[j - 1]) {
-                dp[i][j] = dp[i - 1][j - 1];
-            }
-        }
-    }
-    dp[p.len()][t.len()]
+    super::wildcard::matches(pattern, text)
 }
 
 fn vector_from_array(arr: &[Vec<FormulaValue>]) -> Option<Vec<FormulaValue>> {
@@ -135,34 +119,7 @@ fn vector_from_array(arr: &[Vec<FormulaValue>]) -> Option<Vec<FormulaValue>> {
     None
 }
 
-fn parse_column_letters(s: &str) -> Option<u16> {
-    let upper = s.to_ascii_uppercase();
-    let mut col: u16 = 0;
-    for c in upper.chars() {
-        if !c.is_ascii_uppercase() {
-            return None;
-        }
-        col = col
-            .checked_mul(26)?
-            .checked_add((c as u16) - ('A' as u16) + 1)?;
-    }
-    Some(col - 1)
-}
 
-fn parse_cell_address(addr: &str) -> Option<(u32, u16)> {
-    let col_end = addr
-        .find(|c: char| c.is_ascii_digit())
-        .unwrap_or(addr.len());
-    if col_end == 0 || col_end == addr.len() {
-        return None;
-    }
-    let col = parse_column_letters(&addr[..col_end])?;
-    let row: u32 = addr[col_end..].parse().ok()?;
-    if row == 0 {
-        return None;
-    }
-    Some((row - 1, col))
-}
 
 /// INDEX(array, row_num, [column_num])
 pub fn fn_index(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -196,7 +153,8 @@ pub fn fn_index(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     // row_num=0: return entire column as a column vector
     if row_num == 0 {
         if col_num == 0 {
-            return Ok(arr[0][0].clone());
+            // The whole area, as in MATCH(0,INDEX(COUNTIF(…),0,0),0)
+            return Ok(FormulaValue::Array { data: arr.clone(), source: None });
         }
         let c = (col_num - 1) as usize;
         if c >= cols {
@@ -239,13 +197,23 @@ pub fn fn_match(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult
     if let FormulaValue::Error(e) = lookup_value {
         return Ok(FormulaValue::Error(*e));
     }
+    // A blank lookup value finds nothing, in exact and approximate matches alike
+    if matches!(lookup_value, FormulaValue::Empty) {
+        return Ok(FormulaValue::Error(CellError::Na));
+    }
     if matches!(lookup_value, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
-    let arr = match expect_array(args.get(1).unwrap()) {
-        Some(a) => a,
-        None => return Ok(FormulaValue::Error(CellError::Value)),
+    // A single cell is a one-cell lookup array: MATCH(A2:A9, D2, 0) asks which of A2:A9 is D2.
+    let single;
+    let arr = match args.get(1).unwrap() {
+        FormulaValue::Array { data, .. } => data,
+        FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
+        other => {
+            single = vec![vec![other.clone()]];
+            &single
+        }
     };
     let (rows, cols) = array_dims(arr);
     if rows == 0 || cols == 0 {
@@ -283,7 +251,7 @@ pub fn fn_match(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult
     match match_type {
         0 => {
             // Exact match (with wildcard support for string patterns)
-            let is_wildcard = matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+            let is_wildcard = matches!(lookup_value, FormulaValue::String(s) if crate::functions::wildcard::has_wildcards(s));
 
             if !is_wildcard {
                 // Hash index (Tier 2) - only for non-wildcard lookups
@@ -341,42 +309,10 @@ pub fn fn_match(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult
             }
             Ok(FormulaValue::Error(CellError::Na))
         }
-        1 => {
-            // Largest value <= lookup_value (array should be ascending)
-            // Linear scan: find last value <= lookup_value
-            let mut best: Option<usize> = None;
-            for (i, v) in vec.iter().enumerate() {
-                match compare_lookup_values(v, lookup_value) {
-                    Some(Ordering::Less) | Some(Ordering::Equal) => {
-                        best = Some(i);
-                    }
-                    Some(Ordering::Greater) => break,
-                    None => {}
-                }
-            }
-            match best {
-                Some(i) => Ok(FormulaValue::Number((i + 1) as f64)),
-                None => Ok(FormulaValue::Error(CellError::Na)),
-            }
-        }
-        -1 => {
-            // Smallest value >= lookup_value (array should be descending)
-            // Linear scan: find last value >= lookup_value
-            let mut best: Option<usize> = None;
-            for (i, v) in vec.iter().enumerate() {
-                match compare_lookup_values(v, lookup_value) {
-                    Some(Ordering::Greater) | Some(Ordering::Equal) => {
-                        best = Some(i);
-                    }
-                    Some(Ordering::Less) => break,
-                    None => {}
-                }
-            }
-            match best {
-                Some(i) => Ok(FormulaValue::Number((i + 1) as f64)),
-                None => Ok(FormulaValue::Error(CellError::Na)),
-            }
-        }
+        1 | -1 => match approximate_position(vec.iter().copied(), lookup_value, match_type == -1) {
+            Some(i) => Ok(FormulaValue::Number((i + 1) as f64)),
+            None => Ok(FormulaValue::Error(CellError::Na)),
+        },
         _ => Ok(FormulaValue::Error(CellError::Na)),
     }
 }
@@ -588,40 +524,7 @@ pub fn fn_vlookup(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
             .map(|row| row.first().unwrap_or(&FormulaValue::Empty))
             .collect();
 
-        let mut is_sorted = true;
-        for i in 1..first_col.len() {
-            match compare_lookup_values(first_col[i - 1], first_col[i]) {
-                Some(Ordering::Greater) | None => {
-                    is_sorted = false;
-                    break;
-                }
-                _ => {}
-            }
-        }
-        if !is_sorted {
-            return Ok(FormulaValue::Error(CellError::Na));
-        }
-
-        let mut lo = 0usize;
-        let mut hi = first_col.len();
-        let mut best: Option<usize> = None;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            match compare_lookup_values(first_col[mid], lookup_value) {
-                Some(Ordering::Equal) => {
-                    best = Some(mid);
-                    break;
-                }
-                Some(Ordering::Less) => {
-                    best = Some(mid);
-                    lo = mid + 1;
-                }
-                Some(Ordering::Greater) => {
-                    hi = mid;
-                }
-                None => return Ok(FormulaValue::Error(CellError::Na)),
-            }
-        }
+        let best = approximate_position(first_col.iter().copied(), lookup_value, false);
         match best {
             Some(r) => Ok(table[r]
                 .get(col_index0)
@@ -632,7 +535,7 @@ pub fn fn_vlookup(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
     } else {
         // Exact match (with wildcard support for string patterns)
         let is_wildcard =
-            matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+            matches!(lookup_value, FormulaValue::String(s) if crate::functions::wildcard::has_wildcards(s));
 
         if !is_wildcard {
             // Hash index (Tier 2) - only for non-wildcard lookups
@@ -736,49 +639,14 @@ pub fn fn_hlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
     let first_row = &table[0];
 
     let col_idx = if range_lookup {
-        let mut is_sorted = true;
-        for i in 1..first_row.len() {
-            let prev = &first_row[i - 1];
-            let curr = &first_row[i];
-            match compare_lookup_values(prev, curr) {
-                Some(Ordering::Greater) | None => {
-                    is_sorted = false;
-                    break;
-                }
-                _ => {}
-            }
-        }
-        if !is_sorted {
-            return Ok(FormulaValue::Error(CellError::Na));
-        }
-
-        let mut lo = 0usize;
-        let mut hi = first_row.len();
-        let mut best: Option<usize> = None;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            match compare_lookup_values(&first_row[mid], lookup_value) {
-                Some(Ordering::Equal) => {
-                    best = Some(mid);
-                    break;
-                }
-                Some(Ordering::Less) => {
-                    best = Some(mid);
-                    lo = mid + 1;
-                }
-                Some(Ordering::Greater) => {
-                    hi = mid;
-                }
-                None => return Ok(FormulaValue::Error(CellError::Na)),
-            }
-        }
+        let best = approximate_position(first_row.iter(), lookup_value, false);
         match best {
             Some(i) => i,
             None => return Ok(FormulaValue::Error(CellError::Na)),
         }
     } else {
         let is_wildcard =
-            matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+            matches!(lookup_value, FormulaValue::String(s) if crate::functions::wildcard::has_wildcards(s));
         match first_row.iter().position(|k| {
             if is_wildcard {
                 matches!((lookup_value, k), (FormulaValue::String(p), FormulaValue::String(t)) if wildcard_match(p, t))
@@ -981,87 +849,7 @@ pub fn fn_xlookup(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
     }
 }
 
-pub fn fn_indirect(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    for v in args {
-        if let FormulaValue::Error(e) = v {
-            return Ok(FormulaValue::Error(*e));
-        }
-    }
 
-    if ctx.workbook.is_none() {
-        return Ok(FormulaValue::Error(CellError::Ref));
-    }
-
-    let ref_text = args.first().unwrap();
-    if matches!(ref_text, FormulaValue::Array { .. }) {
-        return Ok(FormulaValue::Error(CellError::Value));
-    }
-
-    let a1_style = args
-        .get(1)
-        .map(|v| v.as_bool().unwrap_or(false))
-        .unwrap_or(true);
-    if !a1_style {
-        return Ok(FormulaValue::Error(CellError::Ref));
-    }
-
-    let text = ref_text.as_string();
-    let (sheet_name, ref_part) = if let Some(pos) = text.rfind('!') {
-        let raw_sheet = text[..pos].trim();
-        let clean_sheet = raw_sheet.trim_matches('\'').to_string();
-        (Some(clean_sheet), text[pos + 1..].trim().to_string())
-    } else {
-        (None, text.trim().to_string())
-    };
-
-    let ref_clean = ref_part.replace('$', "");
-    if let Some(colon) = ref_clean.find(':') {
-        let start = &ref_clean[..colon];
-        let end = &ref_clean[colon + 1..];
-        let (sr, sc) = match parse_cell_address(start) {
-            Some(v) => v,
-            None => return Ok(FormulaValue::Error(CellError::Ref)),
-        };
-        let (er, ec) = match parse_cell_address(end) {
-            Some(v) => v,
-            None => return Ok(FormulaValue::Error(CellError::Ref)),
-        };
-        Ok(ctx.get_range_values(sheet_name.as_deref(), sr, sc, er, ec))
-    } else {
-        let (row, col) = match parse_cell_address(&ref_clean) {
-            Some(v) => v,
-            None => return Ok(FormulaValue::Error(CellError::Ref)),
-        };
-        Ok(ctx.get_cell_value(sheet_name.as_deref(), row, col))
-    }
-}
-
-/// OFFSET's reference-aware behavior is intercepted in `evaluator.rs`; this
-/// fallback preserves direct-call coercion and error propagation semantics.
-pub fn fn_offset(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    for v in args {
-        if let FormulaValue::Error(e) = v {
-            return Ok(FormulaValue::Error(*e));
-        }
-    }
-
-    if args.get(1).and_then(to_i64_trunc).is_none() || args.get(2).and_then(to_i64_trunc).is_none()
-    {
-        return Ok(FormulaValue::Error(CellError::Value));
-    }
-
-    if let Some(h) = args.get(3).and_then(to_i64_trunc) {
-        if h < 1 {
-            return Ok(FormulaValue::Error(CellError::Value));
-        }
-    }
-    if let Some(w) = args.get(4).and_then(to_i64_trunc) {
-        if w < 1 {
-            return Ok(FormulaValue::Error(CellError::Value));
-        }
-    }
-    Ok(FormulaValue::Error(CellError::Ref))
-}
 
 /// SEQUENCE(rows, [columns], [start], [step]) - Generates a sequence of numbers
 ///
@@ -1148,6 +936,11 @@ pub fn fn_sequence(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Evaluates a formula in a context, as the engine does for a cell.
+    fn run(formula: &str, ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+        crate::evaluator::evaluate(&crate::parser::parse_formula(formula)?, ctx)
+    }
     use duke_sheets_core::{CellValue, Workbook};
 
     fn eval(formula: &str) -> FormulaResult<FormulaValue> {
@@ -1238,10 +1031,10 @@ mod tests {
         }
         let ctx = EvaluationContext::new(Some(&workbook), 0, 0, 0);
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("A1".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"A1\")", &ctx).unwrap(),
             FormulaValue::Number(42.0)
         );
-        let result = fn_indirect(&[FormulaValue::String("A1:B1".into())], &ctx).unwrap();
+        let result = run("=INDIRECT(\"A1:B1\")", &ctx).unwrap();
         if let FormulaValue::Array { data, .. } = &result {
             assert_eq!(
                 *data,
@@ -1262,7 +1055,7 @@ mod tests {
         // Data layout (matching the docs example table):
         //   A2="B2", A3="B3", A5=5
         //   B2=1.333, B3=45, B5=62
-        // We call fn_indirect directly with the resolved string values.
+        // The formulas below give INDIRECT its text directly.
 
         let mut workbook = Workbook::new();
         {
@@ -1292,25 +1085,25 @@ mod tests {
 
         // Docs Example 1: =INDIRECT(A2) where A2="B2", B2=1.333 → 1.333
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("B2".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"B2\")", &ctx).unwrap(),
             FormulaValue::Number(1.333)
         );
 
         // Docs Example 2: =INDIRECT(A3) where A3="B3", B3=45 → 45
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("B3".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"B3\")", &ctx).unwrap(),
             FormulaValue::Number(45.0)
         );
 
         // Docs Example 4: =INDIRECT("B"&A5) where A5=5 → INDIRECT("B5"), B5=62
-        // (concatenation already resolved before fn_indirect is called)
+        // (concatenation already resolved)
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("B5".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"B5\")", &ctx).unwrap(),
             FormulaValue::Number(62.0)
         );
 
         // INDIRECT with range: INDIRECT("A1:B1") → array of values
-        let result = fn_indirect(&[FormulaValue::String("A1:B1".into())], &ctx).unwrap();
+        let result = run("=INDIRECT(\"A1:B1\")", &ctx).unwrap();
         if let FormulaValue::Array { data, .. } = &result {
             assert_eq!(
                 *data,
@@ -1325,44 +1118,37 @@ mod tests {
 
         // INDIRECT with invalid reference: INDIRECT("ZZZZZ999999") → #REF!
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("ZZZZZ999999".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"ZZZZZ999999\")", &ctx).unwrap(),
             FormulaValue::Error(CellError::Ref)
         );
 
         // INDIRECT with sheet reference: INDIRECT("Sheet1!A1") → 99
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("Sheet1!A1".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"Sheet1!A1\")", &ctx).unwrap(),
             FormulaValue::Number(99.0)
         );
 
-        // INDIRECT with R1C1 style (a1=false): our impl returns #REF!
+        // INDIRECT with R1C1 style (a1=false) names the same cells
         assert_eq!(
-            fn_indirect(
-                &[
-                    FormulaValue::String("R1C1".into()),
-                    FormulaValue::Boolean(false)
-                ],
-                &ctx,
-            )
-            .unwrap(),
-            FormulaValue::Error(CellError::Ref)
+            run("=INDIRECT(\"R1C1\",FALSE)", &ctx).unwrap(),
+            run("=INDIRECT(\"A1\")", &ctx).unwrap()
         );
 
         // Error propagation: INDIRECT(#VALUE!) → #VALUE!
         assert_eq!(
-            fn_indirect(&[FormulaValue::Error(CellError::Value)], &ctx).unwrap(),
+            run("=INDIRECT(#VALUE!)", &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)
         );
 
         // INDIRECT with empty string: INDIRECT("") → #REF!
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"\")", &ctx).unwrap(),
             FormulaValue::Error(CellError::Ref)
         );
 
         // INDIRECT with absolute refs (dollar signs): INDIRECT("$B$2") → 1.333
         assert_eq!(
-            fn_indirect(&[FormulaValue::String("$B$2".into())], &ctx).unwrap(),
+            run("=INDIRECT(\"$B$2\")", &ctx).unwrap(),
             FormulaValue::Number(1.333)
         );
     }
@@ -1377,9 +1163,10 @@ mod tests {
             eval("=OFFSET(1,\"x\",1)").unwrap(),
             FormulaValue::Error(CellError::Value)
         );
+        // OFFSET needs a reference to start from; a height below 1 is #REF! as for a real one
         assert_eq!(
             eval("=OFFSET(1,1,1,0,1)").unwrap(),
-            FormulaValue::Error(CellError::Value)
+            FormulaValue::Error(CellError::Ref)
         );
     }
 
@@ -1460,9 +1247,16 @@ mod tests {
                 source: None
             }
         );
+        // INDEX(area, 0, 0) is the whole area
         assert_eq!(
             eval("=INDEX({1,2,3;4,5,6},0,0)").unwrap(),
-            FormulaValue::Number(1.0) // Excel returns first element for INDEX(2D,0,0)
+            FormulaValue::Array {
+                data: vec![
+                    vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0), FormulaValue::Number(3.0)],
+                    vec![FormulaValue::Number(4.0), FormulaValue::Number(5.0), FormulaValue::Number(6.0)],
+                ],
+                source: None
+            }
         );
         // Docs Reference form: Fruits/Price/Count table
         // =INDEX(..., 2, 3) -> 38 (Bananas count)

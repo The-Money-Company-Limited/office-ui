@@ -2,15 +2,15 @@
 //!
 //! Evaluates formula ASTs to produce values.
 
-use crate::ast::{
-    BinaryOperator, FormulaExpr, StructuredRefSpecifier, StructuredReference, UnaryOperator,
-};
+use crate::ast::{BinaryOperator, FormulaExpr, StructuredReference, UnaryOperator};
+use crate::lambda::{call_lambda, evaluate_lambda_helper, evaluate_let, Binding};
+use crate::reference::{self, Sheet};
 use crate::error::{FormulaError, FormulaResult};
 use crate::functions::lookup::{
     compare_lookup_values, index_resolve_coords, to_i64_trunc, values_equal, wildcard_match,
 };
 use crate::functions::FunctionRegistry;
-use duke_sheets_core::{CellError, CellValue, Table, Workbook, MAX_COLS, MAX_ROWS};
+use duke_sheets_core::{CellError, CellRange, CellValue, Table, Workbook, MAX_COLS, MAX_ROWS};
 use std::cmp::Ordering;
 use std::sync::{Arc, OnceLock};
 
@@ -48,16 +48,27 @@ pub struct RangeSource {
     pub start_col: u16,
     pub end_row: u32,
     pub end_col: u16,
+    /// Blank cells the reference covers past the cells read: a whole column (`A:A`) is read as
+    /// far as the used cells go, and COUNTBLANK and COUNTIF still count the rest, as Excel does.
+    pub blank_cells_past: u64,
 }
 
 impl FormulaValue {
+    /// The blank cells a range covers past the cells read (see RangeSource::blank_cells_past).
+    pub fn blank_cells_past(&self) -> u64 {
+        match self {
+            FormulaValue::Array { source: Some(source), .. } => source.blank_cells_past,
+            _ => 0,
+        }
+    }
+
     /// Convert to number, if possible
     pub fn as_number(&self) -> Option<f64> {
         match self {
             FormulaValue::Number(n) => Some(*n),
             FormulaValue::Boolean(true) => Some(1.0),
             FormulaValue::Boolean(false) => Some(0.0),
-            FormulaValue::String(s) => s.parse().ok(),
+            FormulaValue::String(s) => crate::coerce::text_to_number(s),
             FormulaValue::Empty => Some(0.0),
             _ => None,
         }
@@ -74,6 +85,8 @@ impl FormulaValue {
         match self {
             FormulaValue::Boolean(b) => Some(*b),
             FormulaValue::Number(n) => Some(*n != 0.0),
+            // A blank, or a left-out condition as in IF(,1,2), is FALSE
+            FormulaValue::Empty => Some(false),
             FormulaValue::String(s) => {
                 let upper = s.to_uppercase();
                 if upper == "TRUE" {
@@ -91,14 +104,7 @@ impl FormulaValue {
     /// Convert to string
     pub fn as_string(&self) -> String {
         match self {
-            FormulaValue::Number(n) => {
-                // Format like Excel: no trailing zeros, but reasonable precision
-                if n.fract() == 0.0 && n.abs() < 1e15 {
-                    format!("{}", *n as i64)
-                } else {
-                    format!("{}", n)
-                }
-            }
+            FormulaValue::Number(n) => crate::coerce::number_text(*n),
             FormulaValue::String(s) => s.clone(),
             FormulaValue::Boolean(true) => "TRUE".to_string(),
             FormulaValue::Boolean(false) => "FALSE".to_string(),
@@ -175,6 +181,7 @@ pub use duke_sheets_core::{ImageInfo, ImageSizing};
 
 #[allow(clippy::type_complexity)]
 /// Context for formula evaluation
+#[derive(Clone, Copy)]
 pub struct EvaluationContext<'a> {
     /// Reference to the workbook for cell lookups
     pub workbook: Option<&'a Workbook>,
@@ -195,6 +202,8 @@ pub struct EvaluationContext<'a> {
     pub image_sink: Option<&'a (dyn Fn(usize, u32, u16, ImageInfo) + Send + Sync)>,
     /// Shared evaluation cache (range materialization, lookup indexes, sheet names).
     pub eval_cache: Option<&'a crate::eval_cache::EvalCache>,
+    /// Names bound by LET and LAMBDA parameters around the expression being evaluated.
+    pub locals: Option<&'a crate::lambda::Local<'a>>,
 }
 
 impl<'a> EvaluationContext<'a> {
@@ -210,6 +219,7 @@ impl<'a> EvaluationContext<'a> {
             external_fn: None,
             image_sink: None,
             eval_cache: None,
+            locals: None,
         }
     }
 
@@ -225,11 +235,12 @@ impl<'a> EvaluationContext<'a> {
             external_fn: None,
             image_sink: None,
             eval_cache: None,
+            locals: None,
         }
     }
 
     /// Resolve sheet name to index, using eval_cache (Tier 3) when available.
-    fn resolve_sheet_index(
+    pub(crate) fn resolve_sheet_index(
         &self,
         sheet: Option<&str>,
         workbook: &Workbook,
@@ -279,6 +290,43 @@ impl<'a> EvaluationContext<'a> {
         worksheet.get_value_at_ref(row, col).into()
     }
 
+    /// A whole column (`A:A`) or row (`1:1`) reaches the sheet's last row or column. It is read as
+    /// far as the workbook's used cells go, plus one blank row or column, so it costs what the data
+    /// costs; whole columns on different sheets come out the same height, and the first blank row
+    /// after the data (`MATCH(TRUE,ISBLANK(A:A),0)`) is still there.
+    pub fn range_source(&self, sheet: usize, start_row: u32, start_col: u16, end_row: u32, end_col: u16) -> RangeSource {
+        let (full_end_row, full_end_col) = (end_row, end_col);
+        let whole_column = end_row == MAX_ROWS - 1;
+        let whole_row = end_col == MAX_COLS - 1;
+        let (end_row, end_col) = if whole_column || whole_row {
+            let (last_row, last_col) = self.used_extent();
+            (
+                if whole_column { (last_row + 1).min(MAX_ROWS - 1).max(start_row) } else { end_row },
+                if whole_row { (last_col + 1).min(MAX_COLS - 1).max(start_col) } else { end_col },
+            )
+        } else {
+            (end_row, end_col)
+        };
+        let cells = |r0: u32, c0: u16, r1: u32, c1: u16| (r1 - r0 + 1) as u64 * (c1 - c0 + 1) as u64;
+        let blank_cells_past = cells(start_row, start_col, full_end_row, full_end_col)
+            - cells(start_row, start_col, end_row, end_col);
+        RangeSource { sheet, start_row, start_col, end_row, end_col, blank_cells_past }
+    }
+
+    /// The last used row and column across the workbook's sheets.
+    fn used_extent(&self) -> (u32, u16) {
+        let compute = || {
+            let Some(workbook) = self.workbook else { return (0, 0) };
+            (0..workbook.sheet_count())
+                .filter_map(|i| workbook.worksheet(i)?.used_range())
+                .fold((0, 0), |(r, c), range| (r.max(range.end.row), c.max(range.end.col)))
+        };
+        match self.eval_cache {
+            Some(cache) => *cache.used_extent.get_or_init(compute),
+            None => compute(),
+        }
+    }
+
     /// Get a range of cell values as an array.
     ///
     /// When an `eval_cache` is present (Tier 1), the materialized range is cached.
@@ -297,14 +345,9 @@ impl<'a> EvaluationContext<'a> {
         })?;
 
         let sheet_idx = self.resolve_sheet_index(sheet, workbook)?;
+        let source = self.range_source(sheet_idx, start_row, start_col, end_row, end_col);
+        let (end_row, end_col) = (source.end_row, source.end_col);
         let range_key = (sheet_idx, start_row, start_col, end_row, end_col);
-        let source = RangeSource {
-            sheet: sheet_idx,
-            start_row,
-            start_col,
-            end_row,
-            end_col,
-        };
 
         if let Some(cache) = self.eval_cache {
             if let Some(cached) = cache.ranges.get(&range_key) {
@@ -352,135 +395,23 @@ impl<'a> EvaluationContext<'a> {
         }
     }
 
-    /// Resolve a named range to its value
-    ///
-    /// This handles:
-    /// - Cell references: "Sheet1!$A$1" -> cell value
-    /// - Range references: "Sheet1!$A$1:$D$10" -> array of values
-    /// - Constants: "0.0725" -> number
-    /// - Formulas: "=SUM(A1:A10)" -> evaluated formula (recursive)
+    /// The value of a defined name: the formula it holds, evaluated (a reference reads its cells).
+    /// An unknown name is #NAME?; names that refer to each other without end are #REF!.
     pub fn resolve_named_range(&self, name: &str) -> Result<FormulaValue, FormulaError> {
-        let workbook = self.workbook.ok_or_else(|| {
-            FormulaError::InvalidReference("No workbook context for named range lookup".to_string())
-        })?;
-
-        let named_range = workbook
-            .get_named_range(name, self.current_sheet)
-            .ok_or_else(|| FormulaError::InvalidReference(format!("Unknown name: {}", name)))?;
-
-        let refers_to = &named_range.refers_to;
-
-        // If it's a formula, parse and evaluate it
-        if refers_to.starts_with('=') {
-            // Keep the '=' since the parser expects it
-            let ast = crate::parser::parse_formula(refers_to)?;
-            return crate::evaluator::evaluate(&ast, self);
+        thread_local! {
+            static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
         }
-
-        // Try to parse as a number constant
-        if let Ok(num) = refers_to.parse::<f64>() {
-            return Ok(FormulaValue::Number(num));
-        }
-
-        // Try to parse as a boolean
-        let upper = refers_to.to_uppercase();
-        if upper == "TRUE" {
-            return Ok(FormulaValue::Boolean(true));
-        }
-        if upper == "FALSE" {
-            return Ok(FormulaValue::Boolean(false));
-        }
-
-        // Try to parse as a cell or range reference
-        // This is a simplified parser - full implementation would reuse the main parser
-        self.parse_and_resolve_reference(refers_to)
-    }
-
-    /// Parse a reference string and resolve it to a value
-    fn parse_and_resolve_reference(&self, refers_to: &str) -> Result<FormulaValue, FormulaError> {
-        // Handle sheet!reference format
-        let (sheet_name, ref_part) = if let Some(pos) = refers_to.find('!') {
-            let sheet = &refers_to[..pos];
-            // Remove quotes if present (e.g., 'Sheet 1'!A1)
-            let sheet = sheet.trim_matches('\'');
-            (Some(sheet), &refers_to[pos + 1..])
-        } else {
-            (None, refers_to)
+        let Some(formula) = reference::name_formula(name, self) else {
+            return Ok(FormulaValue::Error(CellError::Name));
         };
-
-        // Remove $ signs (absolute reference markers)
-        let ref_clean = ref_part.replace('$', "");
-
-        // Check if it's a range (contains :)
-        if let Some(colon_pos) = ref_clean.find(':') {
-            let start_ref = &ref_clean[..colon_pos];
-            let end_ref = &ref_clean[colon_pos + 1..];
-
-            let (start_row, start_col) = self.parse_cell_address(start_ref)?;
-            let (end_row, end_col) = self.parse_cell_address(end_ref)?;
-
-            return Ok(self.get_range_values(sheet_name, start_row, start_col, end_row, end_col));
+        let depth = DEPTH.with(|d| d.get());
+        if depth >= 64 {
+            return Ok(FormulaValue::Error(CellError::Ref));
         }
-
-        // Single cell reference
-        let (row, col) = self.parse_cell_address(&ref_clean)?;
-        Ok(self.get_cell_value(sheet_name, row, col))
-    }
-
-    /// Parse a cell address like "A1" to (row, col)
-    fn parse_cell_address(&self, addr: &str) -> Result<(u32, u16), FormulaError> {
-        // Find where letters end and numbers begin
-        let col_end = addr
-            .find(|c: char| c.is_ascii_digit())
-            .unwrap_or(addr.len());
-
-        if col_end == 0 || col_end == addr.len() {
-            return Err(FormulaError::InvalidReference(format!(
-                "Invalid cell address: {}",
-                addr
-            )));
-        }
-
-        let col_str = &addr[..col_end];
-        let row_str = &addr[col_end..];
-
-        // Parse column (A=0, B=1, ..., Z=25, AA=26, etc.)
-        let col = self.parse_column_letters(col_str)?;
-
-        // Parse row (1-indexed in Excel, convert to 0-indexed)
-        let row: u32 = row_str
-            .parse()
-            .map_err(|_| FormulaError::InvalidReference(format!("Invalid row: {}", row_str)))?;
-
-        if row == 0 {
-            return Err(FormulaError::InvalidReference(
-                "Row number must be >= 1".to_string(),
-            ));
-        }
-
-        Ok((row - 1, col))
-    }
-
-    /// Parse column letters (A=0, B=1, ..., Z=25, AA=26, etc.)
-    fn parse_column_letters(&self, s: &str) -> Result<u16, FormulaError> {
-        let s = s.to_uppercase();
-        let mut col: u16 = 0;
-        for c in s.chars() {
-            if !c.is_ascii_uppercase() {
-                return Err(FormulaError::InvalidReference(format!(
-                    "Invalid column letter: {}",
-                    c
-                )));
-            }
-            col = col
-                .checked_mul(26)
-                .and_then(|v| v.checked_add((c as u16) - ('A' as u16) + 1))
-                .ok_or_else(|| {
-                    FormulaError::InvalidReference(format!("Column too large: {}", s))
-                })?;
-        }
-        // Convert from 1-indexed to 0-indexed
-        Ok(col - 1)
+        DEPTH.with(|d| d.set(depth + 1));
+        let result = evaluate(&formula, self);
+        DEPTH.with(|d| d.set(depth));
+        result
     }
 
     /// Resolve a structured table reference to a formula value.
@@ -500,205 +431,17 @@ impl<'a> EvaluationContext<'a> {
         // that contains the current cell (unqualified ref like [Column]).
         let (table, sheet_idx) = self.find_table(workbook, sr)?;
 
-        // Determine which column(s) to return.
-        let col_idx = match &sr.column {
-            Some(col_name) => {
-                let idx = table
-                    .columns
-                    .iter()
-                    .position(|c| c.name.eq_ignore_ascii_case(col_name))
-                    .ok_or_else(|| {
-                        FormulaError::InvalidReference(format!(
-                            "Column '{}' not found in table '{}'",
-                            col_name, table.name
-                        ))
-                    })?;
-                Some(idx)
-            }
-            None => None,
+        // [#This Row] from a row outside the table's data rows meets none of them: #VALUE!.
+        if sr.specifiers.contains(&crate::ast::StructuredRefSpecifier::ThisRow)
+            && sr.span(table, None).is_some_and(|rows| !(rows.start.row..=rows.end.row).contains(&self.current_row))
+        {
+            return Ok(FormulaValue::Error(CellError::Value));
+        }
+        let Some(cells) = sr.span(table, Some(self.current_row)) else {
+            return Ok(FormulaValue::Error(CellError::Ref));
         };
-
-        // Compute the spreadsheet column for this table column.
-        let abs_col = col_idx.map(|i| table.reference.start.col + i as u16);
-
-        // Determine row range based on specifiers.
-        let ref_start_row = table.reference.start.row;
-        let ref_end_row = table.reference.end.row;
-        let header_rows = table.header_row_count;
-        let totals_rows = table.totals_row_count;
-
-        // Data row boundaries (excluding header and totals).
-        let data_start = ref_start_row + header_rows;
-        let data_end = if totals_rows > 0 {
-            ref_end_row - totals_rows
-        } else {
-            ref_end_row
-        };
-
-        // Determine effective specifiers. If none provided:
-        // - With a column and no specifiers → #Data (implicit)
-        // - No column and no specifiers → #Data (implicit)
-        let has_this_row = sr.specifiers.contains(&StructuredRefSpecifier::ThisRow);
-        let has_all = sr.specifiers.contains(&StructuredRefSpecifier::All);
-        let has_data = sr.specifiers.contains(&StructuredRefSpecifier::Data);
-        let has_headers = sr.specifiers.contains(&StructuredRefSpecifier::Headers);
-        let has_totals = sr.specifiers.contains(&StructuredRefSpecifier::Totals);
-        let no_specifiers = sr.specifiers.is_empty();
-
-        // #This Row: return a single cell value from the current row.
-        if has_this_row {
-            let col = abs_col.ok_or_else(|| {
-                FormulaError::InvalidReference("#This Row requires a column specifier".to_string())
-            })?;
-            // The current_row from context must be within the table data range.
-            let row = self.current_row;
-            return Ok(self.get_cell_value(
-                self.sheet_name_for(workbook, sheet_idx).as_deref(),
-                row,
-                col,
-            ));
-        }
-
-        // #All: entire table range including headers and totals.
-        if has_all {
-            return match abs_col {
-                Some(col) => Ok(self.get_range_values(
-                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
-                    ref_start_row,
-                    col,
-                    ref_end_row,
-                    col,
-                )),
-                None => Ok(self.get_range_values(
-                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
-                    ref_start_row,
-                    table.reference.start.col,
-                    ref_end_row,
-                    table.reference.end.col,
-                )),
-            };
-        }
-
-        // #Headers: header row only.
-        if has_headers && !has_data && !has_totals {
-            if header_rows == 0 {
-                return Ok(FormulaValue::Error(CellError::Ref));
-            }
-            let header_end = ref_start_row + header_rows - 1;
-            return match abs_col {
-                Some(col) => Ok(self.get_cell_value(
-                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
-                    ref_start_row,
-                    col,
-                )),
-                None => Ok(self.get_range_values(
-                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
-                    ref_start_row,
-                    table.reference.start.col,
-                    header_end,
-                    table.reference.end.col,
-                )),
-            };
-        }
-
-        // #Totals: totals row only.
-        if has_totals && !has_data && !has_headers {
-            if totals_rows == 0 {
-                return Ok(FormulaValue::Error(CellError::Ref));
-            }
-            let totals_start = ref_end_row - totals_rows + 1;
-            return match abs_col {
-                Some(col) => Ok(self.get_cell_value(
-                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
-                    totals_start,
-                    col,
-                )),
-                None => Ok(self.get_range_values(
-                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
-                    totals_start,
-                    table.reference.start.col,
-                    ref_end_row,
-                    table.reference.end.col,
-                )),
-            };
-        }
-
-        // Combined specifiers: #Headers + #Data, #Data + #Totals, or
-        // #Headers + #Data + #Totals (same as #All for a column).
-        if has_headers && has_data {
-            let end = if has_totals { ref_end_row } else { data_end };
-            return match abs_col {
-                Some(col) => Ok(self.get_range_values(
-                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
-                    ref_start_row,
-                    col,
-                    end,
-                    col,
-                )),
-                None => Ok(self.get_range_values(
-                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
-                    ref_start_row,
-                    table.reference.start.col,
-                    end,
-                    table.reference.end.col,
-                )),
-            };
-        }
-
-        if has_data && has_totals {
-            return match abs_col {
-                Some(col) => Ok(self.get_range_values(
-                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
-                    data_start,
-                    col,
-                    ref_end_row,
-                    col,
-                )),
-                None => Ok(self.get_range_values(
-                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
-                    data_start,
-                    table.reference.start.col,
-                    ref_end_row,
-                    table.reference.end.col,
-                )),
-            };
-        }
-
-        // Default: #Data (implicit when no specifiers or explicit #Data).
-        // Column specified → single column data range.
-        // No column → entire data range.
-        if no_specifiers || has_data {
-            return match abs_col {
-                Some(col) => {
-                    if data_start == data_end {
-                        // Single data row → return as cell value.
-                        Ok(self.get_cell_value(
-                            self.sheet_name_for(workbook, sheet_idx).as_deref(),
-                            data_start,
-                            col,
-                        ))
-                    } else {
-                        Ok(self.get_range_values(
-                            self.sheet_name_for(workbook, sheet_idx).as_deref(),
-                            data_start,
-                            col,
-                            data_end,
-                            col,
-                        ))
-                    }
-                }
-                None => Ok(self.get_range_values(
-                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
-                    data_start,
-                    table.reference.start.col,
-                    data_end,
-                    table.reference.end.col,
-                )),
-            };
-        }
-
-        // Fallback - unrecognized specifier combination.
-        Ok(FormulaValue::Error(CellError::Ref))
+        let sheet = self.sheet_name_for(workbook, sheet_idx);
+        Ok(reference::read(self, &(sheet, cells)))
     }
 
     /// Find a table by name across all worksheets.
@@ -770,30 +513,36 @@ pub fn evaluate(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Fo
         FormulaExpr::Error(e) => Ok(FormulaValue::Error(*e)),
         FormulaExpr::Empty => Ok(FormulaValue::Empty),
 
-        FormulaExpr::CellRef(cell_ref) => Ok(ctx.get_cell_value(
-            cell_ref.sheet.as_deref(),
-            cell_ref.address.row,
-            cell_ref.address.col,
-        )),
+        // Cells and ranges. A span of sheets reads stacked; another workbook's cells keep the value
+        // saved in the file (crate::reference).
+        FormulaExpr::CellRef(c) => match Sheet::of(c.sheet.as_deref()) {
+            Sheet::One(sheet) => Ok(ctx.get_cell_value(sheet, c.address.row, c.address.col)),
+            Sheet::External(book) => Err(reference::external(book)),
+            Sheet::Span(..) => Ok(reference::read(ctx, &(c.sheet.clone(), CellRange::new(c.address, c.address)))),
+        },
+        FormulaExpr::RangeRef(r) => match Sheet::of(r.sheet.as_deref()) {
+            Sheet::One(sheet) => Ok(ctx.get_range_values(
+                sheet,
+                r.range.start.row,
+                r.range.start.col,
+                r.range.end.row,
+                r.range.end.col,
+            )),
+            Sheet::External(book) => Err(reference::external(book)),
+            Sheet::Span(..) => Ok(reference::read(ctx, &(r.sheet.clone(), r.range))),
+        },
+        FormulaExpr::ExternalRef(r) => Err(reference::external(&r.book)),
 
-        FormulaExpr::RangeRef(range_ref) => Ok(ctx.get_range_values(
-            range_ref.sheet.as_deref(),
-            range_ref.range.start.row,
-            range_ref.range.start.col,
-            range_ref.range.end.row,
-            range_ref.range.end.col,
-        )),
-
-        FormulaExpr::NameRef(name) => {
+        FormulaExpr::NameRef(name) => match ctx.local(name) {
+            Some(Binding::Value(value)) => Ok(value.clone()),
+            // A LAMBDA on its own, not called, is #CALC! in a cell.
+            Some(Binding::Lambda(_)) => Ok(FormulaValue::Error(CellError::Calc)),
             // Resolve named range through the evaluation context
-            ctx.resolve_named_range(name)
-        }
+            None => ctx.resolve_named_range(name),
+        },
 
         // Structured table references (e.g., Table1[Revenue], Table1[@Col]).
         FormulaExpr::StructuredRef(sr) => ctx.resolve_structured_ref(sr),
-
-        // External workbook references - external books are not loaded
-        FormulaExpr::ExternalRef(_) => Ok(FormulaValue::Error(CellError::Ref)),
 
         FormulaExpr::BinaryOp { op, left, right } => evaluate_binary_op(*op, left, right, ctx),
 
@@ -827,40 +576,24 @@ fn apply_binary_op_array(
     left: &FormulaValue,
     right: &FormulaValue,
 ) -> FormulaResult<FormulaValue> {
+    use crate::array_lift::{broadcast_at, dims};
     let left_arr = to_array(left);
     let right_arr = to_array(right);
-    let left_is_array = matches!(left, FormulaValue::Array { .. });
-    let right_is_array = matches!(right, FormulaValue::Array { .. });
+    let (left_dims, right_dims) = (dims(&left_arr), dims(&right_arr));
 
-    let rows = left_arr.len().max(right_arr.len());
-    let cols = left_arr
-        .iter()
-        .map(|r| r.len())
-        .max()
-        .unwrap_or(0)
-        .max(right_arr.iter().map(|r| r.len()).max().unwrap_or(0));
-
+    // Broadcast as Excel does: a column compared with a row gives a grid (array_lift::broadcast_at).
+    let rows = left_dims.0.max(right_dims.0);
+    let cols = left_dims.1.max(right_dims.1);
     let mut result = Vec::with_capacity(rows);
     for r in 0..rows {
         let mut row = Vec::with_capacity(cols);
         for c in 0..cols {
-            let l = if left_is_array {
-                left_arr.get(r).and_then(|row| row.get(c))
-            } else {
-                left_arr.first().and_then(|row| row.first())
-            };
-            let r_val = if right_is_array {
-                right_arr.get(r).and_then(|row| row.get(c))
-            } else {
-                right_arr.first().and_then(|row| row.first())
-            };
-
-            let cell_result = match (l, r_val) {
-                (Some(lv), Some(rv)) => apply_scalar_binary_op(op, lv, rv)
-                    .unwrap_or(FormulaValue::Error(CellError::Value)),
+            row.push(match (broadcast_at(&left_arr, left_dims, r, c), broadcast_at(&right_arr, right_dims, r, c)) {
+                (Some(lv), Some(rv)) => {
+                    apply_scalar_binary_op(op, lv, rv).unwrap_or(FormulaValue::Error(CellError::Value))
+                }
                 _ => FormulaValue::Error(CellError::Na),
-            };
-            row.push(cell_result);
+            });
         }
         result.push(row);
     }
@@ -871,7 +604,7 @@ fn apply_binary_op_array(
     })
 }
 
-fn to_array(val: &FormulaValue) -> Vec<Vec<FormulaValue>> {
+pub(crate) fn to_array(val: &FormulaValue) -> Vec<Vec<FormulaValue>> {
     match val {
         FormulaValue::Array { data: rows, .. } => rows.clone(),
         other => vec![vec![other.clone()]],
@@ -991,6 +724,9 @@ fn evaluate_binary_op(
     right: &FormulaExpr,
     ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
+    if op == BinaryOperator::Range {
+        return reference::evaluate_range_between(left, right, ctx);
+    }
     let left_val = evaluate(left, ctx)?;
     let right_val = evaluate(right, ctx)?;
 
@@ -1029,8 +765,9 @@ fn compare_values(left: &FormulaValue, right: &FormulaValue) -> i32 {
     };
 
     match (left, right) {
-        // Numbers compare numerically
+        // Numbers compare at Excel's 15 significant digits, so `=0.1+0.2=0.3` is TRUE.
         (FormulaValue::Number(l), FormulaValue::Number(r)) => {
+            let (l, r) = (crate::coerce::round_15(*l), crate::coerce::round_15(*r));
             if l < r {
                 -1
             } else if l > r {
@@ -1458,6 +1195,9 @@ fn evaluate_index_fast(
     if let FormulaValue::Error(e) = row_val {
         return Some(Ok(FormulaValue::Error(e)));
     }
+    if matches!(row_val, FormulaValue::Array { .. }) {
+        return None; // indexed element by element in evaluate_function
+    }
     let raw_pos = to_i64_trunc(&row_val).unwrap_or(0);
     if raw_pos < 0 {
         return Some(Ok(FormulaValue::Error(CellError::Value)));
@@ -1468,6 +1208,9 @@ fn evaluate_index_fast(
             Ok(v) => {
                 if let FormulaValue::Error(e) = v {
                     return Some(Ok(FormulaValue::Error(e)));
+                }
+                if matches!(v, FormulaValue::Array { .. }) {
+                    return None; // indexed element by element in evaluate_function
                 }
                 Some(to_i64_trunc(&v).unwrap_or(0))
             }
@@ -1494,49 +1237,28 @@ fn evaluate_index_fast(
             start_col: range_expr.range.start.col,
             end_row: range_expr.range.end.row,
             end_col: range_expr.range.end.col,
+            blank_cells_past: 0,
         };
         return Some(Ok(direct_value_from_source(&source, r, c, ctx)
             .unwrap_or(FormulaValue::Error(CellError::Ref))));
     }
 
-    let (arr, _source) = match get_range_from_expr(args.first()?, ctx)? {
-        Ok(v) => v,
-        Err(e) => return Some(Err(e)),
-    };
-    let arr = arr.as_ref();
-
-    if row_num == 0 {
-        if col_num == 0 {
-            return Some(Ok(arr[0][0].clone()));
-        }
-        let c = (col_num - 1) as usize;
-        if c >= cols {
-            return Some(Ok(FormulaValue::Error(CellError::Ref)));
-        }
-        let column: Vec<Vec<FormulaValue>> = arr.iter().map(|row| vec![row[c].clone()]).collect();
-        return Some(Ok(FormulaValue::Array {
-            data: column,
-            source: None,
-        }));
-    }
-
-    if col_num == 0 {
-        let r = (row_num - 1) as usize;
-        if r >= rows {
-            return Some(Ok(FormulaValue::Error(CellError::Ref)));
-        }
-        return Some(Ok(FormulaValue::Array {
-            data: vec![arr[r].clone()],
-            source: None,
-        }));
-    }
-
-    let r = (row_num - 1) as usize;
-    let c = (col_num - 1) as usize;
-    if r >= rows || c >= cols {
+    // A whole row or column of the area (0), or all of it: read as a reference, so a row past the
+    // used cells of a whole column reads blanks.
+    if (row_num as usize) > rows || (col_num as usize) > cols {
         return Some(Ok(FormulaValue::Error(CellError::Ref)));
     }
-    Some(Ok(arr[r][c].clone()))
+    let range = range_expr.range;
+    let (r0, r1) = match row_num {
+        0 => (range.start.row, range.end.row),
+        n => (range.start.row + n as u32 - 1, range.start.row + n as u32 - 1),
+    };
+    let (c0, c1) = match col_num {
+        0 => (range.start.col, range.end.col),
+        n => (range.start.col + n as u16 - 1, range.start.col + n as u16 - 1),
+    };
+    let target = (range_expr.sheet.clone(), CellRange::from_indices(r0, c0, r1, c1));
+    Some(Ok(reference::read(ctx, &target)))
 }
 
 fn evaluate_match_fast(
@@ -1551,7 +1273,10 @@ fn evaluate_match_fast(
         return Some(Ok(FormulaValue::Error(e)));
     }
     if matches!(lookup_value, FormulaValue::Array { .. }) {
-        return Some(Ok(FormulaValue::Error(CellError::Value)));
+        return None; // looked up element by element in evaluate_function
+    }
+    if matches!(lookup_value, FormulaValue::Empty) {
+        return Some(Ok(FormulaValue::Error(CellError::Na))); // a blank finds nothing
     }
 
     let match_type = match args.get(2) {
@@ -1576,20 +1301,14 @@ fn evaluate_match_fast(
 
     // Skip fast path for wildcard patterns - they need linear scan.
     let is_wildcard =
-        matches!(&lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+        matches!(&lookup_value, FormulaValue::String(s) if crate::functions::wildcard::has_wildcards(s));
     if match_type == 0 && !is_wildcard {
         if let FormulaExpr::RangeRef(rr) = args.get(1)? {
             let sheet = match ctx.resolve_sheet_index(rr.sheet.as_deref(), ctx.workbook?) {
                 Ok(idx) => idx,
                 Err(v) => return Some(Ok(v)),
             };
-            let source = RangeSource {
-                sheet,
-                start_row: rr.range.start.row,
-                start_col: rr.range.start.col,
-                end_row: rr.range.end.row,
-                end_col: rr.range.end.col,
-            };
+            let source = ctx.range_source(sheet, rr.range.start.row, rr.range.start.col, rr.range.end.row, rr.range.end.col);
             return Some(Ok(
                 match direct_exact_match_in_source(&lookup_value, &source, ctx) {
                     Some(i) => FormulaValue::Number((i + 1) as f64),
@@ -1630,30 +1349,11 @@ fn evaluate_match_fast(
             found
         }
         0 => exact_match_in_shared_range(&lookup_value, arr, &source, ctx),
-        1 => {
-            let mut best = None;
-            for i in 0..len {
-                let v = shared_vector_value(arr, i).unwrap();
-                match compare_lookup_values(v, &lookup_value) {
-                    Some(Ordering::Less) | Some(Ordering::Equal) => best = Some(i),
-                    Some(Ordering::Greater) => break,
-                    None => {}
-                }
-            }
-            best
-        }
-        -1 => {
-            let mut best = None;
-            for i in 0..len {
-                let v = shared_vector_value(arr, i).unwrap();
-                match compare_lookup_values(v, &lookup_value) {
-                    Some(Ordering::Greater) | Some(Ordering::Equal) => best = Some(i),
-                    Some(Ordering::Less) => break,
-                    None => {}
-                }
-            }
-            best
-        }
+        1 | -1 => crate::functions::lookup::approximate_position(
+            (0..len).filter_map(|i| shared_vector_value(arr, i)),
+            &lookup_value,
+            match_type == -1,
+        ),
         _ => return Some(Ok(FormulaValue::Error(CellError::Na))),
     };
 
@@ -1675,7 +1375,7 @@ fn evaluate_xmatch_fast(
         return Some(Ok(FormulaValue::Error(e)));
     }
     if matches!(lookup_value, FormulaValue::Array { .. }) {
-        return Some(Ok(FormulaValue::Error(CellError::Value)));
+        return None; // looked up element by element in evaluate_function
     }
 
     let match_mode = args
@@ -1699,13 +1399,7 @@ fn evaluate_xmatch_fast(
                 Ok(idx) => idx,
                 Err(v) => return Some(Ok(v)),
             };
-            let source = RangeSource {
-                sheet,
-                start_row: rr.range.start.row,
-                start_col: rr.range.start.col,
-                end_row: rr.range.end.row,
-                end_col: rr.range.end.col,
-            };
+            let source = ctx.range_source(sheet, rr.range.start.row, rr.range.start.col, rr.range.end.row, rr.range.end.col);
             return Some(Ok(
                 match direct_exact_match_in_source(&lookup_value, &source, ctx) {
                     Some(i) => FormulaValue::Number((i + 1) as f64),
@@ -1824,6 +1518,9 @@ fn evaluate_xlookup_fast(
     if let FormulaValue::Error(e) = lookup_value {
         return Some(Ok(FormulaValue::Error(e)));
     }
+    if matches!(lookup_value, FormulaValue::Array { .. }) {
+        return None; // looked up element by element in evaluate_function
+    }
 
     let if_not_found = match args.get(3) {
         Some(expr) => match evaluate(expr, ctx) {
@@ -1861,20 +1558,8 @@ fn evaluate_xlookup_fast(
                     Ok(idx) => idx,
                     Err(v) => return Some(Ok(v)),
                 };
-            let lookup_source = RangeSource {
-                sheet: lookup_sheet,
-                start_row: lookup_rr.range.start.row,
-                start_col: lookup_rr.range.start.col,
-                end_row: lookup_rr.range.end.row,
-                end_col: lookup_rr.range.end.col,
-            };
-            let return_source = RangeSource {
-                sheet: return_sheet,
-                start_row: return_rr.range.start.row,
-                start_col: return_rr.range.start.col,
-                end_row: return_rr.range.end.row,
-                end_col: return_rr.range.end.col,
-            };
+            let lookup_source = ctx.range_source(lookup_sheet, lookup_rr.range.start.row, lookup_rr.range.start.col, lookup_rr.range.end.row, lookup_rr.range.end.col);
+            let return_source = ctx.range_source(return_sheet, return_rr.range.start.row, return_rr.range.start.col, return_rr.range.end.row, return_rr.range.end.col);
             let lookup_len = if lookup_source.start_col == lookup_source.end_col {
                 (lookup_source.end_row - lookup_source.start_row + 1) as usize
             } else if lookup_source.start_row == lookup_source.end_row {
@@ -2054,6 +1739,9 @@ fn evaluate_vlookup_fast(
     if let FormulaValue::Error(e) = lookup_value {
         return Some(Ok(FormulaValue::Error(e)));
     }
+    if matches!(lookup_value, FormulaValue::Array { .. }) {
+        return None; // looked up element by element in evaluate_function
+    }
 
     let table_rr = match args.get(1)? {
         FormulaExpr::RangeRef(rr) => rr,
@@ -2079,7 +1767,7 @@ fn evaluate_vlookup_fast(
     };
     // Skip fast path for approximate match and wildcard patterns
     let is_wildcard =
-        matches!(&lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+        matches!(&lookup_value, FormulaValue::String(s) if crate::functions::wildcard::has_wildcards(s));
     if range_lookup || is_wildcard {
         return None;
     }
@@ -2088,13 +1776,13 @@ fn evaluate_vlookup_fast(
         Ok(idx) => idx,
         Err(v) => return Some(Ok(v)),
     };
-    let source = RangeSource {
+    let source = ctx.range_source(
         sheet,
-        start_row: table_rr.range.start.row,
-        start_col: table_rr.range.start.col,
-        end_row: table_rr.range.end.row,
-        end_col: table_rr.range.end.col,
-    };
+        table_rr.range.start.row,
+        table_rr.range.start.col,
+        table_rr.range.end.row,
+        table_rr.range.end.col,
+    );
     let width = (source.end_col - source.start_col + 1) as i64;
     if col_index > width {
         return Some(Ok(FormulaValue::Error(CellError::Ref)));
@@ -2105,6 +1793,7 @@ fn evaluate_vlookup_fast(
             &RangeSource {
                 start_col: source.start_col,
                 end_col: source.start_col,
+                blank_cells_past: 0,
                 ..source.clone()
             },
             ctx,
@@ -2169,21 +1858,34 @@ fn external_arg_to_string(value: &FormulaValue) -> String {
     }
 }
 
+/// A function's name as the registry knows it: Excel stores newer functions with `_xlfn.` and
+/// `_xlws.` prefixes (`_xlfn._xlws.FILTER`); the parser has uppercased the name.
+pub(crate) fn function_name(name: &str) -> &str {
+    let name = name.strip_prefix("_XLFN.").unwrap_or(name);
+    name.strip_prefix("_XLWS.").unwrap_or(name)
+}
+
 fn evaluate_function(
     name: &str,
     args: &[FormulaExpr],
     ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let registry = get_function_registry();
+    let lookup_name = function_name(name);
 
-    // Strip Excel future function prefixes - Excel stores newer functions
-    // like IFNA, IFS, SWITCH, TEXTJOIN with _xlfn. (or _xlws.) in XML.
-    // Some functions have both: _xlfn._xlws.FILTER - strip in sequence.
-    // Note: function names are already uppercased by the parser.
-    let lookup_name = name.strip_prefix("_XLFN.").unwrap_or(name);
-    let lookup_name = lookup_name.strip_prefix("_XLWS.").unwrap_or(lookup_name);
+    // A LAMBDA bound by LET is called by its name, and one written in place, LAMBDA(x,x+1)(2), there.
+    let lambda = match ctx.local(lookup_name) {
+        Some(Binding::Lambda(lambda)) => Some((lambda.clone(), args)),
+        _ if name == crate::parser::LAMBDA_CALL => args
+            .split_first()
+            .and_then(|(lambda, values)| Some((crate::lambda::lambda_of(lambda, ctx)?, values))),
+        _ => None,
+    };
+    if let Some((lambda, values)) = lambda {
+        let values = values.iter().map(|arg| evaluate(arg, ctx)).collect::<FormulaResult<Vec<_>>>()?;
+        return call_lambda(&lambda, &values, ctx);
+    }
 
-    let func = registry
+    let func = get_function_registry()
         .get(lookup_name)
         .ok_or_else(|| FormulaError::UnknownFunction(name.to_string()))?;
 
@@ -2206,119 +1908,108 @@ fn evaluate_function(
         }
     }
 
-    // Special case: AREAS needs the raw AST to count union branches.
-    if lookup_name == "AREAS" {
-        return evaluate_areas(args, ctx);
+    if let Some(result) = evaluate_with_expressions(lookup_name, args, ctx) {
+        return result;
     }
 
-    if lookup_name == "OFFSET" {
-        return evaluate_offset(args, ctx);
-    }
-
-    // Special case: FORMULATEXT needs the raw cell reference, not the evaluated value.
-    if lookup_name == "FORMULATEXT" {
-        return evaluate_formulatext(args, ctx);
-    }
-
-    if lookup_name == "ISFORMULA" {
-        if let Some(result) = evaluate_isformula(args, ctx) {
-            return result;
-        }
-    }
-
-    if lookup_name == "INDEX" {
-        if let Some(result) = evaluate_index_fast(args, ctx) {
-            return result;
-        }
-    }
-
-    if lookup_name == "MATCH" {
-        if let Some(result) = evaluate_match_fast(args, ctx) {
-            return result;
-        }
-    }
-
-    if lookup_name == "XMATCH" {
-        if let Some(result) = evaluate_xmatch_fast(args, ctx) {
-            return result;
-        }
-    }
-
-    if lookup_name == "XLOOKUP" {
-        if let Some(result) = evaluate_xlookup_fast(args, ctx) {
-            return result;
-        }
-    }
-
-    if lookup_name == "VLOOKUP" {
-        if let Some(result) = evaluate_vlookup_fast(args, ctx) {
-            return result;
-        }
-    }
-
-    // ROW/COLUMN need the unevaluated reference to extract row/col numbers.
-    if lookup_name == "ROW" || lookup_name == "COLUMN" {
-        let is_row = lookup_name == "ROW";
-        if args.is_empty() {
-            // No args: return current cell position
-            let val = if is_row {
-                ctx.current_row + 1
-            } else {
-                (ctx.current_col + 1) as u32
-            };
-            return Ok(FormulaValue::Number(val as f64));
-        }
-        match &args[0] {
-            FormulaExpr::CellRef(cr) => {
-                let val = if is_row {
-                    cr.address.row + 1
-                } else {
-                    (cr.address.col + 1) as u32
-                };
-                return Ok(FormulaValue::Number(val as f64));
-            }
-            FormulaExpr::RangeRef(rr) => {
-                if is_row {
-                    let rows: Vec<Vec<FormulaValue>> = (rr.range.start.row..=rr.range.end.row)
-                        .map(|r| vec![FormulaValue::Number((r + 1) as f64)])
-                        .collect();
-                    return Ok(FormulaValue::Array {
-                        data: rows,
-                        source: None,
-                    });
-                } else {
-                    let cols: Vec<FormulaValue> = (rr.range.start.col..=rr.range.end.col)
-                        .map(|c| FormulaValue::Number((c + 1) as f64))
-                        .collect();
-                    return Ok(FormulaValue::Array {
-                        data: vec![cols],
-                        source: None,
-                    });
-                }
-            }
-            _ => {} // fall through to normal evaluation
-        }
-    }
-
-    // ISREF needs the unevaluated reference to check if it's a valid ref.
-    if lookup_name == "ISREF" {
-        if args.is_empty() {
-            return Ok(FormulaValue::Boolean(false));
-        }
-        return Ok(FormulaValue::Boolean(matches!(
-            &args[0],
-            FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_)
-        )));
-    }
-
-    // Evaluate arguments
+    // Evaluate arguments. A failure inside an argument is that argument's error value, so
+    // IFERROR, ISERROR and AGGREGATE see it: `IFERROR(A1-B1,0)` with text in B1 is 0. A value
+    // that must come from the file (another workbook's cells) passes through.
     let mut evaluated_args = Vec::with_capacity(args.len());
     for arg in args {
-        evaluated_args.push(evaluate(arg, ctx)?);
+        evaluated_args.push(match evaluate(arg, ctx) {
+            Ok(value) => value,
+            Err(error @ (FormulaError::ExternalFunctionUnresolved(_) | FormulaError::ExternalReference(_))) => {
+                return Err(error)
+            }
+            Err(FormulaError::UnknownFunction(_)) => FormulaValue::Error(CellError::Name),
+            Err(_) => FormulaValue::Error(CellError::Value),
+        });
     }
 
-    // Call the function
+    // TEXTJOIN(",",,A1:A3) skips empty text: Excel reads that left-out flag as TRUE, though a
+    // blank cell there is FALSE.
+    if lookup_name.eq_ignore_ascii_case("TEXTJOIN") && matches!(args.get(1), Some(FormulaExpr::Empty)) {
+        evaluated_args[1] = FormulaValue::Boolean(true);
+    }
+
+    crate::array_lift::coerce_typed_arguments(func.typed_args, args, &mut evaluated_args, ctx);
+
+    if let Some(result) = crate::array_lift::lift_over_arrays(func, &evaluated_args, ctx) {
+        return result;
+    }
+
     (func.implementation)(&evaluated_args, ctx)
+}
+
+/// Functions that work on their arguments as written rather than on their values: names and
+/// LAMBDAs, references (INDIRECT, OFFSET, ROW, ISREF, …), and the lookups that read the sheet
+/// directly. `None` means evaluate the arguments and call the function as usual.
+fn evaluate_with_expressions(
+    name: &str,
+    args: &[FormulaExpr],
+    ctx: &EvaluationContext,
+) -> Option<FormulaResult<FormulaValue>> {
+    let value_of = |target: FormulaResult<Result<reference::Target, CellError>>| {
+        Some(target.map(|t| match t {
+            Ok(target) => reference::read(ctx, &target),
+            Err(e) => FormulaValue::Error(e),
+        }))
+    };
+    match name {
+        "LET" => Some(evaluate_let(args, ctx)),
+        "MAP" | "BYROW" | "BYCOL" | "REDUCE" | "SCAN" | "MAKEARRAY" => Some(evaluate_lambda_helper(name, args, ctx)),
+        "AREAS" => Some(evaluate_areas(args, ctx)),
+        "FORMULATEXT" => Some(evaluate_formulatext(args, ctx)),
+        "ISFORMULA" => evaluate_isformula(args, ctx),
+        "INDIRECT" => value_of(reference::indirect_target(args, ctx)),
+        "OFFSET" => value_of(reference::offset_target(args, ctx)),
+        // The fast lookups find their sheet by name, and another workbook's ('[1]May'!A:A) isn't
+        // one: the general path raises ExternalReference, so the cell keeps its saved value.
+        "INDEX" | "MATCH" | "XMATCH" | "XLOOKUP" | "VLOOKUP" if args.iter().any(reference::is_external) => None,
+        "INDEX" => evaluate_index_fast(args, ctx),
+        "MATCH" => evaluate_match_fast(args, ctx),
+        "XMATCH" => evaluate_xmatch_fast(args, ctx),
+        "XLOOKUP" => evaluate_xlookup_fast(args, ctx),
+        "VLOOKUP" => evaluate_vlookup_fast(args, ctx),
+        "ROW" | "COLUMN" | "ROWS" | "COLUMNS" => evaluate_position(name, args, ctx).transpose(),
+        "ISREF" => Some(match args.first() {
+            Some(arg) => reference::reference_of(arg, ctx)
+                .map(|target| FormulaValue::Boolean(matches!(target, Some(Ok(_))))),
+            None => Ok(FormulaValue::Boolean(false)),
+        }),
+        _ => None,
+    }
+}
+
+/// ROW and COLUMN number a reference's rows or columns (or the formula's own cell with no
+/// argument); ROWS and COLUMNS count them. They measure the reference as written: ROWS(A:A) is
+/// 1,048,576. An array (not a reference) goes to the registry function.
+fn evaluate_position(name: &str, args: &[FormulaExpr], ctx: &EvaluationContext) -> FormulaResult<Option<FormulaValue>> {
+    let rows = matches!(name, "ROW" | "ROWS");
+    let Some(arg) = args.first() else {
+        let here = if rows { ctx.current_row + 1 } else { ctx.current_col as u32 + 1 };
+        return Ok(matches!(name, "ROW" | "COLUMN").then_some(FormulaValue::Number(here as f64)));
+    };
+    let range = match reference::reference_of(arg, ctx)? {
+        Some(Ok((_, range))) => range,
+        Some(Err(e)) => return Ok(Some(FormulaValue::Error(e))),
+        None => return Ok(None),
+    };
+    let (first, last) = if rows {
+        (range.start.row, range.end.row)
+    } else {
+        (range.start.col as u32, range.end.col as u32)
+    };
+    if matches!(name, "ROWS" | "COLUMNS") {
+        return Ok(Some(FormulaValue::Number((last - first + 1) as f64)));
+    }
+    if first == last {
+        return Ok(Some(FormulaValue::Number((first + 1) as f64)));
+    }
+    let numbers = (first..=last).map(|n| FormulaValue::Number((n + 1) as f64));
+    let data = if rows { numbers.map(|v| vec![v]).collect() } else { vec![numbers.collect()] };
+    Ok(Some(FormulaValue::Array { data, source: None }))
 }
 
 /// FORMULATEXT requires special handling: it needs the raw cell reference
@@ -2446,114 +2137,6 @@ fn evaluate_areas(args: &[FormulaExpr], ctx: &EvaluationContext) -> FormulaResul
     }
 }
 
-fn evaluate_offset(args: &[FormulaExpr], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let to_i64_trunc = |value: &FormulaValue| value.as_number().map(|n| n.trunc() as i64);
-
-    let (sheet_name, base_row, base_col, base_height, base_width) = match &args[0] {
-        FormulaExpr::CellRef(cell_ref) => (
-            cell_ref.sheet.as_deref(),
-            i64::from(cell_ref.address.row),
-            i64::from(cell_ref.address.col),
-            1_i64,
-            1_i64,
-        ),
-        FormulaExpr::RangeRef(range_ref) => (
-            range_ref.sheet.as_deref(),
-            i64::from(range_ref.range.start.row),
-            i64::from(range_ref.range.start.col),
-            i64::from(range_ref.range.end.row - range_ref.range.start.row + 1),
-            i64::from(range_ref.range.end.col - range_ref.range.start.col + 1),
-        ),
-        FormulaExpr::Error(e) => return Ok(FormulaValue::Error(*e)),
-        arg => {
-            let mut evaluated_args = Vec::with_capacity(args.len());
-            evaluated_args.push(evaluate(arg, ctx)?);
-            for other_arg in &args[1..] {
-                evaluated_args.push(evaluate(other_arg, ctx)?);
-            }
-            return crate::functions::lookup::fn_offset(&evaluated_args, ctx);
-        }
-    };
-
-    let rows_offset = match evaluate(&args[1], ctx)? {
-        FormulaValue::Error(e) => return Ok(FormulaValue::Error(e)),
-        value => match to_i64_trunc(&value) {
-            Some(offset) => offset,
-            None => return Ok(FormulaValue::Error(CellError::Value)),
-        },
-    };
-    let cols_offset = match evaluate(&args[2], ctx)? {
-        FormulaValue::Error(e) => return Ok(FormulaValue::Error(e)),
-        value => match to_i64_trunc(&value) {
-            Some(offset) => offset,
-            None => return Ok(FormulaValue::Error(CellError::Value)),
-        },
-    };
-
-    let height = match args.get(3) {
-        None | Some(FormulaExpr::Empty) => base_height,
-        Some(arg) => match evaluate(arg, ctx)? {
-            FormulaValue::Error(e) => return Ok(FormulaValue::Error(e)),
-            value => match to_i64_trunc(&value) {
-                Some(height) if height >= 1 => height,
-                Some(_) => return Ok(FormulaValue::Error(CellError::Ref)),
-                None => return Ok(FormulaValue::Error(CellError::Value)),
-            },
-        },
-    };
-    let width = match args.get(4) {
-        None | Some(FormulaExpr::Empty) => base_width,
-        Some(arg) => match evaluate(arg, ctx)? {
-            FormulaValue::Error(e) => return Ok(FormulaValue::Error(e)),
-            value => match to_i64_trunc(&value) {
-                Some(width) if width >= 1 => width,
-                Some(_) => return Ok(FormulaValue::Error(CellError::Ref)),
-                None => return Ok(FormulaValue::Error(CellError::Value)),
-            },
-        },
-    };
-
-    let start_row = match base_row.checked_add(rows_offset) {
-        Some(row) if row >= 0 => row,
-        _ => return Ok(FormulaValue::Error(CellError::Ref)),
-    };
-    let start_col = match base_col.checked_add(cols_offset) {
-        Some(col) if col >= 0 => col,
-        _ => return Ok(FormulaValue::Error(CellError::Ref)),
-    };
-
-    let end_row = match start_row.checked_add(height - 1) {
-        Some(row) => row,
-        None => return Ok(FormulaValue::Error(CellError::Ref)),
-    };
-    let end_col = match start_col.checked_add(width - 1) {
-        Some(col) => col,
-        None => return Ok(FormulaValue::Error(CellError::Ref)),
-    };
-
-    if start_row >= i64::from(MAX_ROWS)
-        || start_col >= i64::from(MAX_COLS)
-        || end_row >= i64::from(MAX_ROWS)
-        || end_col >= i64::from(MAX_COLS)
-    {
-        return Ok(FormulaValue::Error(CellError::Ref));
-    }
-
-    let start_row = start_row as u32;
-    let start_col = start_col as u16;
-
-    if height == 1 && width == 1 {
-        return Ok(ctx.get_cell_value(sheet_name, start_row, start_col));
-    }
-
-    Ok(ctx.get_range_values(
-        sheet_name,
-        start_row,
-        start_col,
-        end_row as u32,
-        end_col as u16,
-    ))
-}
 
 #[cfg(test)]
 mod tests {
@@ -3983,9 +3566,9 @@ mod tests {
             _ => panic!("Expected array result"),
         }
 
-        // Test unknown name returns error
+        // An unknown name is #NAME?, as in Excel
         let result = ctx.resolve_named_range("UnknownName");
-        assert!(result.is_err());
+        assert_eq!(result.unwrap(), FormulaValue::Error(CellError::Name));
 
         // Test case-insensitive lookup
         let result = ctx.resolve_named_range("price").unwrap();

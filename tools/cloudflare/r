@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""Run builds and tests on the Cloudflare build box instead of the laptop.
+
+  r up                    start the box and print its tool versions (any command starts it)
+  r sync <repo>...        upload tracked and new files, and .git
+  r run <repo> '<cmd>'    run in /work/<repo>; exits with the command's code
+  r pull <repo> <path>    copy a path back from /work/<repo> (e.g. dist)
+  r down                  stop the box, for everyone using it
+
+A <repo> is a directory under ~/Desktop/Code: absolute, relative to the current directory (`.`),
+or relative to ~/Desktop/Code (`office-ui`). It lives on the box at /work/<path under
+~/Desktop/Code>. In a worktree, pass its path, not office-ui, or you test the main checkout.
+
+One box is shared by everyone with the token. It stops 30 minutes after the last request, and
+its files go with it: a fresh box needs `r sync` again and rebuilds node_modules and target
+from scratch. Pull what you need before then. Files deleted locally stay on the box until it
+stops. The first start after a deploy pulls the new image and can take several minutes.
+Commands travel in the request URL, which the Worker's logs record: keep secrets out of them.
+
+Setup, once per laptop:
+  1. The office-builds workflow (.github/workflows/office-builds.yml) deploys the Worker and
+     its image from main, or on demand (workflow_dispatch). Its token is the Worker's
+     RUNNER_TOKEN secret. Set it once, or ask whoever did:
+       cd tools/cloudflare && npm ci && npx cf workers secrets update RUNNER_TOKEN --worker office-builds --text <token>
+  2. Write the Worker's URL (https://office-builds.<subdomain>.workers.dev) to
+     ~/.config/office-builds/url and the token to ~/.config/office-builds/token.
+"""
+import http.client
+import io
+import os
+import shlex
+import subprocess
+import sys
+import tarfile
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+
+CODE = os.path.expanduser("~/Desktop/Code")
+CONFIG = os.path.expanduser("~/.config/office-builds")
+CHUNK = 64 * 1024 * 1024  # Cloudflare takes request bodies up to 100 MB
+TIMEOUT = 3 * 3600
+
+
+def config(name):
+    path = os.path.join(CONFIG, name)
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        sys.exit(f"No {path}. See `r` (no arguments) for setup.")
+
+
+HINTS = {
+    401: "the token in ~/.config/office-builds/token isn't the Worker's RUNNER_TOKEN",
+    404: "check the URL in ~/.config/office-builds/url",
+    503: "the box didn't start; run the command again",
+}
+
+
+def request(path, query, data=None):
+    url = config("url").rstrip("/") + path + "?" + urllib.parse.urlencode(query)
+    # Cloudflare's bot protection turns away Python's default user agent.
+    headers = {"authorization": f"Bearer {config('token')}", "user-agent": "office-builds-r/1"}
+    try:
+        return urllib.request.urlopen(urllib.request.Request(url, data=data, method="POST", headers=headers), timeout=TIMEOUT)
+    except urllib.error.HTTPError as error:
+        body = error.read().decode(errors="replace").strip()
+        hint = HINTS.get(error.code, "")
+        sys.exit(f"The build box answered {error.code}: {body}" + (f"\n({hint})" if hint else ""))
+    except urllib.error.URLError as error:
+        sys.exit(f"Can't reach the build box: {error.reason}. Check ~/.config/office-builds/url.")
+
+
+def run(command, cwd="/work", data=None):
+    """Runs a command on the box, printing its output as it arrives; returns its exit code."""
+    code = None
+    try:
+        for line in request("/run", {"command": command, "cwd": cwd}, data):
+            text = line.decode(errors="replace")
+            if text.startswith("__EXIT__ "):
+                code = int(text.split()[1])
+            else:
+                print(text, end="", flush=True)
+    except (OSError, http.client.HTTPException):
+        pass  # reported below, as no exit line
+    if code is None:
+        print("Lost the connection before the command finished; it may still be running on the box.", file=sys.stderr)
+        return 255
+    return code
+
+
+def resolve(repo):
+    root = os.path.abspath(repo if os.path.exists(repo) else os.path.join(CODE, repo))
+    key = os.path.relpath(root, CODE)
+    if key.startswith(".."):
+        sys.exit(f"{root} is not under {CODE}; r only syncs checkouts there, so clone or move it there.")
+    return root, key
+
+
+def sync(repo):
+    root, key = resolve(repo)
+    files = subprocess.run(
+        ["git", "-C", root, "ls-files", "-co", "--exclude-standard", "-z"], check=True, capture_output=True
+    ).stdout.split(b"\0")
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name in filter(None, files):
+            path = os.path.join(root, name.decode())
+            if os.path.isfile(path) and not os.path.islink(path):
+                archive.add(path, arcname=name.decode())
+        # Builds read git (the office template stamps `git describe`).
+        if os.path.isdir(os.path.join(root, ".git")):
+            archive.add(os.path.join(root, ".git"), arcname=".git")
+    data = buffer.getvalue()
+    # Each sync uploads to its own file, so two syncs at once don't mix their parts.
+    upload = f"/tmp/sync-{uuid.uuid4().hex}.tgz"
+    parts = [data[i : i + CHUNK] for i in range(0, len(data), CHUNK)] or [b""]
+    for n, part in enumerate(parts):
+        if run(f"cat {'>' if n == 0 else '>>'} {upload}", "/", part) != 0:
+            run(f"rm -f {upload}", "/")
+            sys.exit(f"Upload of part {n + 1} of {len(parts)} failed; run r sync again.")
+    target = shlex.quote(f"/work/{key}")
+    # The office template's browser tests load Playwright from <repo>/.cod1460; the image keeps it
+    # in /opt/cod1460.
+    link = f"if [ -d {target}/apps/v4/experiments/artifact-template ]; then ln -sfn /opt/cod1460 {target}/.cod1460; fi"
+    code = run(f"mkdir -p {target} && tar xzf {upload} -C {target}; code=$?; rm -f {upload}; {link}; exit $code", "/")
+    if code != 0:
+        sys.exit(code)
+    print(f"synced {key}: {len(data) // 1024} KiB in {len(parts)} part(s)")
+
+
+def pull(repo, path):
+    target, key = resolve(repo)
+    cwd = f"/work/{key}"
+    missing = shlex.quote(f"Nothing at {path} in {cwd}. Was it built since the box last started?")
+    if run(f"test -e {shlex.quote(path)} || {{ echo {missing}; exit 1; }}", cwd) != 0:
+        sys.exit(1)
+    data = request("/run", {"command": f"tar czf - {shlex.quote(path)}", "cwd": cwd, "output": "raw"}).read()
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+        try:
+            archive.extractall(target, filter="data")
+        except TypeError:  # without the filter, a crafted archive could write outside the repo
+            sys.exit("r pull needs Python 3.12 or later, for safe tar extraction.")
+    print(f"pulled {key}/{path}: {len(data) // 1024} KiB")
+
+
+def main():
+    args = sys.argv[1:]
+    action, rest = (args[0], args[1:]) if args else (None, [])
+    arity = {"up": 0, "down": 0, "run": 2, "pull": 2}
+    if action not in (*arity, "sync") or (action in arity and len(rest) != arity[action]) or (action == "sync" and not rest):
+        sys.exit(__doc__)
+    if action == "up":
+        sys.exit(run("node -v && pnpm -v && cargo -V && wasm-pack -V"))
+    elif action == "down":
+        print(request("/down", {}).read().decode(), end="")
+    elif action == "sync":
+        for repo in rest:
+            sync(repo)
+    elif action == "run":
+        sys.exit(run(rest[1], f"/work/{resolve(rest[0])[1]}"))
+    elif action == "pull":
+        pull(rest[0], rest[1])
+
+
+if __name__ == "__main__":
+    main()

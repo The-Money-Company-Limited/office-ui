@@ -255,13 +255,14 @@ fn test_workbook_calculate_index_zero_zero() {
     let mut ctx = EvaluationContext::new(Some(&wb), 0, 0, 0);
     ctx.eval_cache = Some(&cache);
     let ast = parse_formula(wb.worksheet(0).unwrap().get_formula_at(0, 0).unwrap()).unwrap();
-    // Excel returns first element for INDEX(2D, 0, 0)
-    assert_eq!(evaluate(&ast, &ctx).unwrap(), FormulaValue::Number(1.0));
+    // INDEX(area, 0, 0) is the whole area, which spills from A1
+    assert!(matches!(evaluate(&ast, &ctx).unwrap(), FormulaValue::Array { .. }));
 
     wb.calculate().unwrap();
 
     let sheet = wb.worksheet(0).unwrap();
     assert_eq!(sheet.get_value_at(0, 0), CellValue::Number(1.0));
+    assert_eq!(sheet.get_value_at(1, 2), CellValue::Number(6.0));
 }
 
 #[test]
@@ -313,4 +314,144 @@ fn test_loaded_parity_cells_recalculate() {
         CellValue::Number(1.0)
     );
     assert_eq!(tests_sheet.get_value_at(456, 2), CellValue::Error(CellError::Num));
+}
+
+/// A range with a fixed start and a moving end grows as it is copied down (COD-1770).
+#[test]
+fn test_workbook_calculate_growing_ranges() {
+    let mut wb = Workbook::new();
+    {
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "header").unwrap();
+        for row in 2..=6 {
+            sheet.set_cell_value(&format!("A{row}"), (row - 1) as f64).unwrap();
+            sheet.set_cell_formula(&format!("B{row}"), &format!("=SUM($A$2:A{row})")).unwrap();
+            sheet.set_cell_formula(&format!("C{row}"), &format!("=COUNT($A$2:A{row})")).unwrap();
+            sheet.set_cell_formula(&format!("D{row}"), &format!("=ROWS($A$2:A{row})")).unwrap();
+            sheet.set_cell_formula(&format!("E{row}"), &format!("=COUNTIF(A$2:A{row},\">1\")")).unwrap();
+        }
+    }
+    wb.calculate().unwrap();
+
+    let sheet = wb.worksheet(0).unwrap();
+    for row in 2..=6u32 {
+        let n = (row - 1) as f64;
+        let r = row - 1;
+        assert_eq!(sheet.get_value_at(r, 1), CellValue::Number(n * (n + 1.0) / 2.0), "SUM in row {row}");
+        assert_eq!(sheet.get_value_at(r, 2), CellValue::Number(n), "COUNT in row {row}");
+        assert_eq!(sheet.get_value_at(r, 3), CellValue::Number(n), "ROWS in row {row}");
+        assert_eq!(sheet.get_value_at(r, 4), CellValue::Number(n - 1.0), "COUNTIF in row {row}");
+    }
+}
+
+/// Whole columns and rows read the sheet's used cells, on this sheet and others (COD-1772).
+#[test]
+fn test_workbook_calculate_whole_columns_and_rows() {
+    let mut wb = Workbook::new();
+    {
+        let sheet = wb.worksheet_mut(0).unwrap();
+        for (row, (key, value)) in [("x", 1.0), ("y", 2.0), ("x", 3.0)].into_iter().enumerate() {
+            sheet.set_cell_value(&format!("A{}", row + 1), key).unwrap();
+            sheet.set_cell_value(&format!("B{}", row + 1), value).unwrap();
+        }
+        sheet.set_cell_value("F10", 5.0).unwrap();
+        sheet.set_cell_value("G10", 7.0).unwrap();
+        let formulas = [
+            ("D1", "=SUM(B:B)"),
+            ("D2", "=COUNTA(A:A)"),
+            ("D3", "=SUMIF(A:A,\"x\",B:B)"),
+            ("D4", "=COUNTIFS($A:$A,$A1,$B:$B,\">1\")"),
+            ("D5", "=VLOOKUP(\"y\",A:B,2,FALSE)"),
+            ("D6", "=MATCH(7,10:10,0)"),
+            ("D7", "=SUM($10:$10)"),
+            ("D8", "=SUM(Data!A:A)"),
+            ("D9", "=ROWS(A:A)"),
+            ("D11", "=SUM(A:B)"),
+            ("E1", "=SUM($B$1:B1)*COUNTA(A:A)"),
+            ("E2", "=SUM($B$1:B2)*COUNTA(A:A)"),
+        ];
+        for (cell, formula) in formulas {
+            sheet.set_cell_formula(cell, formula).unwrap();
+        }
+    }
+    let data = wb.add_worksheet_with_name("Data").unwrap();
+    {
+        let sheet = wb.worksheet_mut(data).unwrap();
+        sheet.set_cell_value("A1", 4.0).unwrap();
+        sheet.set_cell_value("A2", 6.0).unwrap();
+    }
+    wb.calculate().unwrap();
+
+    let sheet = wb.worksheet(0).unwrap();
+    let number = |cell: &str| sheet.get_value(cell).unwrap();
+    assert_eq!(number("D1"), CellValue::Number(6.0));
+    assert_eq!(number("D2"), CellValue::Number(3.0));
+    assert_eq!(number("D3"), CellValue::Number(4.0));
+    assert_eq!(number("D4"), CellValue::Number(1.0));
+    assert_eq!(number("D5"), CellValue::Number(2.0));
+    assert_eq!(number("D6"), CellValue::Number(7.0));
+    assert_eq!(number("D7"), CellValue::Number(12.0));
+    assert_eq!(number("D8"), CellValue::Number(10.0));
+    assert_eq!(number("D9"), CellValue::Number(1_048_576.0));
+    assert_eq!(number("D11"), CellValue::Number(6.0));
+    assert_eq!(number("E1"), CellValue::Number(3.0));
+    assert_eq!(number("E2"), CellValue::Number(9.0));
+}
+
+/// Review regressions (COD-1769): INDEX past the used rows, 3D references, whole columns on two
+/// sheets, the first-blank-row idiom, typed text in SUM, and names that refer to themselves.
+#[test]
+fn test_workbook_calculate_review_regressions() {
+    let mut wb = Workbook::new();
+    {
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "a").unwrap();
+        sheet.set_cell_value("A2", "b").unwrap();
+        let formulas = [
+            ("C1", "=COUNTA(INDEX(A:B,500,0))"),
+            ("C2", "=SUM(Jan:Feb!B2)"),
+            ("C3", "=XLOOKUP(\"y\",Data!A:A,Other!B:B)"),
+            ("C4", "=MATCH(TRUE,ISBLANK(A:A),0)"),
+            ("C5", "=SUM(IF(1,\"5\"),\"2\",IF(1,A1))"),
+            ("C6", "=Loop"),
+        ];
+        for (cell, formula) in formulas {
+            sheet.set_cell_formula(cell, formula).unwrap();
+        }
+    }
+    for (name, cells) in [
+        ("Jan", vec![("B2", 1.0)]),
+        ("Feb", vec![("B2", 2.0)]),
+        ("Data", vec![("A1", 0.0), ("A2", 0.0), ("A3", 0.0)]),
+        ("Other", vec![("B3", 7.0)]),
+    ] {
+        let index = wb.add_worksheet_with_name(name).unwrap();
+        let sheet = wb.worksheet_mut(index).unwrap();
+        for (cell, value) in cells {
+            sheet.set_cell_value(cell, value).unwrap();
+        }
+    }
+    {
+        let data = wb.sheet_index("Data").unwrap();
+        let sheet = wb.worksheet_mut(data).unwrap();
+        sheet.set_cell_value("A1", "x").unwrap();
+        sheet.set_cell_value("A2", "z").unwrap();
+        sheet.set_cell_value("A3", "y").unwrap();
+    }
+    wb.define_name("Loop", "Loop+1").unwrap();
+    wb.calculate().unwrap();
+
+    let sheet = wb.worksheet(0).unwrap();
+    assert_eq!(sheet.get_value("C1").unwrap(), CellValue::Number(0.0));
+    assert_eq!(sheet.get_value("C2").unwrap(), CellValue::Number(3.0));
+    assert_eq!(sheet.get_value("C3").unwrap(), CellValue::Number(7.0));
+    assert_eq!(sheet.get_value("C4").unwrap(), CellValue::Number(3.0));
+    assert_eq!(sheet.get_value("C5").unwrap(), CellValue::Number(7.0));
+    assert!(matches!(sheet.get_value("C6").unwrap(), CellValue::Error(_)));
+
+    // A 3D sum follows its sheets: editing Feb recalculates it.
+    let feb = wb.sheet_index("Feb").unwrap();
+    wb.worksheet_mut(feb).unwrap().set_cell_value("B2", 5.0).unwrap();
+    wb.calculate().unwrap();
+    assert_eq!(wb.worksheet(0).unwrap().get_value("C2").unwrap(), CellValue::Number(6.0));
 }

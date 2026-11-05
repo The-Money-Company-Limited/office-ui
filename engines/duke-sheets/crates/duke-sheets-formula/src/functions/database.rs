@@ -176,7 +176,7 @@ fn criteria_matches_value(criteria: &FormulaValue, value: &FormulaValue) -> bool
 
             let pattern = trimmed.to_lowercase();
             let text = value.as_string().to_lowercase();
-            wildcard_match(&pattern, &text)
+            super::wildcard::matches(&pattern, &text)
         }
     }
 }
@@ -204,7 +204,7 @@ fn parse_comparison_criteria(s: &str) -> Option<(ComparisonOp, &str)> {
 }
 
 fn compare_with_operator(value: &FormulaValue, op: ComparisonOp, operand: &str) -> bool {
-    if let Ok(operand_num) = operand.parse::<f64>() {
+    if let Some(operand_num) = crate::coerce::text_to_number(operand) {
         if let Some(value_num) = numeric_value_strict(value) {
             return match op {
                 ComparisonOp::Equal => (value_num - operand_num).abs() < 1e-10,
@@ -221,8 +221,8 @@ fn compare_with_operator(value: &FormulaValue, op: ComparisonOp, operand: &str) 
     let operand_text = operand.to_lowercase();
 
     match op {
-        ComparisonOp::Equal => wildcard_match(&operand_text, &value_text),
-        ComparisonOp::NotEqual => !wildcard_match(&operand_text, &value_text),
+        ComparisonOp::Equal => super::wildcard::matches(&operand_text, &value_text),
+        ComparisonOp::NotEqual => !super::wildcard::matches(&operand_text, &value_text),
         ComparisonOp::LessThan => value_text < operand_text,
         ComparisonOp::LessEqual => value_text <= operand_text,
         ComparisonOp::GreaterThan => value_text > operand_text,
@@ -230,44 +230,6 @@ fn compare_with_operator(value: &FormulaValue, op: ComparisonOp, operand: &str) 
     }
 }
 
-fn wildcard_match(pattern: &str, text: &str) -> bool {
-    if !pattern.contains('*') && !pattern.contains('?') {
-        return pattern == text;
-    }
-
-    let pattern_chars: Vec<char> = pattern.chars().collect();
-    let text_chars: Vec<char> = text.chars().collect();
-
-    let mut pi = 0usize;
-    let mut ti = 0usize;
-    let mut star_pi = None;
-    let mut star_ti = 0usize;
-
-    while ti < text_chars.len() {
-        if pi < pattern_chars.len()
-            && (pattern_chars[pi] == '?' || pattern_chars[pi] == text_chars[ti])
-        {
-            pi += 1;
-            ti += 1;
-        } else if pi < pattern_chars.len() && pattern_chars[pi] == '*' {
-            star_pi = Some(pi);
-            star_ti = ti;
-            pi += 1;
-        } else if let Some(sp) = star_pi {
-            pi = sp + 1;
-            star_ti += 1;
-            ti = star_ti;
-        } else {
-            return false;
-        }
-    }
-
-    while pi < pattern_chars.len() && pattern_chars[pi] == '*' {
-        pi += 1;
-    }
-
-    pi == pattern_chars.len()
-}
 
 fn numeric_value_strict(value: &FormulaValue) -> Option<f64> {
     match value {
