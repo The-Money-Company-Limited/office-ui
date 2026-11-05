@@ -1,14 +1,14 @@
 {
   "dukeSheets": {
     "dirty": false,
-    "sourceSha256": "2c8b8e9f119ea6e0aedcfecdb33a57282fdf13734311e8dd33cb0bfb4349cd1a"
+    "sourceSha256": "8b83d548393c4ea80da4386c9f101903a3bd37b108e06a87c43cbb059aa4672c"
   },
   "build": {
     "command": "wasm-pack build bindings/wasm --target web --release --out-dir pkg -- --locked",
-    "platform": "Modal Linux"
+    "platform": "Cloudflare Linux"
   },
   "artifact": {
     "file": "duke_sheets_wasm_bg.wasm",
-    "sha256": "9e836a7d7ee2f0761fef0aabd1328cb347ecc08df76df4e2f2755fd0717ebc9c"
+    "sha256": "9c9b35714f5fc0d67f128de3d79c3dcd9d6e388930690ab2cb90fcdbda0899c3"
   }
 }
