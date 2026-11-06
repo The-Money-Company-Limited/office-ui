@@ -40,6 +40,11 @@ pub struct RegionalSettings {
     pub date_separator: char,
     pub decimal_separator: char,
     pub thousands_separator: char,
+    /// The computer's short date, which Excel shows its built-in short date (14) with:
+    /// `m/d/yyyy` in en-US, `dd/mm/yyyy` in en-GB, `yyyy/m/d` in zh-CN.
+    pub short_date: &'static str,
+    /// The hour code of the computer's short time, `h` (9:30) or `hh` (09:30).
+    pub short_hour: &'static str,
 }
 
 impl Default for RegionalSettings {
@@ -50,6 +55,8 @@ impl Default for RegionalSettings {
             date_separator: '/',
             decimal_separator: '.',
             thousands_separator: ',',
+            short_date: "m/d/yyyy",
+            short_hour: "h",
         }
     }
 }
@@ -103,7 +110,22 @@ impl RegionalSettings {
             ("nl" | "sv", _) | ("en" | "fr", "CA") => '-',
             _ => '/',
         };
-        Self { language, date_order, date_separator, decimal_separator, thousands_separator }
+        // Windows' own short date where it isn't the date order with padded day and month.
+        let (short_date, short_hour) = match (language_code.as_str(), region.as_str()) {
+            ("ja", _) => ("yyyy/mm/dd", "h"),
+            ("zh", _) => ("yyyy/m/d", "h"),
+            ("ko", _) | ("en", "CA") => ("yyyy-mm-dd", "h"),
+            _ => match (date_order, date_separator) {
+                (DateOrder::MonthFirst, _) => ("m/d/yyyy", "h"),
+                (DateOrder::DayFirst, '.') => ("dd.mm.yyyy", "hh"),
+                (DateOrder::DayFirst, '-') => ("dd-mm-yyyy", "hh"),
+                (DateOrder::DayFirst, _) => ("dd/mm/yyyy", "hh"),
+                (DateOrder::YearFirst, '.') => ("yyyy.mm.dd", "hh"),
+                (DateOrder::YearFirst, '/') => ("yyyy/mm/dd", "hh"),
+                (DateOrder::YearFirst, _) => ("yyyy-mm-dd", "hh"),
+            },
+        };
+        Self { language, date_order, date_separator, decimal_separator, thousands_separator, short_date, short_hour }
     }
 
     /// The number-format engine's locale: these separators, and month and day names as Excel
@@ -165,21 +187,9 @@ impl RegionalSettings {
         ssfmt::Locale { decimal_separator: self.decimal_separator, thousands_separator: self.thousands_separator, ..named }
     }
 
-    /// The computer's short date, which Excel shows its built-in short date format (14) with:
-    /// `11/5/2026` in en-US, `05/11/2026` in en-GB, `05.11.2026` in de-DE, `2026-11-05` in sv-SE.
-    pub fn short_date_code(&self) -> String {
-        let s = self.date_separator;
-        match self.date_order {
-            DateOrder::MonthFirst => format!("m{s}d{s}yyyy"),
-            DateOrder::DayFirst => format!("dd{s}mm{s}yyyy"),
-            DateOrder::YearFirst => format!("yyyy{s}mm{s}dd"),
-        }
-    }
-
-    /// The short date with the time, which Excel shows its built-in date-with-time format (22) with.
+    /// The short date with the short time, which Excel shows its built-in date with time (22) with.
     pub fn date_time_code(&self) -> String {
-        let hours = if self.date_order == DateOrder::MonthFirst { "h" } else { "hh" };
-        format!("{} {hours}:mm", self.short_date_code())
+        format!("{} {}:mm", self.short_date, self.short_hour)
     }
 }
 
@@ -214,7 +224,7 @@ mod tests {
 
     #[test]
     fn writes_the_short_date_in_the_date_order() {
-        let code = |tag: &str| (RegionalSettings::from_tag(tag).short_date_code(), RegionalSettings::from_tag(tag).date_time_code());
+        let code = |tag: &str| (RegionalSettings::from_tag(tag).short_date.to_string(), RegionalSettings::from_tag(tag).date_time_code());
         assert_eq!(code("en-US"), ("m/d/yyyy".into(), "m/d/yyyy h:mm".into()));
         assert_eq!(code("en-GB"), ("dd/mm/yyyy".into(), "dd/mm/yyyy hh:mm".into()));
         assert_eq!(code("de-DE"), ("dd.mm.yyyy".into(), "dd.mm.yyyy hh:mm".into()));
@@ -223,5 +233,10 @@ mod tests {
             assert_eq!(code(tag).0, "yyyy-mm-dd", "{tag}");
         }
         assert_eq!(code("en-ZA").0, "yyyy/mm/dd");
+        assert_eq!(code("ja-JP"), ("yyyy/mm/dd".into(), "yyyy/mm/dd h:mm".into()));
+        assert_eq!(code("zh-CN"), ("yyyy/m/d".into(), "yyyy/m/d h:mm".into()));
+        assert_eq!(code("ko-KR").0, "yyyy-mm-dd");
+        assert_eq!(code("en-CA").1, "yyyy-mm-dd h:mm");
+        assert_eq!(code("sv-SE").1, "yyyy-mm-dd hh:mm");
     }
 }

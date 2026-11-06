@@ -168,7 +168,7 @@ impl NumberFormat {
     /// short date (14) and date with time (22) in the computer's date order.
     pub fn display_code(&self, regional: &RegionalSettings) -> Cow<'_, str> {
         match self {
-            NumberFormat::BuiltIn(Self::ID_DATE_SHORT) => regional.short_date_code().into(),
+            NumberFormat::BuiltIn(Self::ID_DATE_SHORT) => regional.short_date.into(),
             NumberFormat::BuiltIn(Self::ID_DATETIME) => regional.date_time_code().into(),
             _ => self.format_string().into(),
         }

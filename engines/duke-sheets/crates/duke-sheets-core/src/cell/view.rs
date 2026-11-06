@@ -77,36 +77,61 @@ impl<'a> CellView<'a> {
     /// gives the same value (to the 15 digits Excel keeps): a number with the regional decimal
     /// separator, in a percent format with `%` (`12.5%`), and in a date or time format as the
     /// short date and the time (`05/11/2026 13:30:00`, `1:30:00 PM` where the format has AM/PM,
-    /// `25:30:00` in a duration format). Other values show as they are.
+    /// `25:30:00` in a duration format), with fractional seconds where there are any. Other values
+    /// show as they are.
     pub fn input_text(&self) -> String {
         let CellValue::Number(n) = *self.value.effective_value() else {
             return format_cell_value(self.value, &NumberFormat::General, self.date_1904, &self.regional);
         };
+        let separator = self.regional.decimal_separator;
+        if !n.is_finite() {
+            return format_general(n, separator);
+        }
         let format = self.number_format();
         let parsed = format.parsed();
-        let separator = self.regional.decimal_separator;
         let system = if self.date_1904 { ssfmt::DateSystem::Date1904 } else { ssfmt::DateSystem::Date1900 };
         let kind = format.kind_of(parsed.as_ref());
         match kind {
             FormatKind::Percent => return format!("{}%", number_text(n * 100.0, separator)),
-            FormatKind::Date | FormatKind::Time | FormatKind::DateTime | FormatKind::Duration
-                if (0.0..=system.last_serial()).contains(&n) => {}
+            FormatKind::Duration if n >= 0.0 => return duration_text(n, separator),
+            FormatKind::Date | FormatKind::Time | FormatKind::DateTime if (0.0..=system.last_serial()).contains(&n) => {}
             _ => return number_text(n, separator),
         }
-        let twelve_hour = parsed.is_some_and(|f| f.has_am_pm());
-        let time = if twelve_hour { "h:mm:ss AM/PM" } else { "h:mm:ss" };
+        let seconds = seconds_code(n);
+        let time = match parsed.is_some_and(|f| f.has_am_pm()) {
+            true => format!("h:mm:{seconds} AM/PM"),
+            false => format!("h:mm:{seconds}"),
+        };
         // Day 0 is a date in the 1904 system (1 January 1904) but not in the 1900 one.
         let with_date = n >= 1.0 || (self.date_1904 && kind != FormatKind::Time);
-        let code = if kind == FormatKind::Duration {
-            "[h]:mm:ss".to_string()
-        } else if !with_date {
-            time.to_string()
+        let code = if !with_date {
+            time
         } else if n.fract() == 0.0 {
-            self.regional.short_date_code()
+            self.regional.short_date.to_string()
         } else {
-            format!("{} {time}", self.regional.short_date_code())
+            format!("{} {time}", self.regional.short_date)
         };
         format_number(n, &NumberFormat::Custom(code), self.date_1904, &self.regional)
+    }
+}
+
+/// The seconds code that keeps a time's fraction of a second, to the millisecond.
+fn seconds_code(n: f64) -> &'static str {
+    match (n.fract() * 86_400_000.0).round() as i64 % 1000 {
+        0 => "ss",
+        ms if ms % 100 == 0 => "ss.0",
+        ms if ms % 10 == 0 => "ss.00",
+        _ => "ss.000",
+    }
+}
+
+/// A duration as elapsed hours, minutes and seconds (`25:30:00`, `0:01:30.5`), however long.
+fn duration_text(n: f64, decimal_separator: char) -> String {
+    let ms = (n * 86_400_000.0).round() as i64;
+    let text = format!("{}:{:02}:{:02}", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60);
+    match ms % 1000 {
+        0 => text,
+        fraction => format!("{text}{decimal_separator}{}", format!("{fraction:03}").trim_end_matches('0')),
     }
 }
 
@@ -757,6 +782,11 @@ mod tests {
         assert_eq!(input("en-US", 25.5 / 24.0, NumberFormat::BuiltIn(46)), "25:30:00");
         assert_eq!(input("en-US", 60.0, NumberFormat::BuiltIn(14)), "2/29/1900");
         assert_eq!(input("en-US", 3_000_000.0, NumberFormat::BuiltIn(14)), "3000000");
+        assert_eq!(input("en-US", 3_000_000.0, NumberFormat::BuiltIn(46)), "72000000:00:00");
+        // Fractional seconds stay (90.5 seconds), in times and durations.
+        assert_eq!(input("en-US", 90.5 / 86400.0, NumberFormat::BuiltIn(47)), "0:01:30.5");
+        assert_eq!(input("de-DE", 90.5 / 86400.0, NumberFormat::BuiltIn(47)), "0:01:30,5");
+        assert_eq!(input("en-US", 1.0 + 90.25 / 86400.0, NumberFormat::BuiltIn(46)), "24:01:30.25");
         let in_1904 = |value: f64| {
             let style = Style { number_format: NumberFormat::BuiltIn(14), ..Default::default() };
             let value = CellValue::Number(value);
@@ -790,5 +820,19 @@ mod tests {
         assert_eq!(kind("dd mmm yyyy"), Date);
         assert_eq!(kind("#,##0.00"), Number);
         assert_eq!(kind("0.0%"), Percent);
+    }
+
+    #[test]
+    fn clearing_the_style_of_a_blank_cell_removes_it() {
+        let mut ws = crate::Worksheet::new("t");
+        let style = Style { number_format: NumberFormat::BuiltIn(14), ..Default::default() };
+        ws.set_cell_style_at(0, 0, &style).unwrap();
+        ws.set_cell_style_at(1, 0, &style).unwrap();
+        ws.set_cell_value_at(1, 0, 5.0).unwrap();
+        ws.clear_cell_style_at(0, 0);
+        ws.clear_cell_style_at(1, 0);
+        assert!(ws.cell_at(0, 0).is_none());
+        assert_eq!(ws.cell_style_index_at(1, 0), 0);
+        assert_eq!(ws.get_value_at(1, 0), CellValue::Number(5.0));
     }
 }

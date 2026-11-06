@@ -36,6 +36,9 @@ use crate::options::DateSystem;
 /// In the 1900 system, day 60 returns (1900, 2, 29) even though February 29, 1900
 /// didn't actually exist. This matches Excel's behavior.
 pub fn serial_to_date(serial: f64, system: DateSystem) -> Option<(i32, u32, u32)> {
+    if !serial.is_finite() {
+        return None;
+    }
     let days = serial.floor() as i64;
 
     // Day 0 is 1 January 1904 in the 1904 system; the 1900 system starts at day 1.
@@ -373,5 +376,20 @@ mod tests {
         assert_eq!(date_to_serial(1900, 3, 1, DateSystem::Date1900), 61.0);
         assert_eq!(date_to_serial(2020, 1, 1, DateSystem::Date1900), 43831.0);
         assert_eq!(date_to_serial(2021, 1, 1, DateSystem::Date1900), 44197.0);
+    }
+
+    #[test]
+    fn test_day_zero_and_non_finite_serials() {
+        assert_eq!(serial_to_date(0.0, DateSystem::Date1904), Some((1904, 1, 1)));
+        assert_eq!(serial_to_date(0.0, DateSystem::Date1900), None);
+        assert_eq!(serial_to_date(f64::NAN, DateSystem::Date1904), None);
+        assert_eq!(serial_to_date(f64::INFINITY, DateSystem::Date1900), None);
+    }
+
+    #[test]
+    fn test_hijri_day_zero_sentinel_is_1900_only() {
+        let in_1904 = crate::FormatOptions { date_system: DateSystem::Date1904, ..Default::default() };
+        assert_eq!(crate::format_default(0.0, "B2yyyy-mm-dd").unwrap(), "1317-08-29");
+        assert_ne!(crate::format(0.0, "B2yyyy-mm-dd", &in_1904).unwrap(), "1317-08-29");
     }
 }

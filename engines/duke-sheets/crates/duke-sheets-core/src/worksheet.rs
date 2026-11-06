@@ -598,18 +598,12 @@ impl Worksheet {
     ///
     /// Returns a view with `CellValue::Empty` for cells that don't exist.
     pub fn cell_view_at(&self, row: u32, col: u16) -> CellView<'_> {
-        let (value, style) = match self.cells.get(row, col) {
-            Some(data) => {
-                let style = if data.style_index != 0 {
-                    self.cells.style_pool().get(data.style_index)
-                } else {
-                    None
-                };
-                (&data.value, style)
-            }
-            None => (&CellValue::Empty, None),
+        let style = match self.cells.get(row, col) {
+            Some(data) if data.style_index != 0 => self.cells.style_pool().get(data.style_index),
+            _ => None,
         };
-        CellView::new(value, style, self.date_1904)
+        // A cell a dynamic array spills into shows the array's value there.
+        CellView::new(self.get_value_at_ref(row, col), style, self.date_1904)
     }
 
     /// Get a [`CellView`] for the cell at the given address string (e.g., "A1").
@@ -714,6 +708,17 @@ impl Worksheet {
         let style_index = self.cells.style_pool_mut().get_or_insert(style.clone());
         self.cells.set_style(row, col, style_index);
         Ok(())
+    }
+
+    /// Give a cell the default style. A cell left with no value or formula is removed, as one that
+    /// was never styled has no entry.
+    pub fn clear_cell_style_at(&mut self, row: u32, col: u16) {
+        let blank = self.cells.get(row, col).is_some_and(|data| data.value.is_empty()) && !self.has_formula_at(row, col);
+        if blank {
+            self.cells.remove(row, col);
+        } else {
+            self.cells.set_style(row, col, 0);
+        }
     }
 
     /// Clear a cell

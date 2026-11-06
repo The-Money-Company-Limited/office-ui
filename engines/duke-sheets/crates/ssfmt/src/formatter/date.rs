@@ -55,7 +55,8 @@ pub fn format_date(
     // Apply Hijri calendar conversion if B2 prefix is used
     // Use the Kuwaiti algorithm for proper date conversion
     if is_hijri {
-        let days = value.floor() as i64;
+        // Days 0 and 60 have no Gregorian date in the 1900 system only.
+        let days = if opts.date_system == DateSystem::Date1900 { value.floor() as i64 } else { -1 };
         if days == 60 {
             // Special case for Excel's fake leap day (Feb 29, 1900)
             // This date doesn't exist in the Gregorian calendar

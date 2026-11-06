@@ -426,12 +426,16 @@ impl NumberFormat {
 
     /// Returns true if any section shows AM/PM.
     pub fn has_am_pm(&self) -> bool {
-        self.sections.iter().any(|s| s.metadata.has_ampm)
+        self.parts().any(|p| matches!(p, FormatPart::AmPm(_)))
     }
 
     /// Returns true if any section shows elapsed time (`[h]`, `[m]`, `[s]`).
     pub fn has_elapsed_time(&self) -> bool {
-        self.sections.iter().any(|s| s.metadata.has_elapsed_time)
+        self.parts().any(|p| matches!(p, FormatPart::Elapsed(_)))
+    }
+
+    fn parts(&self) -> impl Iterator<Item = &FormatPart> + '_ {
+        self.sections.iter().flat_map(|s| &s.parts)
     }
 
     /// Returns true if any section shows a calendar date: a year, month, day or weekday.
@@ -445,7 +449,7 @@ impl NumberFormat {
     }
 
     fn date_parts(&self) -> impl Iterator<Item = DatePart> + '_ {
-        self.sections.iter().flat_map(|s| &s.parts).filter_map(|p| match p {
+        self.parts().filter_map(|p| match p {
             FormatPart::DatePart(part) => Some(*part),
             _ => None,
         })

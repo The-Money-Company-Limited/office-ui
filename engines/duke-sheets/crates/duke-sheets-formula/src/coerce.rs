@@ -226,7 +226,9 @@ fn time_of_day(text: &str) -> Option<(f64, Written)> {
     let minutes = parts.get(1).map_or(Some(0), |s| number(s))?;
     let seconds: f64 = match parts.get(2) {
         Some(s) => {
-            let (whole, fraction) = s.split_once('.').unwrap_or((s, ""));
+            // Fractional seconds may use the regional decimal separator (00:01:30,5).
+            let s = s.replace(crate::regional::current().decimal_separator, ".");
+            let (whole, fraction) = s.split_once('.').unwrap_or((&s, ""));
             if number(whole).is_none() || !fraction.chars().all(|c| c.is_ascii_digit()) {
                 return None;
             }

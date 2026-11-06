@@ -1012,8 +1012,8 @@ impl Worksheet {
         let ws = wb
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        ws.set_cell_style_at(row, col as u16, &duke_sheets_core::Style::default())
-            .map_err(to_js_error)
+        ws.clear_cell_style_at(row, col as u16);
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = setFormula)]
