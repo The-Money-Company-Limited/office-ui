@@ -86,6 +86,7 @@ export const worksheet_setRowHeight: (a: number, b: number, c: number) => [numbe
 export const worksheet_unmergeCells: (a: number, b: number, c: number) => [number, number, number];
 export const worksheet_usedRange: (a: number) => [number, number, number];
 export const worksheet_arrayFormulaAt: (a: number, b: number, c: number) => [number, number, number];
+export const worksheet_arrayFormulaValuesAt: (a: number, b: number, c: number) => [number, number, number];
 export const worksheet_autoFilter: (a: number) => [number, number, number];
 export const worksheet_cellCount: (a: number) => [number, number, number];
 export const worksheet_colBreaks: (a: number) => [number, number, number];

@@ -675,13 +675,28 @@ export class Worksheet {
     }
     /**
      * The Ctrl+Shift+Enter array formula whose block holds the cell, as
-     * `{ row, col, rows, cols, formula, values }` for its top-left cell, or `null`.
+     * `{ row, col, rows, cols, formula }` for its top-left cell, or `null`.
      * @param {number} row
      * @param {number} col
      * @returns {any}
      */
     arrayFormulaAt(row, col) {
         const ret = wasm.worksheet_arrayFormulaAt(this.__wbg_ptr, row, col);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * The values the cells of the Ctrl+Shift+Enter array formula whose block holds the cell show,
+     * row by row, as `setArrayFormula` takes them back: `null` when blank, an error as
+     * `{ error: "#N/A" }`. `null` when the cell isn't in a block.
+     * @param {number} row
+     * @param {number} col
+     * @returns {any}
+     */
+    arrayFormulaValuesAt(row, col) {
+        const ret = wasm.worksheet_arrayFormulaValuesAt(this.__wbg_ptr, row, col);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -1644,7 +1659,7 @@ export class Worksheet {
     }
     /**
      * Puts back a Ctrl+Shift+Enter array formula from `address`, as undo does: `values` are the
-     * ones `arrayFormulaAt` gave, which its cells show until it is calculated.
+     * ones `arrayFormulaValuesAt` gave, which its cells show until it is calculated.
      * @param {string} address
      * @param {string} formula
      * @param {any} values

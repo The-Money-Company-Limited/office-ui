@@ -814,9 +814,15 @@ export class Worksheet {
     [Symbol.dispose](): void;
     /**
      * The Ctrl+Shift+Enter array formula whose block holds the cell, as
-     * `{ row, col, rows, cols, formula, values }` for its top-left cell, or `null`.
+     * `{ row, col, rows, cols, formula }` for its top-left cell, or `null`.
      */
     arrayFormulaAt(row: number, col: number): any;
+    /**
+     * The values the cells of the Ctrl+Shift+Enter array formula whose block holds the cell show,
+     * row by row, as `setArrayFormula` takes them back: `null` when blank, an error as
+     * `{ error: "#N/A" }`. `null` when the cell isn't in a block.
+     */
+    arrayFormulaValuesAt(row: number, col: number): any;
     /**
      * Gives the cell the default style, as a cell that was never styled has.
      */
@@ -863,7 +869,7 @@ export class Worksheet {
     mergeCells(range_str: string): void;
     /**
      * Puts back a Ctrl+Shift+Enter array formula from `address`, as undo does: `values` are the
-     * ones `arrayFormulaAt` gave, which its cells show until it is calculated.
+     * ones `arrayFormulaValuesAt` gave, which its cells show until it is calculated.
      */
     setArrayFormula(address: string, formula: string, values: any): void;
     setCell(address: string, value: any): void;
@@ -1017,6 +1023,7 @@ export interface InitOutput {
     readonly worksheet_unmergeCells: (a: number, b: number, c: number) => [number, number, number];
     readonly worksheet_usedRange: (a: number) => [number, number, number];
     readonly worksheet_arrayFormulaAt: (a: number, b: number, c: number) => [number, number, number];
+    readonly worksheet_arrayFormulaValuesAt: (a: number, b: number, c: number) => [number, number, number];
     readonly worksheet_autoFilter: (a: number) => [number, number, number];
     readonly worksheet_cellCount: (a: number) => [number, number, number];
     readonly worksheet_colBreaks: (a: number) => [number, number, number];
