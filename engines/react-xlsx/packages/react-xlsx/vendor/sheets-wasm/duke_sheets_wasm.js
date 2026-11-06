@@ -1550,16 +1550,19 @@ export class Worksheet {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
-     * The number text typed into a cell stands for, read in the workbook's settings as Excel
-     * reads it (`5/11/2026` is 5 November in en-GB, `1,5` is 1.5 in de-DE), with the format Excel
-     * gives the cell; `undefined` when the text stays text (duke_sheets_formula::coerce::typed_number).
+     * What text typed into the cell stands for, read in the workbook's settings as Excel reads
+     * it (`5/11/2026` is 5 November in en-GB, `1,5` is 1.5 in de-DE): the number, and the format
+     * the cell gets when its own one is of another kind; `undefined` when the text stays text
+     * (duke_sheets_formula::coerce::typed_number).
+     * @param {number} row
+     * @param {number} col
      * @param {string} text
      * @returns {any}
      */
-    readTypedNumber(text) {
+    readTypedNumberAt(row, col, text) {
         const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.worksheet_readTypedNumber(this.__wbg_ptr, ptr0, len0);
+        const ret = wasm.worksheet_readTypedNumberAt(this.__wbg_ptr, row, col, ptr0, len0);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }

@@ -629,7 +629,7 @@ export interface FormControlInteractionResult {
     linkedCellsChanged: number;
 }
 
-/** A cell's number format, as getCellStyleAt gives it. */
+/** A cell's number format, as getCellStyle gives it. */
 export interface CellNumberFormat {
     formatType: "general" | "builtin" | "custom";
     id: number | null;
@@ -637,15 +637,27 @@ export interface CellNumberFormat {
     isDateFormat: boolean;
 }
 
-/** A number read from typed text, with the format Excel gives the cell (a date, time or percent format). */
+/** A cell's style, as getCellStyle gives it. */
+export type CellStyle = {
+    font: Record<string, unknown>;
+    fill: Record<string, unknown>;
+    border: Record<string, unknown>;
+    alignment: Record<string, unknown>;
+    numberFormat: CellNumberFormat;
+    protection: { locked: boolean; hidden: boolean };
+};
+
+/** A number read from text typed into a cell, and the format the cell gets when it should change. */
 export interface TypedNumber {
     value: number;
-    numberFormat?: CellNumberFormat;
+    numberFormat?: NumberFormatInput;
 }
 
 export interface Worksheet {
     iterateRows(opts?: JsRowsOptions): RowIterator;
-    readTypedNumber(text: string): TypedNumber | undefined;
+    getCellStyle(address: string): CellStyle | null;
+    getCellStyleAt(row: number, col: number): CellStyle | null;
+    readTypedNumberAt(row: number, col: number, text: string): TypedNumber | undefined;
     setCellStyle(address: string, style: StyleInput): void;
     setCellStyleAt(row: number, col: number, style: StyleInput): void;
     setRangeStyle(range: string, style: StyleInput): void;
@@ -806,8 +818,6 @@ export class Worksheet {
     getCalculatedValueAt(row: number, col: number): CellValue;
     getCell(address: string): CellValue;
     getCellAt(row: number, col: number): CellValue;
-    getCellStyle(address: string): any;
-    getCellStyleAt(row: number, col: number): any;
     getColumnOutlineLevel(col: number): number;
     getColumnWidth(col: number): number | undefined;
     getComment(address: string): any;
@@ -981,7 +991,7 @@ export interface InitOutput {
     readonly worksheet_getRowHeight: (a: number, b: number) => [number, number, number, number];
     readonly worksheet_mergeCells: (a: number, b: number, c: number) => [number, number];
     readonly worksheet_name: (a: number) => [number, number, number, number];
-    readonly worksheet_readTypedNumber: (a: number, b: number, c: number) => [number, number, number];
+    readonly worksheet_readTypedNumberAt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly worksheet_setCell: (a: number, b: number, c: number, d: any) => [number, number];
     readonly worksheet_setCellStyle: (a: number, b: number, c: number, d: any) => [number, number];
     readonly worksheet_setCellStyleAt: (a: number, b: number, c: number, d: any) => [number, number];
