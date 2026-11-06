@@ -1,0 +1,15 @@
+#!/bin/bash
+# Starts LibreOffice listening for URP on port 2002, where the duke-sheets integration tests look
+# for it before they try Docker, which the box doesn't have. Returns once it accepts connections.
+# One instance serves one test at a time: run the tests with --test-threads=1.
+# The tests and LibreOffice exchange fixture files here (duke-sheets-test-harness SHARED_DIR).
+mkdir -p /tmp/duke-sheets-urp
+(echo > /dev/tcp/127.0.0.1/2002) 2>/dev/null && exit 0
+nohup soffice --headless --norestore --nologo \
+  --accept="socket,host=127.0.0.1,port=2002;urp;StarOffice.ComponentContext" >/tmp/soffice.log 2>&1 &
+for _ in $(seq 60); do
+  (echo > /dev/tcp/127.0.0.1/2002) 2>/dev/null && exit 0
+  sleep 1
+done
+echo "LibreOffice didn't start within 60 s; see /tmp/soffice.log on the box." >&2
+exit 1
