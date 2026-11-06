@@ -1227,10 +1227,11 @@ export interface XlsxViewerController {
    * with the regional separators (`1,5` is 1.5 in de-DE), percents, dates in
    * the regional day and month order (`5/11/2026` is 5 November in en-GB) and
    * times become values; `yyyy-mm-dd` reads the same everywhere. The cell keeps
-   * its own number format for an entry of the same kind (a date in a date
-   * format) and otherwise gets the format Excel gives the entry. Amounts with
-   * `$` stay text for now. A cell with the Text (`@`) format, or text with a
-   * leading apostrophe, keeps the text as it is.
+   * its own number format for an entry of the same kind (dates, times and dates
+   * with times count as one) and otherwise gets the format Excel gives the
+   * entry. In a percent-formatted cell, `25` is 25%. Amounts with `$` stay text
+   * for now. A cell with a Text format (`@`), or text with a leading apostrophe,
+   * keeps the text as it is.
    *
    * @param cell Zero-based row and column address in the active worksheet.
    * @param value Text entered by the user.
@@ -1404,10 +1405,11 @@ export interface XlsxViewerEditing {
    * with the regional separators (`1,5` is 1.5 in de-DE), percents, dates in
    * the regional day and month order (`5/11/2026` is 5 November in en-GB) and
    * times become values; `yyyy-mm-dd` reads the same everywhere. The cell keeps
-   * its own number format for an entry of the same kind (a date in a date
-   * format) and otherwise gets the format Excel gives the entry. Amounts with
-   * `$` stay text for now. A cell with the Text (`@`) format, or text with a
-   * leading apostrophe, keeps the text as it is.
+   * its own number format for an entry of the same kind (dates, times and dates
+   * with times count as one) and otherwise gets the format Excel gives the
+   * entry. In a percent-formatted cell, `25` is 25%. Amounts with `$` stay text
+   * for now. A cell with a Text format (`@`), or text with a leading apostrophe,
+   * keeps the text as it is.
    *
    * @param cell Zero-based row and column address in the active worksheet.
    * @param value Text entered by the user.

@@ -1,7 +1,7 @@
 import { editWorkbookStructure, mapStructuralSheetIndex, type XlsxStructuralEdit } from "./structural-edits";
 import { Workbook, type CellStyle, type NumberFormatInput } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import * as React from "react";
-import { cellInputText, enterUserText, numberFormatInput } from "./user-entry";
+import { cellInputText, enterUserText } from "./user-entry";
 import type {
   DrawingAnchor as DukeDrawingAnchor,
   DrawingColor as DukeDrawingColor,
@@ -390,15 +390,25 @@ export class XlsxFileSizeLimitExceededError extends Error {
 type HistoryEntry = SnapshotHistoryEntry | CellEditHistoryEntry | RangeEditHistoryEntry;
 
 type ClipboardMatrixCell = {
+  /**
+   * The cell's value (a number, text or boolean), pasted as it is; `value` is the text it shows.
+   * The system clipboard can carry a copy from an older build without it, which pastes `value`.
+   */
+  cellValue?: unknown;
   colOffset: number;
   formula: string | null;
-  /** The cell's number format, pasted with its value. */
+  /** The cell's number format, pasted with its value (missing in a copy from an older build). */
   numberFormat?: NumberFormatInput;
-  /** The cell's value (a number, text or boolean); `value` is the text it shows. */
-  raw?: unknown;
   rowOffset: number;
   value: string;
 };
+
+/** A cell's number format as a style patch, to put on the clipboard and paste with the value. */
+function numberFormatInput(style: CellStyle | null): NumberFormatInput {
+  if (!style) return { formatType: "general" };
+  const { formatType, id, formatString } = style.numberFormat;
+  return formatType === "builtin" && id !== null ? { formatType, id } : { formatType, formatString };
+}
 
 type ClipboardMerge = {
   colSpan: number;
@@ -3341,9 +3351,9 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
 
         payload.cells.push({
           colOffset: col - normalized.start.col,
+          cellValue: worksheet.getCellAt(row, col).toJs(),
           formula,
           numberFormat: numberFormatInput(worksheet.getCellStyleAt(row, col)),
-          raw: worksheet.getCellAt(row, col).toJs(),
           rowOffset: row - normalized.start.row,
           value
         });
@@ -4606,7 +4616,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       return;
     }
 
-    enterUserText(worksheet, cell, value, before.style);
+    enterUserText(worksheet, cell, value);
     const after = captureCellMutationState(cell);
     if (!after) {
       return;
@@ -4973,7 +4983,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         if (!before) {
           continue;
         }
-        enterUserText(worksheet, nextCell, rawValue, before.style);
+        enterUserText(worksheet, nextCell, rawValue);
         const after = captureCellMutationState(nextCell);
         if (!after) {
           continue;
@@ -5035,12 +5045,10 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       };
       const before = hasMergeOperations ? null : captureCellMutationState(nextCell);
 
-      // The copied value and number format; a payload without them (an older copy) has the
-      // text the cell showed.
       if (cell.formula) {
         worksheet.setFormula(cellAddressToA1(nextCell), cell.formula);
       } else {
-        worksheet.setCell(cellAddressToA1(nextCell), cell.raw !== undefined ? cell.raw : cell.value);
+        worksheet.setCell(cellAddressToA1(nextCell), cell.cellValue !== undefined ? cell.cellValue : cell.value);
       }
       if (cell.numberFormat) {
         worksheet.setCellStyle(cellAddressToA1(nextCell), { numberFormat: cell.numberFormat });

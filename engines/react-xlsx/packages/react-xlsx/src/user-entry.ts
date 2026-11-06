@@ -5,9 +5,8 @@ import type { XlsxCellAddress } from "./types";
 /** What a typed entry stores: a number, boolean or text, and the format it gives its cell. */
 export type UserEntry = { value: unknown; numberFormat?: NumberFormatInput };
 
-/** Whether the cell has the Text (`@`) format, which keeps what is typed as text. */
-const hasTextFormat = (style: CellStyle | null | undefined) =>
-  style?.numberFormat.id === 49 || style?.numberFormat.formatString === "@";
+/** Whether the cell has a text format (`@`, `"ID: "@`), which keeps what is typed as text. */
+const hasTextFormat = (style: CellStyle | null) => style?.numberFormat.kind === "text";
 
 /**
  * Reads text typed into a cell as Excel does. A leading apostrophe keeps the rest as text, and
@@ -24,14 +23,14 @@ export function readUserEntry(text: string, worksheet: Worksheet, cell: XlsxCell
 }
 
 /**
- * Stores text typed or pasted into a cell whose style is `style`, as Excel does. A cell with the
- * Text format keeps the text as it is; otherwise an entry starting with `=` is a formula, and
+ * Stores text typed or pasted into a cell, as Excel does. A cell with a text format keeps the
+ * text as it is (`=A1` and TRUE included); otherwise an entry starting with `=` is a formula, and
  * anything else is read by readUserEntry.
  */
-export function enterUserText(worksheet: Worksheet, cell: XlsxCellAddress, text: string, style: CellStyle | null): void {
+export function enterUserText(worksheet: Worksheet, cell: XlsxCellAddress, text: string): void {
   const address = cellAddressToA1(cell);
   const entry = text.trim();
-  if (hasTextFormat(style)) {
+  if (hasTextFormat(worksheet.getCellStyleAt(cell.row, cell.col))) {
     worksheet.setCell(address, text);
   } else if (entry.length > 1 && entry.startsWith("=")) {
     worksheet.setFormula(address, entry);
@@ -56,11 +55,4 @@ export function cellInputText(worksheet: Worksheet, cell: XlsxCellAddress): stri
   if (!value.is_text || hasTextFormat(worksheet.getCellStyleAt(cell.row, cell.col))) return text;
   const readsAsText = !text.startsWith("=") && !text.startsWith("'") && typeof readUserEntry(text, worksheet, cell).value === "string";
   return readsAsText ? text : `'${text}`;
-}
-
-/** The cell's number format, to put on the clipboard and paste with the value. */
-export function numberFormatInput(style: CellStyle | null): NumberFormatInput {
-  if (!style) return { formatType: "general" };
-  const { formatType, id, formatString } = style.numberFormat;
-  return formatType === "builtin" && id !== null ? { formatType, id } : { formatType, formatString };
 }

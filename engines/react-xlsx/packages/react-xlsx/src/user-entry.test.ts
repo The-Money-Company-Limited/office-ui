@@ -22,7 +22,7 @@ function read(tag: string, text: string) {
 
 /** Types `text` into A1 and gives back what the cell shows. */
 function type(sheet: Worksheet, text: string) {
-  enterUserText(sheet, A1, text, sheet.getCellStyleAt(0, 0));
+  enterUserText(sheet, A1, text);
   return sheet.getFormattedValueAt(0, 0);
 }
 
@@ -70,6 +70,12 @@ describe("typed entries", () => {
     type(sheet, "=A2+1");
     assert.ok(!sheet.getFormulaAt(0, 0));
     assert.equal(cellInputText(sheet, A1), "=A2+1");
+    // Any text format, with text around the @ too.
+    sheet.setCellStyle("A1", { numberFormat: { formatType: "custom", formatString: '"ID: "@' } });
+    type(sheet, "TRUE");
+    assert.equal(sheet.getCellAt(0, 0).asText(), "TRUE");
+    type(sheet, "=A2");
+    assert.ok(!sheet.getFormulaAt(0, 0));
   });
 
   it("numbers are read with the regional separators", () => {
@@ -100,17 +106,25 @@ describe("typed entries", () => {
     assert.equal(sheet.getCellAt(0, 0).asNumber(), 46331);
   });
 
-  it("the cell keeps a format of the same kind and takes the entry's for another kind", () => {
+  it("the cell keeps a date or time format for any date or time, and a duration gets [h]:mm:ss", () => {
     const sheet = sheetIn("en-GB");
     sheet.setCellStyle("A1", { numberFormat: { formatType: "custom", formatString: "d mmm yyyy" } });
     assert.equal(type(sheet, "5/11/2026"), "5 Nov 2026");
-    assert.equal(type(sheet, "13:30"), "13:30");
+    type(sheet, "5/11/2026 13:30");
+    assert.equal(sheet.getCellStyleAt(0, 0)?.numberFormat.formatString, "d mmm yyyy");
+    // Editing gives back the same value and format.
+    type(sheet, cellInputText(sheet, A1));
+    assert.equal(sheet.getCellAt(0, 0).asNumber(), 46331.5625);
+    assert.equal(sheet.getFormattedValueAt(0, 0), "5 Nov 2026");
     // The toolbar's Date (14) and Time (21) stay for entries of their kind.
     sheet.setCellStyle("A1", { numberFormat: { formatType: "builtin", id: 21 } });
     assert.equal(type(sheet, "9:30"), "9:30:00");
+    assert.equal(type(sheet, "25:30"), "25:30:00");
     sheet.setCellStyle("A1", { numberFormat: { formatType: "builtin", id: 14 } });
     assert.equal(type(sheet, "Mar 15, 2024"), "15/03/2024");
-    assert.equal(type(sheet, "5/11/2026 9:00"), "05/11/2026 09:00");
+    assert.equal(type(sheet, "5/11/2026 9:00"), "05/11/2026");
+    sheet.setCellStyle("A1", { numberFormat: { formatType: "builtin", id: 3 } });
+    assert.equal(type(sheet, "5/11/2026"), "05/11/2026");
     sheet.clearCellStyleAt(0, 0);
     assert.equal(sheet.getCellStyleAt(0, 0), null);
   });

@@ -406,32 +406,49 @@ const NUMBER_FORMAT_OPTIONS: NumberFormatOption[] = [
   },
 ]
 
-/**
- * How the picker shows a format it has no option for: what it shows, from the engine's
- * isDateFormat and the format's code, with the code itself as a sample. Labels only; the
- * engine decides what typing does with a format.
- */
+/** How the picker labels a format by what it shows (the engine's `kind`). */
+const NUMBER_FORMAT_KINDS: Record<
+  string,
+  { icon: React.ComponentType<RegistryIconProps>; label: string }
+> = {
+  date: { icon: Calendar03Glyph, label: "Date" },
+  datetime: { icon: Calendar03Glyph, label: "Date and time" },
+  duration: { icon: Clock01Glyph, label: "Duration" },
+  number: { icon: TextNumberSignGlyph, label: "Number" },
+  percent: { icon: PercentGlyph, label: "Percent" },
+  text: { icon: TextNumberSignGlyph, label: "Text" },
+  time: { icon: Clock01Glyph, label: "Time" },
+}
+
+/** Built-in number formats the engine counts as numbers that the picker names more closely. */
+function getBuiltinNumberLabel(id: number | undefined) {
+  if (id === undefined) return undefined
+  if ((id >= 5 && id <= 8) || (id >= 37 && id <= 44))
+    return { icon: DollarCircleGlyph, label: "Currency" }
+  if (id === 11 || id === 48)
+    return { icon: TextNumberSignGlyph, label: "Scientific" }
+  if (id === 12 || id === 13)
+    return { icon: TextNumberSignGlyph, label: "Fraction" }
+  return undefined
+}
+
+/** How the picker shows a format it has no option for: its kind, and its code as a sample. */
 function describeNumberFormat(style: XlsxResolvedCellStyle | null) {
   const numberFormat = asResolvedStyleGroup(style?.numberFormat)
   const code =
     typeof numberFormat?.formatString === "string"
       ? numberFormat.formatString
       : ""
-  const bare = code.replace(/"[^"]*"|\\./g, "").toLowerCase()
-  if (numberFormat?.isDateFormat === true) {
-    const time = /[hs]|a\/p|am\/pm/.test(bare)
-    const date = /[yd]/.test(bare) || (!time && bare.includes("m"))
-    if (!time) return { code, icon: Calendar03Glyph, label: "Date" }
-    return date
-      ? { code, icon: Calendar03Glyph, label: "Date and time" }
-      : { code, icon: Clock01Glyph, label: "Time" }
-  }
-  if (bare.includes("%")) return { code, icon: PercentGlyph, label: "Percent" }
-  return {
-    code,
-    icon: TextNumberSignGlyph,
-    label: bare === "@" ? "Text" : "Number",
-  }
+  const kind = typeof numberFormat?.kind === "string" ? numberFormat.kind : ""
+  const id =
+    numberFormat?.formatType === "builtin"
+      ? getNumericValue(numberFormat.id)
+      : undefined
+  const described =
+    getBuiltinNumberLabel(id) ??
+    NUMBER_FORMAT_KINDS[kind] ??
+    NUMBER_FORMAT_KINDS.number
+  return { ...described, code }
 }
 
 const GENERAL_NUMBER_FORMAT_VALUE = "General"
