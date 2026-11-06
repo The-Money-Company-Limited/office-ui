@@ -736,6 +736,17 @@ export class Worksheet {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
+     * Gives the cell the default style, as a cell that was never styled has.
+     * @param {number} row
+     * @param {number} col
+     */
+    clearCellStyleAt(row, col) {
+        const ret = wasm.worksheet_clearCellStyleAt(this.__wbg_ptr, row, col);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * @returns {any}
      */
     get colBreaks() {
@@ -1539,9 +1550,9 @@ export class Worksheet {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
-     * The number text typed into a cell stands for, read in the workbook's regional settings as
-     * Excel reads it (`5/11/2026` is 5 November in en-GB, `1,5` is 1.5 in de-DE), with the
-     * built-in format Excel gives a typed date or time; `undefined` when it isn't a number.
+     * The number text typed into a cell stands for, read in the workbook's settings as Excel
+     * reads it (`5/11/2026` is 5 November in en-GB, `1,5` is 1.5 in de-DE), with the format Excel
+     * gives the cell; `undefined` when the text stays text (duke_sheets_formula::coerce::typed_number).
      * @param {string} text
      * @returns {any}
      */

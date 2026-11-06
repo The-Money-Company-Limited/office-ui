@@ -629,10 +629,18 @@ export interface FormControlInteractionResult {
     linkedCellsChanged: number;
 }
 
-/** A number read from typed text, with the built-in format Excel gives a typed date or time. */
+/** A cell's number format, as getCellStyleAt gives it. */
+export interface CellNumberFormat {
+    formatType: "general" | "builtin" | "custom";
+    id: number | null;
+    formatString: string;
+    isDateFormat: boolean;
+}
+
+/** A number read from typed text, with the format Excel gives the cell (a date, time or percent format). */
 export interface TypedNumber {
     value: number;
-    dateFormat?: number;
+    numberFormat?: CellNumberFormat;
 }
 
 export interface Worksheet {
@@ -790,6 +798,10 @@ export class Worksheet {
     private constructor();
     free(): void;
     [Symbol.dispose](): void;
+    /**
+     * Gives the cell the default style, as a cell that was never styled has.
+     */
+    clearCellStyleAt(row: number, col: number): void;
     getCalculatedValue(address: string): CellValue;
     getCalculatedValueAt(row: number, col: number): CellValue;
     getCell(address: string): CellValue;
@@ -959,6 +971,7 @@ export interface InitOutput {
     readonly workbook_setWorkbookProtection: (a: number, b: any) => [number, number];
     readonly workbook_sheetCount: (a: number) => [number, number, number];
     readonly workbook_sheetNames: (a: number) => [number, number, number, number];
+    readonly worksheet_clearCellStyleAt: (a: number, b: number, c: number) => [number, number];
     readonly worksheet_getCalculatedValue: (a: number, b: number, c: number) => [number, number, number];
     readonly worksheet_getCalculatedValueAt: (a: number, b: number, c: number) => [number, number, number];
     readonly worksheet_getCell: (a: number, b: number, c: number) => [number, number, number];
