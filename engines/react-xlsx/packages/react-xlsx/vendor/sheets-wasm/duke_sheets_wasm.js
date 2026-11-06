@@ -674,6 +674,20 @@ export class Worksheet {
         return ret[0] >>> 0;
     }
     /**
+     * The Ctrl+Shift+Enter array formula whose block holds the cell, as
+     * `{ row, col, rows, cols, formula }` for its top-left cell, or `null`.
+     * @param {number} row
+     * @param {number} col
+     * @returns {any}
+     */
+    arrayFormulaAt(row, col) {
+        const ret = wasm.worksheet_arrayFormulaAt(this.__wbg_ptr, row, col);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
      * @returns {any}
      */
     get autoFilter() {
@@ -1627,6 +1641,24 @@ export class Worksheet {
             throw takeFromExternrefTable0(ret[1]);
         }
         return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * Makes a Ctrl+Shift+Enter array formula over `rows` x `cols` cells from `address`, as undo
+     * puts one back. Calculating fills its cells.
+     * @param {string} address
+     * @param {string} formula
+     * @param {number} rows
+     * @param {number} cols
+     */
+    setArrayFormula(address, formula, rows, cols) {
+        const ptr0 = passStringToWasm0(address, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(formula, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.worksheet_setArrayFormula(this.__wbg_ptr, ptr0, len0, ptr1, len1, rows, cols);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
     }
     /**
      * @param {string} address
