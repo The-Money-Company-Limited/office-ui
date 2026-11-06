@@ -1,7 +1,7 @@
 import { editWorkbookStructure, mapStructuralSheetIndex, type XlsxStructuralEdit } from "./structural-edits";
 import { Workbook } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import * as React from "react";
-import { coerceUserEnteredValue } from "./user-entry";
+import { enterUserText, readUserEntry } from "./user-entry";
 import type {
   DrawingAnchor as DukeDrawingAnchor,
   DrawingColor as DukeDrawingColor,
@@ -3244,8 +3244,9 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     if (!worksheet || !cell) return getCellDisplayValue(cell);
     const value = worksheet.getCellAt(cell.row, cell.col);
     if (value.is_empty) return "";
-    const text = value.toString();
-    if (value.is_text && (typeof coerceUserEnteredValue(text) !== "string" || text.startsWith("=") || text.startsWith("'"))) return `'${text}`;
+    const text = worksheet.getInputTextAt(cell.row, cell.col);
+    const readsAsText = typeof readUserEntry(text, (typed) => worksheet.readTypedNumber(typed)).value === "string";
+    if (value.is_text && (!readsAsText || text.startsWith("=") || text.startsWith("'"))) return `'${text}`;
     return text;
   }, [getActiveWorksheet, getCellDisplayValue, getCellFormula]);
 
@@ -4623,14 +4624,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     if (entry.length > 1 && entry.startsWith("=")) {
       worksheet.setFormula(cellAddressToA1(cell), entry);
     } else {
-      const parsed = coerceUserEnteredValue(value);
-      worksheet.setCell(cellAddressToA1(cell), parsed);
-      if (typeof parsed === "number" && entry.endsWith("%")) {
-        worksheet.setCellStyleAt(cell.row, cell.col, {
-          ...worksheet.getCellStyleAt(cell.row, cell.col),
-          numberFormat: { formatType: "custom", formatString: "0.##########%" }
-        });
-      }
+      enterUserText(worksheet, cellAddressToA1(cell), value);
     }
     const after = captureCellMutationState(cell);
     if (!after) {
@@ -5010,8 +5004,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
             cell: nextCell
           });
         } else {
-          const nextValue = coerceUserEnteredValue(rawValue);
-          worksheet.setCell(cellAddressToA1(nextCell), nextValue);
+          enterUserText(worksheet, cellAddressToA1(nextCell), rawValue);
           const after = captureCellMutationState(nextCell);
           if (!after) {
             continue;
