@@ -17,7 +17,7 @@ function workbookWithBlock() {
   sheet.setCell("A1", 1);
   sheet.setCell("A2", 2);
   sheet.setCell("A3", 3);
-  sheet.setArrayFormula("C1", "=A1:A3*2", 3, 1);
+  sheet.setArrayFormula("C1", "=A1:A3*2", [[null], [null], [null]]);
   workbook.calculate();
   return { workbook, sheet };
 }
