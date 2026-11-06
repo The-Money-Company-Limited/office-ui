@@ -629,8 +629,15 @@ export interface FormControlInteractionResult {
     linkedCellsChanged: number;
 }
 
+/** A number read from typed text, with the built-in format Excel gives a typed date or time. */
+export interface TypedNumber {
+    value: number;
+    dateFormat?: number;
+}
+
 export interface Worksheet {
     iterateRows(opts?: JsRowsOptions): RowIterator;
+    readTypedNumber(text: string): TypedNumber | undefined;
     setCellStyle(address: string, style: StyleInput): void;
     setCellStyleAt(row: number, col: number, style: StyleInput): void;
     setRangeStyle(range: string, style: StyleInput): void;
@@ -793,12 +800,23 @@ export class Worksheet {
     getColumnWidth(col: number): number | undefined;
     getComment(address: string): any;
     getCommentAt(row: number, col: number): any;
+    /**
+     * The cell's value as the grid shows it, in the workbook's regional settings.
+     */
     getFormattedValue(address: string): string;
+    /**
+     * The cell's value as the grid shows it, in the workbook's regional settings.
+     */
     getFormattedValueAt(row: number, col: number): string;
     getFormulaAt(row: number, col: number): string | undefined;
     getHyperlink(address: string): any;
     getHyperlinkAt(row: number, col: number): any;
     getImageAt(row: number, col: number): any;
+    /**
+     * The cell's value as text to edit, in the workbook's regional settings: typed back
+     * unchanged, it gives the same value (a date in a date format shows as the short date).
+     */
+    getInputTextAt(row: number, col: number): string;
     getMergeSpan(row: number, col: number): any;
     getRowHeight(row: number): number | undefined;
     getRowOutlineLevel(row: number): number;
@@ -869,11 +887,10 @@ export class Worksheet {
 export function init(): void;
 
 /**
- * Sets the regional settings formulas compute with in workbooks opened or created from now on,
- * from a language tag such as `en-GB` (the browser's `navigator.language`): the order of day and
- * month in dates written as text, the language of TEXT's month and day names and date codes, and
- * the decimal separator. The default is en-US. The grid's own number display doesn't follow it
- * yet.
+ * Sets the regional settings of workbooks opened or created from now on, from a language tag
+ * such as `en-GB` (the browser's `navigator.language`): the order of day and month in dates
+ * written as text or typed, the language of month and day names and of TEXT's date codes, the
+ * separators numbers are read and shown with, and the short date. The default is en-US.
  */
 export function setLocale(tag: string): void;
 
@@ -951,6 +968,7 @@ export interface InitOutput {
     readonly worksheet_getRowHeight: (a: number, b: number) => [number, number, number, number];
     readonly worksheet_mergeCells: (a: number, b: number, c: number) => [number, number];
     readonly worksheet_name: (a: number) => [number, number, number, number];
+    readonly worksheet_readTypedNumber: (a: number, b: number, c: number) => [number, number, number];
     readonly worksheet_setCell: (a: number, b: number, c: number, d: any) => [number, number];
     readonly worksheet_setCellStyle: (a: number, b: number, c: number, d: any) => [number, number];
     readonly worksheet_setCellStyleAt: (a: number, b: number, c: number, d: any) => [number, number];
@@ -988,6 +1006,7 @@ export interface InitOutput {
     readonly worksheet_getFormulaAt: (a: number, b: number, c: number) => [number, number, number, number];
     readonly worksheet_getHyperlink: (a: number, b: number, c: number) => [number, number, number];
     readonly worksheet_getHyperlinkAt: (a: number, b: number, c: number) => [number, number, number];
+    readonly worksheet_getInputTextAt: (a: number, b: number, c: number) => [number, number, number, number];
     readonly worksheet_getMergeSpan: (a: number, b: number, c: number) => [number, number, number];
     readonly worksheet_getRowOutlineLevel: (a: number, b: number) => [number, number, number];
     readonly worksheet_getRowsBatch: (a: number, b: number, c: number, d: any) => [number, number, number];
