@@ -16,6 +16,7 @@ duke-sheets = { path = "../../crates/duke-sheets", default-features = false, fea
 duke-sheets-core = { path = "../../crates/duke-sheets-core" }
 duke-sheets-crypto = { path = "../../crates/duke-sheets-crypto" }
 duke-sheets-csv = { path = "../../crates/duke-sheets-csv" }
+duke-sheets-formula = { path = "../../crates/duke-sheets-formula" }
 duke-sheets-xls = { path = "../../crates/duke-sheets-xls" }
 duke-sheets-xlsx = { path = "../../crates/duke-sheets-xlsx" }
 duke-sheets-xlsb = { path = "../../crates/duke-sheets-xlsb" }

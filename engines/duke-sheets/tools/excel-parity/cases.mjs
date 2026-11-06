@@ -404,4 +404,11 @@ export const cases = [
   ["format elapsed", { Z1: 1.25 }, null, "30:00:00", "Z1", "[h]:mm:ss"],
   ["format text section", { Z1: "abc" }, null, "x abc", "Z1", '0;-0;0;"x "@'],
   ["format conditional section", { Z1: 1500 }, null, "1.5K", "Z1", '[>=1000]0.0,"K";0'],
+  // Number formats shown in the grid with another computer's regional settings
+  ["de-DE format thousands", { Z1: 1234.5 }, null, "1.234,50", "Z1", "#,##0.00", "de-DE"],
+  ["de-DE format percent", { Z1: 0.256 }, null, "25,6%", "Z1", "0.0%", "de-DE"],
+  ["de-DE format periods in a date", { Z1: d(2026, 11, 5) }, null, "05.11.2026", "Z1", "dd.mm.yyyy", "de-DE"],
+  ["de-DE format month name", { Z1: d(2026, 3, 5) }, null, "5. März 2026", "Z1", "d. mmmm yyyy", "de-DE"],
+  ["de-DE format fractional seconds", { Z1: 90.5 / 86400 }, null, "01:30,5", "Z1", "mm:ss.0", "de-DE"],
+  inLocale("de-DE", "de-DE TEXT fractional seconds", '=TEXT(90.5/86400,"mm:ss,0")', "01:30,5"),
 ]

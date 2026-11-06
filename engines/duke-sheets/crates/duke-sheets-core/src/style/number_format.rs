@@ -1,5 +1,25 @@
 //! Number format types
 
+use std::borrow::Cow;
+
+use crate::RegionalSettings;
+
+/// What a number format shows a number as. A value typed into a cell keeps the cell's format
+/// when it is of the same kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatKind {
+    General,
+    Number,
+    Percent,
+    Date,
+    Time,
+    DateTime,
+    /// Elapsed time, `[h]:mm:ss`.
+    Duration,
+    /// `@`: what is typed stays text.
+    Text,
+}
+
 /// Number format for cell display
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum NumberFormat {
@@ -39,7 +59,7 @@ impl NumberFormat {
     pub const ID_FRACTION: u32 = 12;
     /// 13 - # ??/??
     pub const ID_FRACTION2: u32 = 13;
-    /// 14 - mm-dd-yy
+    /// 14 - the short date (m/d/yyyy in en-US)
     pub const ID_DATE_SHORT: u32 = 14;
     /// 15 - d-mmm-yy
     pub const ID_DATE_MEDIUM: u32 = 15;
@@ -55,7 +75,7 @@ impl NumberFormat {
     pub const ID_TIME_24H: u32 = 20;
     /// 21 - h:mm:ss
     pub const ID_TIME_24H_SEC: u32 = 21;
-    /// 22 - m/d/yy h:mm
+    /// 22 - the short date with the time (m/d/yyyy h:mm in en-US)
     pub const ID_DATETIME: u32 = 22;
     /// 37 - #,##0 ;(#,##0)
     pub const ID_ACCOUNTING_INT: u32 = 37;
@@ -65,6 +85,8 @@ impl NumberFormat {
     pub const ID_ACCOUNTING_DEC2: u32 = 39;
     /// 40 - #,##0.00;[Red](#,##0.00)
     pub const ID_ACCOUNTING_DEC2_RED: u32 = 40;
+    /// 46 - [h]:mm:ss
+    pub const ID_ELAPSED_HOURS: u32 = 46;
     /// 49 - @
     pub const ID_TEXT: u32 = 49;
 
@@ -113,7 +135,7 @@ impl NumberFormat {
         NumberFormat::BuiltIn(Self::ID_SCIENTIFIC)
     }
 
-    /// Short date (mm-dd-yy)
+    /// Short date (m/d/yyyy in en-US)
     pub fn date_short() -> Self {
         NumberFormat::BuiltIn(Self::ID_DATE_SHORT)
     }
@@ -123,7 +145,7 @@ impl NumberFormat {
         NumberFormat::BuiltIn(Self::ID_TIME_AMPM)
     }
 
-    /// Date and time (m/d/yy h:mm)
+    /// Date and time (m/d/yyyy h:mm in en-US)
     pub fn datetime() -> Self {
         NumberFormat::BuiltIn(Self::ID_DATETIME)
     }
@@ -142,7 +164,51 @@ impl NumberFormat {
         }
     }
 
-    /// Get built-in format string by ID
+    /// The code a cell with this format displays with in `regional`: Excel shows the built-in
+    /// short date (14) and date with time (22) in the computer's date order.
+    pub fn display_code(&self, regional: &RegionalSettings) -> Cow<'_, str> {
+        match self {
+            NumberFormat::BuiltIn(Self::ID_DATE_SHORT) => regional.short_date.into(),
+            NumberFormat::BuiltIn(Self::ID_DATETIME) => regional.date_time_code().into(),
+            _ => self.format_string().into(),
+        }
+    }
+
+    /// What this format shows a number as.
+    pub fn kind(&self) -> FormatKind {
+        self.kind_of(self.parsed().as_ref())
+    }
+
+    /// The format's code, parsed; `None` for General or a code that doesn't parse.
+    pub(crate) fn parsed(&self) -> Option<ssfmt::NumberFormat> {
+        let code = self.format_string();
+        (!code.eq_ignore_ascii_case("general")).then(|| ssfmt::NumberFormat::parse(code).ok()).flatten()
+    }
+
+    /// The kind of this format, given its parsed code.
+    pub(crate) fn kind_of(&self, parsed: Option<&ssfmt::NumberFormat>) -> FormatKind {
+        let Some(parsed) = parsed else {
+            let general = self.format_string().eq_ignore_ascii_case("general");
+            return if general { FormatKind::General } else { FormatKind::Number };
+        };
+        if parsed.is_text_format() {
+            FormatKind::Text
+        } else if parsed.has_elapsed_time() {
+            FormatKind::Duration
+        } else if parsed.is_date_format() {
+            match (parsed.has_calendar_date(), parsed.has_time_of_day()) {
+                (true, true) => FormatKind::DateTime,
+                (true, false) => FormatKind::Date,
+                _ => FormatKind::Time,
+            }
+        } else if parsed.is_percentage() {
+            FormatKind::Percent
+        } else {
+            FormatKind::Number
+        }
+    }
+
+    /// Get built-in format string by ID (14 and 22 as Excel writes them in en-US)
     ///
     /// Reference: ECMA-376 Section 18.8.30 (numFmt), plus the implicit
     /// built-in formats defined by the spec and Microsoft documentation.
@@ -162,7 +228,7 @@ impl NumberFormat {
             11 => "0.00E+00",
             12 => "# ?/?",
             13 => "# ??/??",
-            14 => "mm-dd-yy",
+            14 => "m/d/yyyy",
             15 => "d-mmm-yy",
             16 => "d-mmm",
             17 => "mmm-yy",
@@ -170,7 +236,7 @@ impl NumberFormat {
             19 => "h:mm:ss AM/PM",
             20 => "h:mm",
             21 => "h:mm:ss",
-            22 => "m/d/yy h:mm",
+            22 => "m/d/yyyy h:mm",
             37 => "#,##0_);(#,##0)",
             38 => "#,##0_);[Red](#,##0)",
             39 => "#,##0.00_);(#,##0.00)",
@@ -184,85 +250,8 @@ impl NumberFormat {
         }
     }
 
-    /// Check if this is a date/time format
-    ///
-    /// For built-in formats, checks the known ID ranges.
-    /// For custom formats, uses token-aware parsing that skips quoted
-    /// literal text and escaped characters to avoid false positives.
+    /// Whether this format shows a number as a date, a time or a duration.
     pub fn is_date_format(&self) -> bool {
-        match self {
-            NumberFormat::BuiltIn(id) => matches!(id, 14..=22 | 45..=47),
-            NumberFormat::Custom(s) => Self::custom_is_date_format(s),
-            NumberFormat::General => false,
-        }
-    }
-
-    /// Token-aware check for date/time format codes in a custom format string.
-    /// Skips quoted literals ("..."), escaped characters (\x), and bracketed
-    /// sections ([...]) to avoid false positives on strings like `0 "items"`.
-    fn custom_is_date_format(s: &str) -> bool {
-        let bytes = s.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            match bytes[i] {
-                // Skip quoted literal text
-                b'"' => {
-                    i += 1;
-                    while i < bytes.len() && bytes[i] != b'"' {
-                        i += 1;
-                    }
-                    i += 1; // skip closing quote
-                }
-                // Skip escaped character
-                b'\\' => {
-                    i += 2;
-                }
-                // Skip bracketed sections (colors, conditions, locale, elapsed time)
-                // but check for [h], [m], [s] which ARE date/time tokens
-                b'[' => {
-                    let start = i + 1;
-                    i += 1;
-                    while i < bytes.len() && bytes[i] != b']' {
-                        i += 1;
-                    }
-                    let bracket_len = i - start;
-                    if bracket_len == 1 {
-                        let ch = bytes[start];
-                        if ch == b'h' || ch == b'm' || ch == b's' {
-                            return true;
-                        }
-                    }
-                    i += 1; // skip closing bracket
-                }
-                // Skip underscore + next char (alignment spacer)
-                b'_' => {
-                    i += 2;
-                }
-                // Skip asterisk + next char (fill repeat)
-                b'*' => {
-                    i += 2;
-                }
-                // Date/time tokens
-                b'y' | b'Y' | b'd' | b'D' => return true,
-                // m/M is date (month) - could be minutes after h, but either way it's date/time
-                b'm' | b'M' => return true,
-                // h/H and s/S are time tokens
-                b'h' | b'H' | b's' | b'S' => return true,
-                // AM/PM indicator
-                b'A' | b'a' => {
-                    // Check for AM/PM or A/P
-                    let remaining = &s[i..];
-                    let lower = remaining.to_ascii_lowercase();
-                    if lower.starts_with("am/pm") || lower.starts_with("a/p") {
-                        return true;
-                    }
-                    i += 1;
-                }
-                _ => {
-                    i += 1;
-                }
-            }
-        }
-        false
+        matches!(self.kind(), FormatKind::Date | FormatKind::Time | FormatKind::DateTime | FormatKind::Duration)
     }
 }

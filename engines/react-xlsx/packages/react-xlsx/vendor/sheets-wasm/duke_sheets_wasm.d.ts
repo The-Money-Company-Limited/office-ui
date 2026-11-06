@@ -629,8 +629,37 @@ export interface FormControlInteractionResult {
     linkedCellsChanged: number;
 }
 
+/** A cell's number format, as getCellStyle gives it. */
+export interface CellNumberFormat {
+    formatType: "general" | "builtin" | "custom";
+    id: number | null;
+    formatString: string;
+    isDateFormat: boolean;
+    /** What the format shows a number as; a cell with a "text" format keeps what is typed as text. */
+    kind: "general" | "number" | "percent" | "date" | "time" | "datetime" | "duration" | "text";
+}
+
+/** A cell's style, as getCellStyle gives it. */
+export type CellStyle = {
+    font: Record<string, unknown>;
+    fill: Record<string, unknown>;
+    border: Record<string, unknown>;
+    alignment: Record<string, unknown>;
+    numberFormat: CellNumberFormat;
+    protection: { locked: boolean; hidden: boolean };
+};
+
+/** A number read from text typed into a cell, and the format the cell gets when it should change. */
+export interface TypedNumber {
+    value: number;
+    numberFormat?: NumberFormatInput;
+}
+
 export interface Worksheet {
     iterateRows(opts?: JsRowsOptions): RowIterator;
+    getCellStyle(address: string): CellStyle | null;
+    getCellStyleAt(row: number, col: number): CellStyle | null;
+    readTypedNumberAt(row: number, col: number, text: string): TypedNumber | undefined;
     setCellStyle(address: string, style: StyleInput): void;
     setCellStyleAt(row: number, col: number, style: StyleInput): void;
     setRangeStyle(range: string, style: StyleInput): void;
@@ -783,22 +812,35 @@ export class Worksheet {
     private constructor();
     free(): void;
     [Symbol.dispose](): void;
+    /**
+     * Gives the cell the default style, as a cell that was never styled has.
+     */
+    clearCellStyleAt(row: number, col: number): void;
     getCalculatedValue(address: string): CellValue;
     getCalculatedValueAt(row: number, col: number): CellValue;
     getCell(address: string): CellValue;
     getCellAt(row: number, col: number): CellValue;
-    getCellStyle(address: string): any;
-    getCellStyleAt(row: number, col: number): any;
     getColumnOutlineLevel(col: number): number;
     getColumnWidth(col: number): number | undefined;
     getComment(address: string): any;
     getCommentAt(row: number, col: number): any;
+    /**
+     * The cell's value as the grid shows it, in the workbook's regional settings.
+     */
     getFormattedValue(address: string): string;
+    /**
+     * The cell's value as the grid shows it, in the workbook's regional settings.
+     */
     getFormattedValueAt(row: number, col: number): string;
     getFormulaAt(row: number, col: number): string | undefined;
     getHyperlink(address: string): any;
     getHyperlinkAt(row: number, col: number): any;
     getImageAt(row: number, col: number): any;
+    /**
+     * The cell's value as text to edit, in the workbook's regional settings: typed back
+     * unchanged, it gives the same value (a date in a date format shows as the short date).
+     */
+    getInputTextAt(row: number, col: number): string;
     getMergeSpan(row: number, col: number): any;
     getRowHeight(row: number): number | undefined;
     getRowOutlineLevel(row: number): number;
@@ -869,11 +911,10 @@ export class Worksheet {
 export function init(): void;
 
 /**
- * Sets the regional settings formulas compute with in workbooks opened or created from now on,
- * from a language tag such as `en-GB` (the browser's `navigator.language`): the order of day and
- * month in dates written as text, the language of TEXT's month and day names and date codes, and
- * the decimal separator. The default is en-US. The grid's own number display doesn't follow it
- * yet.
+ * Sets the regional settings of workbooks opened or created from now on, from a language tag
+ * such as `en-GB` (the browser's `navigator.language`): the order of day and month in dates
+ * written as text or typed, the language of month and day names and of TEXT's date codes, the
+ * separators numbers are read and shown with, and the short date. The default is en-US.
  */
 export function setLocale(tag: string): void;
 
@@ -942,6 +983,7 @@ export interface InitOutput {
     readonly workbook_setWorkbookProtection: (a: number, b: any) => [number, number];
     readonly workbook_sheetCount: (a: number) => [number, number, number];
     readonly workbook_sheetNames: (a: number) => [number, number, number, number];
+    readonly worksheet_clearCellStyleAt: (a: number, b: number, c: number) => [number, number];
     readonly worksheet_getCalculatedValue: (a: number, b: number, c: number) => [number, number, number];
     readonly worksheet_getCalculatedValueAt: (a: number, b: number, c: number) => [number, number, number];
     readonly worksheet_getCell: (a: number, b: number, c: number) => [number, number, number];
@@ -951,6 +993,7 @@ export interface InitOutput {
     readonly worksheet_getRowHeight: (a: number, b: number) => [number, number, number, number];
     readonly worksheet_mergeCells: (a: number, b: number, c: number) => [number, number];
     readonly worksheet_name: (a: number) => [number, number, number, number];
+    readonly worksheet_readTypedNumberAt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly worksheet_setCell: (a: number, b: number, c: number, d: any) => [number, number];
     readonly worksheet_setCellStyle: (a: number, b: number, c: number, d: any) => [number, number];
     readonly worksheet_setCellStyleAt: (a: number, b: number, c: number, d: any) => [number, number];
@@ -988,6 +1031,7 @@ export interface InitOutput {
     readonly worksheet_getFormulaAt: (a: number, b: number, c: number) => [number, number, number, number];
     readonly worksheet_getHyperlink: (a: number, b: number, c: number) => [number, number, number];
     readonly worksheet_getHyperlinkAt: (a: number, b: number, c: number) => [number, number, number];
+    readonly worksheet_getInputTextAt: (a: number, b: number, c: number) => [number, number, number, number];
     readonly worksheet_getMergeSpan: (a: number, b: number, c: number) => [number, number, number];
     readonly worksheet_getRowOutlineLevel: (a: number, b: number) => [number, number, number];
     readonly worksheet_getRowsBatch: (a: number, b: number, c: number, d: any) => [number, number, number];

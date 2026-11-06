@@ -170,6 +170,19 @@ function Calendar03Glyph(props: RegistryIconProps) {
   )
 }
 
+function Clock01Glyph(props: RegistryIconProps) {
+  return (
+    <IconPlaceholder
+      lucide="Clock"
+      tabler="IconClock"
+      hugeicons="Clock01Icon"
+      phosphor="ClockIcon"
+      remixicon="RiTimeLine"
+      {...props}
+    />
+  )
+}
+
 function DollarCircleGlyph(props: RegistryIconProps) {
   return (
     <IconPlaceholder
@@ -377,13 +390,66 @@ const NUMBER_FORMAT_OPTIONS: NumberFormatOption[] = [
     value: "Percent",
   },
   {
-    formatString: "m/d/yyyy",
-    formatType: "custom",
+    // Excel's short date, which shows in the user's regional date order.
+    formatType: "builtin",
     icon: Calendar03Glyph,
+    id: 14,
     label: "Date",
     value: "Date",
   },
+  {
+    formatType: "builtin",
+    icon: Clock01Glyph,
+    id: 21,
+    label: "Time",
+    value: "Time",
+  },
 ]
+
+/** How the picker labels a format by what it shows (the engine's `kind`). */
+const NUMBER_FORMAT_KINDS: Record<
+  string,
+  { icon: React.ComponentType<RegistryIconProps>; label: string }
+> = {
+  date: { icon: Calendar03Glyph, label: "Date" },
+  datetime: { icon: Calendar03Glyph, label: "Date and time" },
+  duration: { icon: Clock01Glyph, label: "Duration" },
+  number: { icon: TextNumberSignGlyph, label: "Number" },
+  percent: { icon: PercentGlyph, label: "Percent" },
+  text: { icon: TextNumberSignGlyph, label: "Text" },
+  time: { icon: Clock01Glyph, label: "Time" },
+}
+
+/** Built-in number formats the engine counts as numbers that the picker names more closely. */
+function getBuiltinNumberLabel(id: number | undefined) {
+  if (id === undefined) return undefined
+  if ((id >= 5 && id <= 8) || id === 42 || id === 44)
+    return { icon: DollarCircleGlyph, label: "Currency" }
+  if (id === 11 || id === 48)
+    return { icon: TextNumberSignGlyph, label: "Scientific" }
+  if (id === 12 || id === 13)
+    return { icon: TextNumberSignGlyph, label: "Fraction" }
+  return undefined
+}
+
+/** How the picker shows a format it has no option for: its kind, and its code as a sample. */
+function describeNumberFormat(style: XlsxResolvedCellStyle | null) {
+  const numberFormat = asResolvedStyleGroup(style?.numberFormat)
+  const code =
+    typeof numberFormat?.formatString === "string"
+      ? numberFormat.formatString
+      : ""
+  const kind = typeof numberFormat?.kind === "string" ? numberFormat.kind : ""
+  const id =
+    numberFormat?.formatType === "builtin"
+      ? getNumericValue(numberFormat.id)
+      : undefined
+  const described =
+    getBuiltinNumberLabel(id) ??
+    NUMBER_FORMAT_KINDS[kind] ??
+    NUMBER_FORMAT_KINDS.number
+  return { ...described, code }
+}
 
 const GENERAL_NUMBER_FORMAT_VALUE = "General"
 const BUILTIN_NUMBER_FORMAT_VALUE_PREFIX = "builtin:"
@@ -549,47 +615,23 @@ function getNumberFormatValue(style: XlsxResolvedCellStyle | null) {
       : ""
   const id = getNumericValue(numberFormat.id)
 
-  if (formatString) {
-    const matchingOption = NUMBER_FORMAT_OPTIONS.find(
-      (option) => option.formatString === formatString
-    )
+  // Built-in 0 is General.
+  if (formatType === "builtin" && id === 0) return GENERAL_NUMBER_FORMAT_VALUE
 
-    return matchingOption?.value ?? formatString
-  }
-  if (formatType === "builtin" && id !== undefined) {
-    const matchingOption = NUMBER_FORMAT_OPTIONS.find(
-      (option) => option.id === id
-    )
+  // A built-in format also carries its code (14 is m/d/yyyy): match its id, then its code.
+  const builtin = formatType === "builtin" && id !== undefined
+  const matchingOption =
+    (builtin && NUMBER_FORMAT_OPTIONS.find((option) => option.id === id)) ||
+    (formatString &&
+      NUMBER_FORMAT_OPTIONS.find(
+        (option) => option.formatString === formatString
+      ))
 
-    if (matchingOption) return matchingOption.value
-
-    return `${BUILTIN_NUMBER_FORMAT_VALUE_PREFIX}${id}`
-  }
-  if (formatType === "general") return GENERAL_NUMBER_FORMAT_VALUE
+  if (matchingOption) return matchingOption.value
+  if (builtin) return `${BUILTIN_NUMBER_FORMAT_VALUE_PREFIX}${id}`
+  if (formatString) return formatString
 
   return GENERAL_NUMBER_FORMAT_VALUE
-}
-
-function getNumberFormatLabel(value: string) {
-  if (value === GENERAL_NUMBER_FORMAT_VALUE) return "General"
-
-  const matchingOption = NUMBER_FORMAT_OPTIONS.find(
-    (option) => option.value === value
-  )
-  if (matchingOption) return matchingOption.label
-
-  if (value.startsWith(BUILTIN_NUMBER_FORMAT_VALUE_PREFIX)) {
-    return `Builtin ${value.slice(BUILTIN_NUMBER_FORMAT_VALUE_PREFIX.length)}`
-  }
-
-  return value
-}
-
-function getNumberFormatIcon(value: string) {
-  return (
-    NUMBER_FORMAT_OPTIONS.find((option) => option.value === value)?.icon ??
-    TextNumberSignGlyph
-  )
 }
 
 function createNumberFormatStyle(value: string): XlsxCellStyleInput {
@@ -1040,17 +1082,19 @@ function MergeCellsMenu({
 function NumberFormatSelect({
   disabled,
   onApplyStyle,
+  style,
   value,
 }: {
   disabled: boolean
   onApplyStyle: (style: XlsxCellStyleInput) => void
+  style: XlsxResolvedCellStyle | null
   value: string
 }) {
-  const hasMatchingOption = NUMBER_FORMAT_OPTIONS.some(
+  const matchingOption = NUMBER_FORMAT_OPTIONS.find(
     (option) => option.value === value
   )
-  const currentLabel = getNumberFormatLabel(value)
-  const currentIcon = React.createElement(getNumberFormatIcon(value), {
+  const current = matchingOption ?? describeNumberFormat(style)
+  const currentIcon = React.createElement(current.icon, {
     className: "size-4",
   })
 
@@ -1087,11 +1131,16 @@ function NumberFormatSelect({
             </span>
           </SelectItem>
         ))}
-        {!hasMatchingOption && value !== GENERAL_NUMBER_FORMAT_VALUE ? (
+        {!matchingOption && value !== GENERAL_NUMBER_FORMAT_VALUE ? (
           <SelectItem value={value}>
             <span className="flex min-w-0 items-center gap-2">
               {currentIcon}
-              <span className="truncate">{currentLabel}</span>
+              <span className="truncate">{current.label}</span>
+              {"code" in current && current.code ? (
+                <span className="truncate text-muted-foreground">
+                  {current.code}
+                </span>
+              ) : null}
             </span>
           </SelectItem>
         ) : null}
@@ -2333,6 +2382,7 @@ function EditorToolbar({
             <NumberFormatSelect
               disabled={!canStyleSelection}
               onApplyStyle={applyStyle}
+              style={activeCellStyle}
               value={numberFormatValue}
             />
             <BorderMenu

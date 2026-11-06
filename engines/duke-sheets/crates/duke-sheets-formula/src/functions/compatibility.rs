@@ -1353,7 +1353,7 @@ pub fn fn_ceiling(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
         return Ok(FormulaValue::Error(CellError::Num));
     }
     Ok(FormulaValue::Number(
-        crate::coerce::round_15(number / significance).ceil() * significance,
+        duke_sheets_core::round_15(number / significance).ceil() * significance,
     ))
 }
 
@@ -1375,7 +1375,7 @@ pub fn fn_floor(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
         return Ok(FormulaValue::Error(CellError::Num));
     }
     Ok(FormulaValue::Number(
-        crate::coerce::round_15(number / significance).floor() * significance,
+        duke_sheets_core::round_15(number / significance).floor() * significance,
     ))
 }
 

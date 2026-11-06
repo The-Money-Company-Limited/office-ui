@@ -1,8 +1,8 @@
-//! The regional settings formulas compute with, as Excel takes them from the computer it runs
-//! on: whether `5/11/2026` is 5 November or May 11, the language `TEXT` names months and days in,
-//! and the decimal separator in text such as `"1,5"`. A file doesn't record them, so the host sets
-//! them (the editor, from the browser's language). The grid's own number display doesn't follow
-//! them yet (COD-1800).
+//! The regional settings Excel takes from the computer it runs on: whether `5/11/2026` is
+//! 5 November or May 11, the language months and days are named in, and the decimal separator
+//! (`1,5`). Formulas compute with them, typed entries are read with them, and cells display with
+//! them. A file doesn't record them, so the host sets them (the editor, from the browser's
+//! language).
 
 /// The language of month and day names, and of the date codes in a `TEXT` format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -30,7 +30,7 @@ pub enum DateOrder {
     YearFirst,
 }
 
-/// Regional settings for formulas. The default is en-US.
+/// Regional settings. The default is en-US.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegionalSettings {
     pub language: Language,
@@ -40,6 +40,11 @@ pub struct RegionalSettings {
     pub date_separator: char,
     pub decimal_separator: char,
     pub thousands_separator: char,
+    /// The computer's short date, which Excel shows its built-in short date (14) with:
+    /// `m/d/yyyy` in en-US, `dd/mm/yyyy` in en-GB, `yyyy/m/d` in zh-CN.
+    pub short_date: &'static str,
+    /// The hour code of the computer's short time, `h` (9:30) or `hh` (09:30).
+    pub short_hour: &'static str,
 }
 
 impl Default for RegionalSettings {
@@ -50,6 +55,8 @@ impl Default for RegionalSettings {
             date_separator: '/',
             decimal_separator: '.',
             thousands_separator: ',',
+            short_date: "m/d/yyyy",
+            short_hour: "h",
         }
     }
 }
@@ -83,7 +90,7 @@ impl RegionalSettings {
         };
         let date_order = match (language_code.as_str(), region.as_str()) {
             ("", _) | ("en", "" | "US" | "PH") | ("es", "US") => DateOrder::MonthFirst,
-            ("sv" | "ja" | "zh" | "ko" | "hu" | "lt" | "mn", _) => DateOrder::YearFirst,
+            ("sv" | "ja" | "zh" | "ko" | "hu" | "lt" | "mn", _) | ("en" | "fr", "CA") | ("en", "ZA") => DateOrder::YearFirst,
             _ => DateOrder::DayFirst,
         };
         let (decimal_separator, thousands_separator) = match (language_code.as_str(), region.as_str()) {
@@ -100,10 +107,25 @@ impl RegionalSettings {
         let date_separator = match (language_code.as_str(), region.as_str()) {
             ("de" | "fi" | "nb" | "no" | "da" | "pl" | "ru" | "tr" | "cs" | "sk" | "uk" | "ro" | "hr" | "sl" | "lv" | "et" | "bg" | "hu", _) => '.',
             ("fr", "CH") | ("it", "CH") => '.',
-            ("nl" | "sv", _) => '-',
+            ("nl" | "sv", _) | ("en" | "fr", "CA") => '-',
             _ => '/',
         };
-        Self { language, date_order, date_separator, decimal_separator, thousands_separator }
+        // Windows' own short date where it isn't the date order with padded day and month.
+        let (short_date, short_hour) = match (language_code.as_str(), region.as_str()) {
+            ("ja", _) => ("yyyy/mm/dd", "h"),
+            ("zh", _) => ("yyyy/m/d", "h"),
+            ("ko", _) | ("en", "CA") => ("yyyy-mm-dd", "h"),
+            _ => match (date_order, date_separator) {
+                (DateOrder::MonthFirst, _) => ("m/d/yyyy", "h"),
+                (DateOrder::DayFirst, '.') => ("dd.mm.yyyy", "hh"),
+                (DateOrder::DayFirst, '-') => ("dd-mm-yyyy", "hh"),
+                (DateOrder::DayFirst, _) => ("dd/mm/yyyy", "hh"),
+                (DateOrder::YearFirst, '.') => ("yyyy.mm.dd", "hh"),
+                (DateOrder::YearFirst, '/') => ("yyyy/mm/dd", "hh"),
+                (DateOrder::YearFirst, _) => ("yyyy-mm-dd", "hh"),
+            },
+        };
+        Self { language, date_order, date_separator, decimal_separator, thousands_separator, short_date, short_hour }
     }
 
     /// The number-format engine's locale: these separators, and month and day names as Excel
@@ -164,6 +186,11 @@ impl RegionalSettings {
         };
         ssfmt::Locale { decimal_separator: self.decimal_separator, thousands_separator: self.thousands_separator, ..named }
     }
+
+    /// The short date with the short time, which Excel shows its built-in date with time (22) with.
+    pub fn date_time_code(&self) -> String {
+        format!("{} {}:mm", self.short_date, self.short_hour)
+    }
 }
 
 #[cfg(test)]
@@ -193,5 +220,23 @@ mod tests {
         assert_eq!(RegionalSettings::from_tag("cs-CZ").decimal_separator, ',');
         assert_eq!(RegionalSettings::from_tag("es-ES").format_locale().month_names_full[0], "enero");
         assert_eq!(RegionalSettings::from_tag("zh-Hans-CN").date_order, DateOrder::YearFirst);
+    }
+
+    #[test]
+    fn writes_the_short_date_in_the_date_order() {
+        let code = |tag: &str| (RegionalSettings::from_tag(tag).short_date.to_string(), RegionalSettings::from_tag(tag).date_time_code());
+        assert_eq!(code("en-US"), ("m/d/yyyy".into(), "m/d/yyyy h:mm".into()));
+        assert_eq!(code("en-GB"), ("dd/mm/yyyy".into(), "dd/mm/yyyy hh:mm".into()));
+        assert_eq!(code("de-DE"), ("dd.mm.yyyy".into(), "dd.mm.yyyy hh:mm".into()));
+        assert_eq!(code("sv-SE").0, "yyyy-mm-dd");
+        for tag in ["en-CA", "fr-CA"] {
+            assert_eq!(code(tag).0, "yyyy-mm-dd", "{tag}");
+        }
+        assert_eq!(code("en-ZA").0, "yyyy/mm/dd");
+        assert_eq!(code("ja-JP"), ("yyyy/mm/dd".into(), "yyyy/mm/dd h:mm".into()));
+        assert_eq!(code("zh-CN"), ("yyyy/m/d".into(), "yyyy/m/d h:mm".into()));
+        assert_eq!(code("ko-KR").0, "yyyy-mm-dd");
+        assert_eq!(code("en-CA").1, "yyyy-mm-dd h:mm");
+        assert_eq!(code("sv-SE").1, "yyyy-mm-dd hh:mm");
     }
 }

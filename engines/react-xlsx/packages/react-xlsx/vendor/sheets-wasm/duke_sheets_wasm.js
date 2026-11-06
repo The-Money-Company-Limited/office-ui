@@ -736,6 +736,17 @@ export class Worksheet {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
+     * Gives the cell the default style, as a cell that was never styled has.
+     * @param {number} row
+     * @param {number} col
+     */
+    clearCellStyleAt(row, col) {
+        const ret = wasm.worksheet_clearCellStyleAt(this.__wbg_ptr, row, col);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * @returns {any}
      */
     get colBreaks() {
@@ -1064,6 +1075,7 @@ export class Worksheet {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
+     * The cell's value as the grid shows it, in the workbook's regional settings.
      * @param {string} address
      * @returns {string}
      */
@@ -1088,6 +1100,7 @@ export class Worksheet {
         }
     }
     /**
+     * The cell's value as the grid shows it, in the workbook's regional settings.
      * @param {number} row
      * @param {number} col
      * @returns {string}
@@ -1163,6 +1176,31 @@ export class Worksheet {
             throw takeFromExternrefTable0(ret[1]);
         }
         return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * The cell's value as text to edit, in the workbook's regional settings: typed back
+     * unchanged, it gives the same value (a date in a date format shows as the short date).
+     * @param {number} row
+     * @param {number} col
+     * @returns {string}
+     */
+    getInputTextAt(row, col) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.worksheet_getInputTextAt(this.__wbg_ptr, row, col);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
     }
     /**
      * @param {number} row
@@ -1512,6 +1550,25 @@ export class Worksheet {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
+     * What text typed into the cell stands for, read in the workbook's settings as Excel reads
+     * it (`5/11/2026` is 5 November in en-GB, `1,5` is 1.5 in de-DE): the number, and the format
+     * the cell gets when its own one is of another kind; `undefined` when the text stays text
+     * (duke_sheets_formula::coerce::typed_number).
+     * @param {number} row
+     * @param {number} col
+     * @param {string} text
+     * @returns {any}
+     */
+    readTypedNumberAt(row, col, text) {
+        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.worksheet_readTypedNumberAt(this.__wbg_ptr, row, col, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
      * Remove a top-level drawing or nested group child.
      * @param {any} path
      */
@@ -1798,11 +1855,10 @@ export function init() {
 }
 
 /**
- * Sets the regional settings formulas compute with in workbooks opened or created from now on,
- * from a language tag such as `en-GB` (the browser's `navigator.language`): the order of day and
- * month in dates written as text, the language of TEXT's month and day names and date codes, and
- * the decimal separator. The default is en-US. The grid's own number display doesn't follow it
- * yet.
+ * Sets the regional settings of workbooks opened or created from now on, from a language tag
+ * such as `en-GB` (the browser's `navigator.language`): the order of day and month in dates
+ * written as text or typed, the language of month and day names and of TEXT's date codes, the
+ * separators numbers are read and shown with, and the short date. The default is en-US.
  * @param {string} tag
  */
 export function setLocale(tag) {

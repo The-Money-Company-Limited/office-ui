@@ -775,7 +775,7 @@ fn compare_values(left: &FormulaValue, right: &FormulaValue) -> i32 {
     match (left, right) {
         // Numbers compare at Excel's 15 significant digits, so `=0.1+0.2=0.3` is TRUE.
         (FormulaValue::Number(l), FormulaValue::Number(r)) => {
-            let (l, r) = (crate::coerce::round_15(*l), crate::coerce::round_15(*r));
+            let (l, r) = (duke_sheets_core::round_15(*l), duke_sheets_core::round_15(*r));
             if l < r {
                 -1
             } else if l > r {

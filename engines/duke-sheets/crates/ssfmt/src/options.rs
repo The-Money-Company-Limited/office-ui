@@ -13,6 +13,14 @@ pub enum DateSystem {
 }
 
 impl DateSystem {
+    /// The serial of the last day a date format shows, 31 December 9999.
+    pub fn last_serial(&self) -> f64 {
+        match self {
+            DateSystem::Date1900 => 2_958_465.0,
+            DateSystem::Date1904 => 2_957_003.0,
+        }
+    }
+
     /// Returns the epoch year for this date system.
     pub fn epoch_year(&self) -> i32 {
         match self {

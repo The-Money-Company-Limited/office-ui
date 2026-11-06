@@ -15,6 +15,16 @@ use crate::{
     Worksheet,
 };
 
+/// The cell as the workbook's settings show it: its regional settings and date system.
+fn cell_view<'a>(
+    wb: &'a duke_sheets_core::Workbook,
+    ws: &'a duke_sheets_core::Worksheet,
+    row: u32,
+    col: u16,
+) -> duke_sheets_core::CellView<'a> {
+    ws.cell_view_at(row, col).with_settings(wb.settings())
+}
+
 #[wasm_bindgen]
 impl Worksheet {
     #[wasm_bindgen(getter)]
@@ -89,7 +99,7 @@ impl Worksheet {
         to_js_value(&selections)
     }
 
-    #[wasm_bindgen(js_name = getCellStyle)]
+    #[wasm_bindgen(skip_typescript, js_name = getCellStyle)]
     pub fn get_cell_style(&self, address: &str) -> Result<JsValue, JsError> {
         let wb = self.workbook.borrow();
         let ws = wb
@@ -102,7 +112,7 @@ impl Worksheet {
         }
     }
 
-    #[wasm_bindgen(js_name = getCellStyleAt)]
+    #[wasm_bindgen(skip_typescript, js_name = getCellStyleAt)]
     pub fn get_cell_style_at(&self, row: u32, col: u32) -> Result<JsValue, JsError> {
         let wb = self.workbook.borrow();
         let ws = wb
@@ -114,22 +124,32 @@ impl Worksheet {
         }
     }
 
+    /// The cell's value as the grid shows it, in the workbook's regional settings.
     #[wasm_bindgen(js_name = getFormattedValue)]
     pub fn get_formatted_value(&self, address: &str) -> Result<String, JsError> {
-        let wb = self.workbook.borrow();
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        ws.formatted_value(address).map_err(to_js_error)
+        let address = duke_sheets_core::CellAddress::parse(address).map_err(to_js_error)?;
+        self.get_formatted_value_at(address.row, address.col as u32)
     }
 
+    /// The cell's value as the grid shows it, in the workbook's regional settings.
     #[wasm_bindgen(js_name = getFormattedValueAt)]
     pub fn get_formatted_value_at(&self, row: u32, col: u32) -> Result<String, JsError> {
         let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        Ok(ws.formatted_value_at(row, col as u16))
+        Ok(cell_view(&wb, ws, row, col as u16).formatted())
+    }
+
+    /// The cell's value as text to edit, in the workbook's regional settings: typed back
+    /// unchanged, it gives the same value (a date in a date format shows as the short date).
+    #[wasm_bindgen(js_name = getInputTextAt)]
+    pub fn get_input_text_at(&self, row: u32, col: u32) -> Result<String, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        Ok(cell_view(&wb, ws, row, col as u16).input_text())
     }
 
     #[wasm_bindgen(skip_typescript, js_name = getRowsBatch)]
@@ -264,7 +284,7 @@ impl Worksheet {
             }
 
             let value = if use_formatted {
-                ws.formatted_value_at(row, col)
+                cell_view(&wb, ws, row, col).formatted()
             } else if use_calculated {
                 ws.get_calculated_value_at(row, col)
                     .map(|v| v.to_string())

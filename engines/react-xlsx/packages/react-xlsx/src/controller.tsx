@@ -1,7 +1,7 @@
 import { editWorkbookStructure, mapStructuralSheetIndex, type XlsxStructuralEdit } from "./structural-edits";
-import { Workbook } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
+import { Workbook, type CellStyle, type ColorInput, type NumberFormatInput, type StyleInput } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import * as React from "react";
-import { coerceUserEnteredValue } from "./user-entry";
+import { cellInputText, enterUserText } from "./user-entry";
 import type {
   DrawingAnchor as DukeDrawingAnchor,
   DrawingColor as DukeDrawingColor,
@@ -63,7 +63,7 @@ import {
 } from "./comments";
 import { applyXlsxCut, captureXlsxCut, getXlsxInitialActiveCell } from "./selection-tools";
 import { safeCalculate, tryRecalculate } from "./safe-calculate";
-import { parseXlsxRange } from "./range-reference";
+import { cellAddressToA1, parseXlsxRange } from "./range-reference";
 import { canUseConfiguredWasmSourceInWorker, getSheetsWasmModule } from "./wasm";
 import { XlsxWorkerClient } from "./worker-client";
 import { normalizeWorkbookArrayBuffer } from "./zip-entry-names";
@@ -159,7 +159,7 @@ type SnapshotHistoryEntry = {
 
 type CellMutationState = {
   formula: string | null;
-  style: unknown;
+  style: CellStyle | null;
   value: unknown;
 };
 
@@ -390,11 +390,29 @@ export class XlsxFileSizeLimitExceededError extends Error {
 type HistoryEntry = SnapshotHistoryEntry | CellEditHistoryEntry | RangeEditHistoryEntry;
 
 type ClipboardMatrixCell = {
+  /**
+   * The cell's value (a number, text or boolean), pasted as it is; `value` is the text it shows.
+   * The system clipboard can carry a copy from an older build without it, which pastes `value`.
+   */
+  cellValue?: unknown;
   colOffset: number;
   formula: string | null;
+  /** Whether `cellValue` is a date serial, which moves by 1,462 days between date systems. */
+  isDate?: boolean;
+  /** The cell's number format, pasted with its value (missing in a copy from an older build). */
+  numberFormat?: NumberFormatInput;
   rowOffset: number;
   value: string;
 };
+
+/** A cell's number format (from its style, or the row or column style it shows) as a style patch. */
+function numberFormatInput(style: Record<string, unknown> | null): NumberFormatInput {
+  const format = style?.numberFormat as { formatType?: string; id?: number | null; formatString?: string } | undefined;
+  if (!format || (format.formatType !== "builtin" && format.formatType !== "custom")) return { formatType: "general" };
+  return format.formatType === "builtin" && typeof format.id === "number"
+    ? { formatType: "builtin", id: format.id }
+    : { formatType: "custom", formatString: format.formatString };
+}
 
 type ClipboardMerge = {
   colSpan: number;
@@ -406,6 +424,8 @@ type ClipboardMerge = {
 type ClipboardPayload = {
   cells: ClipboardMatrixCell[];
   cols: number;
+  /** The copied workbook's date system (missing in a copy from an older build). */
+  date1904?: boolean;
   merges: ClipboardMerge[];
   rows: number;
 };
@@ -733,20 +753,50 @@ function resolveInheritedCellStyle(sheet: XlsxSheetData | null | undefined, row:
   return null;
 }
 
-function columnLabel(col: number): string {
-  let label = "";
-  let nextValue = col;
-
-  while (nextValue >= 0) {
-    label = String.fromCharCode(65 + (nextValue % 26)) + label;
-    nextValue = Math.floor(nextValue / 26) - 1;
+/** A colour as styles.xml gives it ({ rgb, theme, tint, indexed }), as a style patch colour. */
+function toColorInput(value: unknown): ColorInput | undefined {
+  const color = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  if (typeof color?.rgb === "string") return { colorType: "rgb", hex: color.rgb };
+  if (typeof color?.theme === "number") {
+    return { colorType: "theme", themeIndex: color.theme, tint: typeof color.tint === "number" ? color.tint : undefined };
   }
-
-  return label;
+  if (typeof color?.indexed === "number") return { colorType: "indexed", paletteIndex: color.indexed };
+  return undefined;
 }
 
-function cellAddressToA1(cell: XlsxCellAddress): string {
-  return `${columnLabel(cell.col)}${cell.row + 1}`;
+/**
+ * The row or column style a cell without a style of its own shows, as a style patch: giving
+ * the cell a number format (typing a date, pasting) then keeps its font, fill, border and
+ * alignment. Pattern and gradient fills and text rotation aren't carried over.
+ */
+function inheritedStyleInput(
+  worksheet: ReturnType<Workbook["getSheet"]>,
+  sheet: XlsxSheetData | null | undefined,
+  cell: XlsxCellAddress
+): StyleInput {
+  const inherited = worksheet.getCellStyleAt(cell.row, cell.col) ? null : resolveInheritedCellStyle(sheet, cell.row, cell.col);
+  if (!inherited) return {};
+  const group = (value: unknown) => (value && typeof value === "object" ? (value as Record<string, unknown>) : {});
+  // Only the fields a style patch takes, of the type it takes them in.
+  const only = (source: Record<string, unknown>, fields: Record<string, "boolean" | "number" | "string">) =>
+    Object.fromEntries(Object.entries(fields).filter(([field, type]) => typeof source[field] === type).map(([field]) => [field, source[field]]));
+  const font = group(inherited.font);
+  const fill = group(inherited.fill);
+  const border = group(inherited.border);
+  const edge = (value: unknown) => {
+    const { style, color } = group(value);
+    return typeof style === "string" ? { color: toColorInput(color), style } : undefined;
+  };
+  const fillColor = fill.fillType === "solid" ? toColorInput(fill.color) : undefined;
+  return {
+    alignment: only(group(inherited.alignment), { horizontal: "string", indent: "number", shrinkToFit: "boolean", vertical: "string", wrapText: "boolean" }),
+    border: { bottom: edge(border.bottom), left: edge(border.left), right: edge(border.right), top: edge(border.top) },
+    fill: fillColor ? { color: fillColor, fillType: "solid" } : undefined,
+    font: {
+      ...only(font, { bold: "boolean", charset: "number", family: "number", italic: "boolean", name: "string", scheme: "string", size: "number", strikethrough: "boolean", underline: "string", verticalAlign: "string" }),
+      color: toColorInput(font.color)
+    }
+  } as StyleInput;
 }
 
 function parseA1CellReference(reference: string): XlsxCellAddress | null {
@@ -1351,8 +1401,11 @@ function applyCellMutationState(
     worksheet.setCell(cellAddressToA1(cell), normalizeCellValue(state.value));
   }
 
-  if (state.style && typeof state.style === "object") {
+  // A cell that had no style gets the default one back, dropping a format typing gave it.
+  if (state.style) {
     worksheet.setCellStyleAt(cell.row, cell.col, state.style);
+  } else {
+    worksheet.clearCellStyleAt(cell.row, cell.col);
   }
 }
 
@@ -3242,11 +3295,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     if (formula) return formula.startsWith("=") ? formula : `=${formula}`;
     const worksheet = getActiveWorksheet();
     if (!worksheet || !cell) return getCellDisplayValue(cell);
-    const value = worksheet.getCellAt(cell.row, cell.col);
-    if (value.is_empty) return "";
-    const text = value.toString();
-    if (value.is_text && (typeof coerceUserEnteredValue(text) !== "string" || text.startsWith("=") || text.startsWith("'"))) return `'${text}`;
-    return text;
+    return cellInputText(worksheet, cell);
   }, [getActiveWorksheet, getCellDisplayValue, getCellFormula]);
 
   const getClipboardData = React.useCallback((): XlsxClipboardData | null => {
@@ -3263,6 +3312,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     const payload: ClipboardPayload = {
       cells: [],
       cols: normalized.end.col - normalized.start.col + 1,
+      date1904: Boolean(workbook?.settings?.date1904),
       merges: [],
       rows: normalized.end.row - normalized.start.row + 1
     };
@@ -3352,9 +3402,13 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         const rowSpan = Math.min(merge?.rowSpan ?? 1, normalized.end.row - row + 1);
         const colSpan = Math.min(merge?.colSpan ?? 1, normalized.end.col - col + 1);
 
+        const formatKind = (rawStyle?.numberFormat as { kind?: string } | undefined)?.kind;
         payload.cells.push({
+          cellValue: worksheet.getCellAt(row, col).toJs(),
           colOffset: col - normalized.start.col,
           formula,
+          isDate: formatKind === "date" || formatKind === "time" || formatKind === "datetime",
+          numberFormat: numberFormatInput(rawStyle),
           rowOffset: row - normalized.start.row,
           value
         });
@@ -3383,7 +3437,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       structured: JSON.stringify(payload),
       text: rows.join("\n")
     };
-  }, [activeCell, cancelCut, getActiveWorksheet, getCellDisplayValue, selection]);
+  }, [activeCell, cancelCut, getActiveWorksheet, getCellDisplayValue, selection, workbook]);
 
   React.useEffect(() => {
     if (!isWorkerBacked || !deferredMetadataSheet || !deferredMetadataCell) {
@@ -4617,21 +4671,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       return;
     }
 
-    // An entry that starts with "=" is a formula, as in Excel; a leading
-    // apostrophe keeps it as text.
-    const entry = value.trim();
-    if (entry.length > 1 && entry.startsWith("=")) {
-      worksheet.setFormula(cellAddressToA1(cell), entry);
-    } else {
-      const parsed = coerceUserEnteredValue(value);
-      worksheet.setCell(cellAddressToA1(cell), parsed);
-      if (typeof parsed === "number" && entry.endsWith("%")) {
-        worksheet.setCellStyleAt(cell.row, cell.col, {
-          ...worksheet.getCellStyleAt(cell.row, cell.col),
-          numberFormat: { formatType: "custom", formatString: "0.##########%" }
-        });
-      }
-    }
+    enterUserText(worksheet, cell, value, inheritedStyleInput(worksheet, activeSheet, cell));
     const after = captureCellMutationState(cell);
     if (!after) {
       return;
@@ -4639,7 +4679,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     maybeRecalculateWorkbook(workbook);
     refreshWorkbookState(workbook);
     recordCellEditHistory(cell, before, after);
-  }, [captureCellMutationState, getActiveWorksheet, maybeRecalculateWorkbook, readOnly, recordCellEditHistory, refreshWorkbookState, workbook]);
+  }, [activeSheet, captureCellMutationState, getActiveWorksheet, maybeRecalculateWorkbook, readOnly, recordCellEditHistory, refreshWorkbookState, workbook]);
 
   const setCellFormula = React.useCallback((cell: XlsxCellAddress, formula: string) => {
     const worksheet = getActiveWorksheet();
@@ -4998,30 +5038,16 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         if (!before) {
           continue;
         }
-        if (rawValue.startsWith("=") && rawValue.length > 1) {
-          worksheet.setFormula(cellAddressToA1(nextCell), rawValue);
-          const after = captureCellMutationState(nextCell);
-          if (!after) {
-            continue;
-          }
-          mutations.push({
-            after,
-            before,
-            cell: nextCell
-          });
-        } else {
-          const nextValue = coerceUserEnteredValue(rawValue);
-          worksheet.setCell(cellAddressToA1(nextCell), nextValue);
-          const after = captureCellMutationState(nextCell);
-          if (!after) {
-            continue;
-          }
-          mutations.push({
-            after,
-            before,
-            cell: nextCell
-          });
+        enterUserText(worksheet, nextCell, rawValue, inheritedStyleInput(worksheet, activeSheet, nextCell));
+        const after = captureCellMutationState(nextCell);
+        if (!after) {
+          continue;
         }
+        mutations.push({
+          after,
+          before,
+          cell: nextCell
+        });
       }
     }
 
@@ -5039,7 +5065,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     selectionAnchorRef.current = targetCell;
     recordRangeEditHistory(mutations, nextRange, targetCell);
     return true;
-  }, [activeCell, captureCellMutationState, getActiveWorksheet, maybeRecalculateWorkbook, pastePendingCut, readOnly, recordRangeEditHistory, refreshWorkbookState, selection, workbook]);
+  }, [activeCell, activeSheet, captureCellMutationState, getActiveWorksheet, maybeRecalculateWorkbook, pastePendingCut, readOnly, recordRangeEditHistory, refreshWorkbookState, selection, workbook]);
 
   const pasteStructuredClipboardData = React.useCallback((serializedPayload: string) => {
     const worksheet = getActiveWorksheet();
@@ -5063,6 +5089,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     }
 
     const hasMergeOperations = Array.isArray(payload.merges) && payload.merges.some((merge) => (merge.rowSpan ?? 1) > 1 || (merge.colSpan ?? 1) > 1);
+    const targetDate1904 = Boolean(workbook.settings?.date1904);
     const mutations: RangeCellMutation[] = [];
     if (hasMergeOperations) {
       recordHistoryBeforeMutation();
@@ -5076,30 +5103,28 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
 
       if (cell.formula) {
         worksheet.setFormula(cellAddressToA1(nextCell), cell.formula);
-        if (before) {
-          const after = captureCellMutationState(nextCell);
-          if (!after) {
-            continue;
-          }
-          mutations.push({
-            after,
-            before,
-            cell: nextCell
-          });
-        }
+      } else if (typeof cell.cellValue === "number") {
+        // A date keeps the day it shows when the workbooks count days from different years.
+        const crossesSystems = cell.isDate && cell.cellValue >= 1 && payload.date1904 !== undefined && payload.date1904 !== targetDate1904;
+        const shift = crossesSystems ? (payload.date1904 ? 1462 : -1462) : 0;
+        worksheet.setCell(cellAddressToA1(nextCell), cell.cellValue + shift);
       } else {
-        worksheet.setCell(cellAddressToA1(nextCell), cell.value);
-        if (before) {
-          const after = captureCellMutationState(nextCell);
-          if (!after) {
-            continue;
-          }
-          mutations.push({
-            after,
-            before,
-            cell: nextCell
-          });
+        worksheet.setCell(cellAddressToA1(nextCell), cell.cellValue !== undefined ? cell.cellValue : cell.value);
+      }
+      if (cell.numberFormat) {
+        const style = { ...inheritedStyleInput(worksheet, activeSheet, nextCell), numberFormat: cell.numberFormat };
+        worksheet.setCellStyle(cellAddressToA1(nextCell), style);
+      }
+      if (before) {
+        const after = captureCellMutationState(nextCell);
+        if (!after) {
+          continue;
         }
+        mutations.push({
+          after,
+          before,
+          cell: nextCell
+        });
       }
     }
 
@@ -5141,6 +5166,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     return true;
   }, [
     activeCell,
+    activeSheet,
     captureCellMutationState,
     getActiveWorksheet,
     maybeRecalculateWorkbook,

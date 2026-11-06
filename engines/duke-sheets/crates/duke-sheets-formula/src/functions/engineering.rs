@@ -780,11 +780,7 @@ fn parse_complex(s: &str) -> Option<(f64, f64, &str)> {
 
 /// A complex number as text, with the regional decimal separator.
 fn format_complex(real: f64, imag: f64, suffix: &str) -> String {
-    let text = format_complex_with_point(real, imag, suffix);
-    match crate::regional::current().decimal_separator {
-        '.' => text,
-        decimal => text.replace('.', &decimal.to_string()),
-    }
+    duke_sheets_core::with_decimal_separator(format_complex_with_point(real, imag, suffix), crate::regional::current().decimal_separator)
 }
 
 fn format_complex_with_point(real: f64, imag: f64, suffix: &str) -> String {

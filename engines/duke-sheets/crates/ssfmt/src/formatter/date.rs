@@ -4,7 +4,7 @@ use crate::ast::{AmPmStyle, DatePart, ElapsedPart, FormatPart, Section};
 use crate::date_serial::{serial_to_date, serial_to_weekday};
 use crate::error::FormatError;
 use crate::locale::Locale;
-use crate::options::FormatOptions;
+use crate::options::{DateSystem, FormatOptions};
 
 /// Format a value as a date/time using the given section.
 pub fn format_date(
@@ -12,9 +12,9 @@ pub fn format_date(
     section: &Section,
     opts: &FormatOptions,
 ) -> Result<String, FormatError> {
-    // SSF returns empty string for out-of-range dates (< 0 or > 2958465)
+    // SSF returns empty string for out-of-range dates (< 0 or after 31 December 9999)
     // This matches Excel's behavior - see bits/35_datecode.js line 2
-    if !(0.0..=2958465.0).contains(&value) {
+    if !(0.0..=opts.date_system.last_serial()).contains(&value) {
         return Ok(String::new());
     }
 
@@ -42,7 +42,8 @@ pub fn format_date(
 
     // Get date components
     // For time-only values (serial < 1), use a default date since we only need time
-    let (mut year, mut month, mut day) = if value >= 1.0 {
+    // Day 0 is 1 January 1904 in the 1904 system, but has no date in the 1900 one.
+    let (mut year, mut month, mut day) = if value >= 1.0 || opts.date_system == DateSystem::Date1904 {
         serial_to_date(value, opts.date_system)
             .ok_or(FormatError::DateOutOfRange { serial: value })?
     } else {
@@ -54,7 +55,8 @@ pub fn format_date(
     // Apply Hijri calendar conversion if B2 prefix is used
     // Use the Kuwaiti algorithm for proper date conversion
     if is_hijri {
-        let days = value.floor() as i64;
+        // Days 0 and 60 have no Gregorian date in the 1900 system only.
+        let days = if opts.date_system == DateSystem::Date1900 { value.floor() as i64 } else { -1 };
         if days == 60 {
             // Special case for Excel's fake leap day (Feb 29, 1900)
             // This date doesn't exist in the Gregorian calendar
@@ -111,8 +113,17 @@ pub fn format_date(
     // Build the formatted string
     let mut result = String::new();
 
-    for part in &section.parts {
+    for (i, part) in section.parts.iter().enumerate() {
         match part {
+            // The decimal point of fractional seconds (ss.0) is the regional one. The parser
+            // writes it as Literal(".") right before the SubSecond part; every other `.` in a
+            // date format is a DecimalPoint, written as a period below.
+            FormatPart::Literal(s)
+                if s == "."
+                    && matches!(section.parts.get(i + 1), Some(FormatPart::DatePart(DatePart::SubSecond(_)))) =>
+            {
+                result.push(opts.locale.decimal_separator);
+            }
             FormatPart::DatePart(date_part) => {
                 let formatted = format_date_part(
                     *date_part,
@@ -149,14 +160,10 @@ pub fn format_date(
                 // Fill characters are handled at a higher level
                 // For now, just skip
             }
-            FormatPart::ThousandsSeparator => {
-                // In date formats, the thousands separator (,) is just a literal comma
-                result.push(opts.locale.thousands_separator);
-            }
-            FormatPart::DecimalPoint => {
-                // In date formats, the decimal point is just a literal
-                result.push(opts.locale.decimal_separator);
-            }
+            // In a date format a comma or period is the character itself, whatever the regional
+            // separators (dd.mm.yyyy, mmm d, yyyy).
+            FormatPart::ThousandsSeparator => result.push(','),
+            FormatPart::DecimalPoint => result.push('.'),
             _ => {
                 // Other parts (e.g., numeric) are not expected in date formats
                 // but we'll ignore them silently

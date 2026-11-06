@@ -688,8 +688,37 @@ export interface FormControlInteractionResult {
   linkedCellsChanged: number;
 }
 
+/** A cell's number format, as getCellStyle gives it. */
+export interface CellNumberFormat {
+  formatType: "general" | "builtin" | "custom";
+  id: number | null;
+  formatString: string;
+  isDateFormat: boolean;
+  /** What the format shows a number as; a cell with a "text" format keeps what is typed as text. */
+  kind: "general" | "number" | "percent" | "date" | "time" | "datetime" | "duration" | "text";
+}
+
+/** A cell's style, as getCellStyle gives it. */
+export type CellStyle = {
+  font: Record<string, unknown>;
+  fill: Record<string, unknown>;
+  border: Record<string, unknown>;
+  alignment: Record<string, unknown>;
+  numberFormat: CellNumberFormat;
+  protection: { locked: boolean; hidden: boolean };
+};
+
+/** A number read from text typed into a cell, and the format the cell gets when it should change. */
+export interface TypedNumber {
+  value: number;
+  numberFormat?: NumberFormatInput;
+}
+
 export interface Worksheet {
   iterateRows(opts?: JsRowsOptions): RowIterator;
+  getCellStyle(address: string): CellStyle | null;
+  getCellStyleAt(row: number, col: number): CellStyle | null;
+  readTypedNumberAt(row: number, col: number, text: string): TypedNumber | undefined;
   setCellStyle(address: string, style: StyleInput): void;
   setCellStyleAt(row: number, col: number, style: StyleInput): void;
   setRangeStyle(range: string, style: StyleInput): void;
@@ -940,6 +969,51 @@ impl Worksheet {
             .map_err(|e| JsError::new(&format!("Invalid cell address: {}", e)))?;
         ws.set_cell_value_at(addr.row, addr.col, cell_value)
             .map_err(to_js_error)
+    }
+
+    /// What text typed into the cell stands for, read in the workbook's settings as Excel reads
+    /// it (`5/11/2026` is 5 November in en-GB, `1,5` is 1.5 in de-DE): the number, and the format
+    /// the cell gets when its own one is of another kind; `undefined` when the text stays text
+    /// (duke_sheets_formula::coerce::typed_number).
+    #[wasm_bindgen(skip_typescript, js_name = readTypedNumberAt)]
+    pub fn read_typed_number_at(&self, row: u32, col: u32, text: &str) -> Result<JsValue, JsError> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct BuiltInFormat {
+            format_type: &'static str,
+            id: u32,
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct TypedNumber {
+            value: f64,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            number_format: Option<BuiltInFormat>,
+        }
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        let current = ws.cell_style_at(row, col as u16).map(|style| &style.number_format);
+        let typed = duke_sheets_formula::coerce::typed_number(text, wb.settings(), current.unwrap_or(&duke_sheets_core::NumberFormat::General));
+        match typed {
+            Some((value, format)) => {
+                let number_format = format.map(|id| BuiltInFormat { format_type: "builtin", id });
+                to_js_value(&TypedNumber { value, number_format })
+            }
+            None => Ok(JsValue::UNDEFINED),
+        }
+    }
+
+    /// Gives the cell the default style, as a cell that was never styled has.
+    #[wasm_bindgen(js_name = clearCellStyleAt)]
+    pub fn clear_cell_style_at(&self, row: u32, col: u32) -> Result<(), JsError> {
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        ws.clear_cell_style_at(row, col as u16);
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = setFormula)]
@@ -1200,11 +1274,10 @@ thread_local! {
     static REGIONAL: std::cell::Cell<duke_sheets_core::RegionalSettings> = Default::default();
 }
 
-/// Sets the regional settings formulas compute with in workbooks opened or created from now on,
-/// from a language tag such as `en-GB` (the browser's `navigator.language`): the order of day and
-/// month in dates written as text, the language of TEXT's month and day names and date codes, and
-/// the decimal separator. The default is en-US. The grid's own number display doesn't follow it
-/// yet.
+/// Sets the regional settings of workbooks opened or created from now on, from a language tag
+/// such as `en-GB` (the browser's `navigator.language`): the order of day and month in dates
+/// written as text or typed, the language of month and day names and of TEXT's date codes, the
+/// separators numbers are read and shown with, and the short date. The default is en-US.
 #[wasm_bindgen(js_name = setLocale)]
 pub fn set_locale(tag: &str) {
     REGIONAL.with(|r| r.set(duke_sheets_core::RegionalSettings::from_tag(tag)));
