@@ -2052,8 +2052,7 @@ pub struct WasmHyperlinkEntry {
     pub hyperlink: WasmHyperlink,
 }
 
-/// A Ctrl+Shift+Enter array formula: its top-left cell, extent, formula and the values its cells
-/// show, which `setArrayFormula` takes back.
+/// A Ctrl+Shift+Enter array formula: its top-left cell, extent and formula.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmArrayFormula {
@@ -2062,7 +2061,6 @@ pub struct WasmArrayFormula {
     pub rows: u32,
     pub cols: u32,
     pub formula: String,
-    pub values: Vec<Vec<WasmBlockValue>>,
 }
 
 /// A value an array formula's cell shows: `null` when blank, an error as `{ error: "#N/A" }`.

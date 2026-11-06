@@ -296,6 +296,18 @@ fn xlookup_target(
     let Some(Ok((sheet, range))) = reference_of(returned, ctx)? else {
         return Ok(None);
     };
+    // An error in the lookup value comes first, as in XLOOKUP. A single value is handed to
+    // XMATCH as it is, so it is read once.
+    let wanted = evaluate(lookup, ctx)?;
+    if let FormulaValue::Error(e) = wanted {
+        return Ok(Some(Err(e)));
+    }
+    let lookup = match wanted {
+        FormulaValue::Number(n) => FormulaExpr::Number(n),
+        FormulaValue::String(text) => FormulaExpr::String(text),
+        FormulaValue::Boolean(b) => FormulaExpr::Boolean(b),
+        _ => lookup.clone(),
+    };
     // The lookup array's shape, read once: a reference's, or its value's.
     let (looked_in, (rows, cols)) = match reference_of(lookup_array, ctx)? {
         Some(Ok((_, r))) => (None, (r.row_count() as usize, r.col_count() as usize)),
@@ -304,6 +316,7 @@ fn xlookup_target(
             let value = evaluate(lookup_array, ctx)?;
             let shape = match &value {
                 FormulaValue::Array { data, .. } => crate::array_lift::dims(data),
+                FormulaValue::Error(e) => return Ok(Some(Err(*e))),
                 _ => (1, 1),
             };
             (Some(value), shape)
@@ -315,7 +328,7 @@ fn xlookup_target(
     if (rows > 1 && cols > 1) || !fits {
         return Ok(Some(Err(CellError::Value)));
     }
-    let mut xmatch = vec![lookup.clone(), lookup_array.clone()];
+    let mut xmatch = vec![lookup, lookup_array.clone()];
     xmatch.extend(rest.iter().skip(1).cloned());
     let position = match (looked_in, crate::functions::registry().get("XMATCH")) {
         (Some(value), Some(def)) => {

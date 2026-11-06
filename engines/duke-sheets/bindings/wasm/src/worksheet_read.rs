@@ -796,7 +796,7 @@ impl Worksheet {
     }
 
     /// The Ctrl+Shift+Enter array formula whose block holds the cell, as
-    /// `{ row, col, rows, cols, formula, values }` for its top-left cell, or `null`.
+    /// `{ row, col, rows, cols, formula }` for its top-left cell, or `null`.
     #[wasm_bindgen(js_name = arrayFormulaAt)]
     pub fn array_formula_at(&self, row: u32, col: u32) -> Result<JsValue, JsError> {
         let wb = self.workbook.borrow();
@@ -813,14 +813,31 @@ impl Worksheet {
                     .get_formula_at(block.start.row, block.start.col)
                     .unwrap_or_default()
                     .to_string(),
-                values: (block.start.row..=block.end.row)
+            }),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    /// The values the cells of the Ctrl+Shift+Enter array formula whose block holds the cell show,
+    /// row by row, as `setArrayFormula` takes them back: `null` when blank, an error as
+    /// `{ error: "#N/A" }`. `null` when the cell isn't in a block.
+    #[wasm_bindgen(js_name = arrayFormulaValuesAt)]
+    pub fn array_formula_values_at(&self, row: u32, col: u32) -> Result<JsValue, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        match ws.array_formula_block(row, col as u16) {
+            Some(block) => {
+                let values: Vec<Vec<WasmBlockValue>> = (block.start.row..=block.end.row)
                     .map(|r| {
                         (block.start.col..=block.end.col)
                             .map(|c| WasmBlockValue::of(ws.get_value_at_ref(r, c)))
                             .collect()
                     })
-                    .collect(),
-            }),
+                    .collect();
+                to_js_value(&values)
+            }
             None => Ok(JsValue::NULL),
         }
     }

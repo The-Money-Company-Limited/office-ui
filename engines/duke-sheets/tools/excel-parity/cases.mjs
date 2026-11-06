@@ -404,6 +404,7 @@ export const cases = [
   ["INDEX of a name with an array of rows", { ...n3, "name:Prices": "Sheet1!$A$1:$A$3" }, "=SUM(INDEX(Prices,SEQUENCE(2)))", 3],
   ["@ on IF's array", n3, "=@IF(TRUE,A1:A3*2,0)", 2],
   ["@ on XLOOKUP with a shorter return range", { ...n3, B1: 10, B2: 20, B3: 30 }, "=@XLOOKUP(3,A1:A3,B1:B2)", "#VALUE!"],
+  ["@ on XLOOKUP gives its lookup value's error first", { ...n3, B1: 10, B2: 20 }, "=@XLOOKUP(1/0,A1:A3,B1:B2)", "#DIV/0!"],
   ["@ on XLOOKUP in a row of constants", { B1: 10, C1: 20, D1: 30 }, "=@XLOOKUP(2,{1,2,3},B1:D1)", 20],
   ["COLUMN of XLOOKUP in a row of constants", {}, "=COLUMN(XLOOKUP(2,{1,2,3},B1:D1))", 3],
   ["COUNTIF of OFFSET ranges with array criteria", n3, "=SUM(COUNTIF(OFFSET(A1:A3,0,{0,0}),{1;2}))", 4],

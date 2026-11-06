@@ -1026,7 +1026,7 @@ impl Worksheet {
     }
 
     /// Puts back a Ctrl+Shift+Enter array formula from `address`, as undo does: `values` are the
-    /// ones `arrayFormulaAt` gave, which its cells show until it is calculated.
+    /// ones `arrayFormulaValuesAt` gave, which its cells show until it is calculated.
     #[wasm_bindgen(js_name = setArrayFormula)]
     pub fn set_array_formula(
         &self,

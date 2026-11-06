@@ -65,6 +65,19 @@ describe("undo and redo of a Ctrl+Shift+Enter array formula", () => {
     assert.equal(sheet.arrayFormulaAt(1, 2)?.rows, 3);
   });
 
+  it("reads a block once for all of a range edit's cells", () => {
+    const { workbook, sheet } = workbookWithBlock();
+    const blocks = new Map();
+    const cells = [0, 1, 2].map((row) => ({ row, col: 2 }));
+    const mutations = cells.map((cell) => ({ cell, before: captureCellMutationState(sheet, cell, blocks) }));
+    assert.equal(blocks.size, 1);
+    assert.ok(mutations.every(({ before }) => before.arrayFormula === mutations[0].before.arrayFormula));
+    sheet.setCell("C2", 9);
+    applyCellMutationStates(sheet, mutations.map(({ cell, before }) => ({ cell, state: before })), "undo");
+    workbook.calculate();
+    assert.deepEqual([value(sheet, 0, 2), value(sheet, 1, 2), value(sheet, 2, 2)], [2, 4, 6]);
+  });
+
   it("shows the block's values before the workbook is calculated", () => {
     // A large workbook isn't calculated after undo.
     const { workbook, sheet } = workbookWithBlock();
