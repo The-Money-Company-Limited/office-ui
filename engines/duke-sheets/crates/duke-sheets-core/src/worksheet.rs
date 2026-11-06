@@ -20,7 +20,6 @@ use crate::drawing::{
 use crate::error::{Error, Result};
 use crate::form_control::{radio_groups, CheckState, FormControl, FormControlKind};
 use crate::hyperlink::Hyperlink;
-use crate::locale::Locale;
 use crate::protection::{hash_legacy_protection_password, ProtectedRange};
 use crate::style::Style;
 use crate::table::Table;
@@ -86,12 +85,6 @@ pub struct Worksheet {
     /// Date system: false = 1900 (Windows default), true = 1904 (Mac legacy).
     /// Copied from WorkbookSettings during reading so cells can format dates.
     date_1904: bool,
-    /// Locale for formatting (decimal separators, month names, currency, etc.).
-    /// Defaults to en-US. Affects how built-in format IDs render; custom format
-    /// strings with `[$-XXXX]` locale prefixes override this per-cell.
-    locale: Locale,
-    /// Cached ssfmt locale (rebuilt on set_locale).
-    ssfmt_locale: ssfmt::Locale,
     /// Mutation generation counter - incremented on user-facing cell/formula edits.
     /// The calculation engine uses this to detect stale caches.
     mutation_count: u64,
@@ -129,8 +122,6 @@ impl Clone for Worksheet {
             row_breaks: self.row_breaks.clone(),
             col_breaks: self.col_breaks.clone(),
             date_1904: self.date_1904,
-            locale: self.locale.clone(),
-            ssfmt_locale: self.ssfmt_locale.clone(),
             mutation_count: self.mutation_count,
             topology_generation: self.topology_generation,
             dirty_value_ranges: self.dirty_value_ranges.clone(),
@@ -197,8 +188,6 @@ impl Worksheet {
             row_breaks: Vec::new(),
             col_breaks: Vec::new(),
             date_1904: false,
-            locale: Locale::en_us(),
-            ssfmt_locale: ssfmt::Locale::en_us(),
             mutation_count: 0,
             topology_generation: 0,
             dirty_value_ranges: Vec::new(),
@@ -492,17 +481,6 @@ impl Worksheet {
         self.date_1904 = date_1904;
     }
 
-    /// Get the locale used for cell formatting.
-    pub fn locale(&self) -> &Locale {
-        &self.locale
-    }
-
-    /// Set the locale used for cell formatting.
-    pub fn set_locale(&mut self, locale: Locale) {
-        self.ssfmt_locale = locale.to_ssfmt();
-        self.locale = locale;
-    }
-
     /// Get a cell value by address string (e.g., "A1")
     pub fn cell(&self, address: &str) -> Result<Option<&CellData>> {
         let addr = CellAddress::parse(address)?;
@@ -615,7 +593,9 @@ impl Worksheet {
     ///
     /// The view provides access to the cell's value, style, and a
     /// [`formatted()`](CellView::formatted) method that applies the cell's
-    /// number format to produce a display string.
+    /// number format to produce a display string. It formats in en-US;
+    /// [`with_regional`](CellView::with_regional) formats in other regional settings, such as the
+    /// workbook's (`settings().regional`).
     ///
     /// Returns a view with `CellValue::Empty` for cells that don't exist.
     pub fn cell_view_at(&self, row: u32, col: u16) -> CellView<'_> {
@@ -630,7 +610,7 @@ impl Worksheet {
             }
             None => (&CellValue::Empty, None),
         };
-        CellView::new(value, style, self.date_1904, &self.ssfmt_locale)
+        CellView::new(value, style, self.date_1904)
     }
 
     /// Get a [`CellView`] for the cell at the given address string (e.g., "A1").
@@ -645,7 +625,7 @@ impl Worksheet {
     /// `self.cell_view_at(row, col).formatted()`.
     ///
     /// Numbers are formatted according to the cell's number format (percentages,
-    /// dates, currencies, etc.). Strings, booleans, and errors display as-is.
+    /// dates, currencies, etc.), in en-US. Strings, booleans, and errors display as-is.
     pub fn formatted_value_at(&self, row: u32, col: u16) -> String {
         self.cell_view_at(row, col).formatted()
     }

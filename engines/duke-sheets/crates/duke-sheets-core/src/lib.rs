@@ -35,7 +35,6 @@ pub mod drawing;
 pub mod error;
 pub mod form_control;
 pub mod hyperlink;
-pub mod locale;
 pub mod named_range;
 pub mod protection;
 pub mod range;
@@ -78,7 +77,6 @@ pub use form_control::{
     FormControlKind, ListSelection, PlacedControl,
 };
 pub use hyperlink::Hyperlink;
-pub use locale::Locale;
 pub use protection::{hash_legacy_protection_password, ProtectedRange, WorkbookProtection};
 pub use regional::{DateOrder, Language, RegionalSettings};
 pub use rich_text::{rich_text_to_plain, RichTextRun, RunFont};

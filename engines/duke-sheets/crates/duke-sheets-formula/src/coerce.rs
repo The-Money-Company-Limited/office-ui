@@ -7,7 +7,7 @@
 use std::borrow::Cow;
 
 use chrono::{Datelike, NaiveDate};
-use duke_sheets_core::DateOrder;
+use duke_sheets_core::{DateOrder, NumberFormat, RegionalSettings};
 
 use crate::regional::month_named;
 
@@ -20,6 +20,34 @@ pub fn text_to_number(text: &str) -> Option<f64> {
     plain_number(text)
         .or_else(|| date_time(text))
         .filter(|n| n.is_finite())
+}
+
+/// What text typed into a cell stands for, read in `settings` as Excel reads it: the number, and
+/// the built-in format Excel gives a typed date or time. A date gets the short date (14), a time
+/// h:mm or h:mm:ss (20, 21; 18, 19 with AM/PM) as typed, and a date with a time 22. `None` when
+/// the text isn't a number, date or time. Dates are 1900-system serials.
+pub fn typed_number(text: &str, settings: RegionalSettings) -> Option<(f64, Option<u32>)> {
+    let _restore = crate::regional::make_current(settings);
+    let text = text.trim();
+    if let Some(number) = plain_number(text).filter(|n| n.is_finite()) {
+        return Some((number, None));
+    }
+    if let Some(day) = date(text) {
+        return Some((day, Some(NumberFormat::ID_DATE_SHORT)));
+    }
+    if let Some(time) = time_of_day(text) {
+        let seconds = text.matches(':').count() == 2;
+        let twelve_hour = text.to_ascii_lowercase().ends_with(['a', 'm', 'p']);
+        let format = match (twelve_hour, seconds) {
+            (true, false) => NumberFormat::ID_TIME_AMPM,
+            (true, true) => NumberFormat::ID_TIME_AMPM_SEC,
+            (false, false) => NumberFormat::ID_TIME_24H,
+            (false, true) => NumberFormat::ID_TIME_24H_SEC,
+        };
+        return Some((time, Some(format)));
+    }
+    let (day, time) = split_date_time(text)?;
+    Some((day + time, Some(NumberFormat::ID_DATETIME)))
 }
 
 /// `1234`, `-1,234.5`, `1.2E+3`, `$1,234`, `(5)`, `12%`, `+3`.
@@ -345,5 +373,30 @@ mod tests {
             assert_eq!(text_to_number("13.3.2024"), Some(45364.0));
             assert_eq!(text_to_number("1,5"), None);
         });
+    }
+
+    #[test]
+    fn reads_typed_entries_in_the_regional_settings() {
+        use super::typed_number;
+        use duke_sheets_core::RegionalSettings;
+        let typed = |tag: &str, text: &str| typed_number(text, RegionalSettings::from_tag(tag));
+        // 46331 is 5 November 2026, 46153 is 11 May 2026.
+        assert_eq!(typed("en-GB", "5/11/2026"), Some((46331.0, Some(14))));
+        assert_eq!(typed("en-US", "5/11/2026"), Some((46153.0, Some(14))));
+        assert_eq!(typed("de-DE", "5.11.2026"), Some((46331.0, Some(14))));
+        assert_eq!(typed("en-GB", "5/11/2026 13:30"), Some((46331.5625, Some(22))));
+        assert_eq!(typed("en-US", "13:30"), Some((0.5625, Some(20))));
+        assert_eq!(typed("en-US", "13:30:00"), Some((0.5625, Some(21))));
+        assert_eq!(typed("en-US", "1:30 PM"), Some((0.5625, Some(18))));
+        assert_eq!(typed("en-US", "1:30:00 pm"), Some((0.5625, Some(19))));
+        assert_eq!(typed("de-DE", "1,5"), Some((1.5, None)));
+        assert_eq!(typed("de-DE", "1.234,5"), Some((1234.5, None)));
+        assert_eq!(typed("en-US", "1,5"), None);
+        assert_eq!(typed("en-US", " 1,234.5 "), Some((1234.5, None)));
+        assert_eq!(typed("en-US", "12%"), Some((0.12, None)));
+        assert_eq!(typed("en-US", "-2e3"), Some((-2000.0, None)));
+        assert_eq!(typed("en-US", "text"), None);
+        // The settings are current only while the text is read.
+        assert_eq!(text_to_number("1,5"), None);
     }
 }

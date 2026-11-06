@@ -1,5 +1,9 @@
 //! Number format types
 
+use std::borrow::Cow;
+
+use crate::RegionalSettings;
+
 /// Number format for cell display
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum NumberFormat {
@@ -39,7 +43,7 @@ impl NumberFormat {
     pub const ID_FRACTION: u32 = 12;
     /// 13 - # ??/??
     pub const ID_FRACTION2: u32 = 13;
-    /// 14 - mm-dd-yy
+    /// 14 - the short date (m/d/yyyy in en-US)
     pub const ID_DATE_SHORT: u32 = 14;
     /// 15 - d-mmm-yy
     pub const ID_DATE_MEDIUM: u32 = 15;
@@ -55,7 +59,7 @@ impl NumberFormat {
     pub const ID_TIME_24H: u32 = 20;
     /// 21 - h:mm:ss
     pub const ID_TIME_24H_SEC: u32 = 21;
-    /// 22 - m/d/yy h:mm
+    /// 22 - the short date with the time (m/d/yyyy h:mm in en-US)
     pub const ID_DATETIME: u32 = 22;
     /// 37 - #,##0 ;(#,##0)
     pub const ID_ACCOUNTING_INT: u32 = 37;
@@ -113,7 +117,7 @@ impl NumberFormat {
         NumberFormat::BuiltIn(Self::ID_SCIENTIFIC)
     }
 
-    /// Short date (mm-dd-yy)
+    /// Short date (m/d/yyyy in en-US)
     pub fn date_short() -> Self {
         NumberFormat::BuiltIn(Self::ID_DATE_SHORT)
     }
@@ -123,7 +127,7 @@ impl NumberFormat {
         NumberFormat::BuiltIn(Self::ID_TIME_AMPM)
     }
 
-    /// Date and time (m/d/yy h:mm)
+    /// Date and time (m/d/yyyy h:mm in en-US)
     pub fn datetime() -> Self {
         NumberFormat::BuiltIn(Self::ID_DATETIME)
     }
@@ -142,7 +146,17 @@ impl NumberFormat {
         }
     }
 
-    /// Get built-in format string by ID
+    /// The code a cell with this format displays with in `regional`: Excel shows the built-in
+    /// short date (14) and date with time (22) in the computer's date order.
+    pub fn display_code(&self, regional: &RegionalSettings) -> Cow<'_, str> {
+        match self {
+            NumberFormat::BuiltIn(Self::ID_DATE_SHORT) => regional.short_date_code().into(),
+            NumberFormat::BuiltIn(Self::ID_DATETIME) => regional.date_time_code().into(),
+            _ => self.format_string().into(),
+        }
+    }
+
+    /// Get built-in format string by ID (14 and 22 as Excel writes them in en-US)
     ///
     /// Reference: ECMA-376 Section 18.8.30 (numFmt), plus the implicit
     /// built-in formats defined by the spec and Microsoft documentation.
@@ -162,7 +176,7 @@ impl NumberFormat {
             11 => "0.00E+00",
             12 => "# ?/?",
             13 => "# ??/??",
-            14 => "mm-dd-yy",
+            14 => "m/d/yyyy",
             15 => "d-mmm-yy",
             16 => "d-mmm",
             17 => "mmm-yy",
@@ -170,7 +184,7 @@ impl NumberFormat {
             19 => "h:mm:ss AM/PM",
             20 => "h:mm",
             21 => "h:mm:ss",
-            22 => "m/d/yy h:mm",
+            22 => "m/d/yyyy h:mm",
             37 => "#,##0_);(#,##0)",
             38 => "#,##0_);[Red](#,##0)",
             39 => "#,##0.00_);(#,##0.00)",

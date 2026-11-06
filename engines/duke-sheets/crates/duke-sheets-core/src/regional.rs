@@ -1,8 +1,8 @@
-//! The regional settings formulas compute with, as Excel takes them from the computer it runs
-//! on: whether `5/11/2026` is 5 November or May 11, the language `TEXT` names months and days in,
-//! and the decimal separator in text such as `"1,5"`. A file doesn't record them, so the host sets
-//! them (the editor, from the browser's language). The grid's own number display doesn't follow
-//! them yet (COD-1800).
+//! The regional settings Excel takes from the computer it runs on: whether `5/11/2026` is
+//! 5 November or May 11, the language months and days are named in, and the decimal separator
+//! (`1,5`). Formulas compute with them, typed entries are read with them, and cells display with
+//! them. A file doesn't record them, so the host sets them (the editor, from the browser's
+//! language).
 
 /// The language of month and day names, and of the date codes in a `TEXT` format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -30,7 +30,7 @@ pub enum DateOrder {
     YearFirst,
 }
 
-/// Regional settings for formulas. The default is en-US.
+/// Regional settings. The default is en-US.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegionalSettings {
     pub language: Language,
@@ -164,6 +164,26 @@ impl RegionalSettings {
         };
         ssfmt::Locale { decimal_separator: self.decimal_separator, thousands_separator: self.thousands_separator, ..named }
     }
+
+    /// The computer's short date, which Excel shows its built-in short date format (14) with:
+    /// `11/5/2026` in en-US, `05/11/2026` in en-GB, `05.11.2026` in de-DE, `2026-11-05` in sv-SE.
+    pub fn short_date_code(&self) -> String {
+        let s = match self.date_separator {
+            c @ ('/' | '-') => c.to_string(),
+            c => format!("\\{c}"),
+        };
+        match self.date_order {
+            DateOrder::MonthFirst => format!("m{s}d{s}yyyy"),
+            DateOrder::DayFirst => format!("dd{s}mm{s}yyyy"),
+            DateOrder::YearFirst => format!("yyyy{s}mm{s}dd"),
+        }
+    }
+
+    /// The short date with the time, which Excel shows its built-in date-with-time format (22) with.
+    pub fn date_time_code(&self) -> String {
+        let hours = if self.date_order == DateOrder::MonthFirst { "h" } else { "hh" };
+        format!("{} {hours}:mm", self.short_date_code())
+    }
 }
 
 #[cfg(test)]
@@ -193,5 +213,14 @@ mod tests {
         assert_eq!(RegionalSettings::from_tag("cs-CZ").decimal_separator, ',');
         assert_eq!(RegionalSettings::from_tag("es-ES").format_locale().month_names_full[0], "enero");
         assert_eq!(RegionalSettings::from_tag("zh-Hans-CN").date_order, DateOrder::YearFirst);
+    }
+
+    #[test]
+    fn writes_the_short_date_in_the_date_order() {
+        let code = |tag: &str| (RegionalSettings::from_tag(tag).short_date_code(), RegionalSettings::from_tag(tag).date_time_code());
+        assert_eq!(code("en-US"), ("m/d/yyyy".into(), "m/d/yyyy h:mm".into()));
+        assert_eq!(code("en-GB"), ("dd/mm/yyyy".into(), "dd/mm/yyyy hh:mm".into()));
+        assert_eq!(code("de-DE"), (r"dd\.mm\.yyyy".into(), r"dd\.mm\.yyyy hh:mm".into()));
+        assert_eq!(code("sv-SE").0, "yyyy-mm-dd");
     }
 }

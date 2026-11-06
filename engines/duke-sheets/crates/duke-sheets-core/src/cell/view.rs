@@ -2,8 +2,8 @@
 //! a cell's value, style, and formatted display string.
 
 use crate::cell::value::CellValue;
-use crate::locale::Locale;
 use crate::style::{NumberFormat, Style};
+use crate::RegionalSettings;
 
 /// A read-only view of a cell, providing access to its value, style,
 /// and formatted display string.
@@ -22,23 +22,24 @@ pub struct CellView<'a> {
     value: &'a CellValue,
     style: Option<&'a Style>,
     date_1904: bool,
-    locale: &'a ssfmt::Locale,
+    regional: RegionalSettings,
 }
 
 impl<'a> CellView<'a> {
-    /// Create a new cell view.
-    pub(crate) fn new(
-        value: &'a CellValue,
-        style: Option<&'a Style>,
-        date_1904: bool,
-        locale: &'a ssfmt::Locale,
-    ) -> Self {
+    /// Create a new cell view, formatting in en-US.
+    pub(crate) fn new(value: &'a CellValue, style: Option<&'a Style>, date_1904: bool) -> Self {
         Self {
             value,
             style,
             date_1904,
-            locale,
+            regional: RegionalSettings::default(),
         }
+    }
+
+    /// The view formatting in these regional settings (the workbook's, `settings().regional`):
+    /// their separators, month and day names, and short date.
+    pub fn with_regional(self, regional: RegionalSettings) -> Self {
+        Self { regional, ..self }
     }
 
     /// The cell's value.
@@ -67,16 +68,31 @@ impl<'a> CellView<'a> {
     /// - Strings, booleans, and errors display as-is
     /// - Empty cells return an empty string
     pub fn formatted(&self) -> String {
-        format_cell_value_inner(
-            self.value,
-            self.number_format(),
-            self.date_1904,
-            self.locale,
-        )
+        format_cell_value(self.value, self.number_format(), self.date_1904, &self.regional)
+    }
+
+    /// The value as text to edit, which typed back unchanged gives the same value: a number with
+    /// the regional decimal separator, and in a date or time format the short date and the time
+    /// (`05/11/2026 13:30:00`), as Excel's formula bar shows it. Other values show as they are.
+    pub fn input_text(&self) -> String {
+        let CellValue::Number(n) = *self.value.effective_value() else {
+            return format_cell_value(self.value, &NumberFormat::General, self.date_1904, &self.regional);
+        };
+        if !self.number_format().is_date_format() || n < 0.0 {
+            return n.to_string().replace('.', &self.regional.decimal_separator.to_string());
+        }
+        let code = if n < 1.0 {
+            "h:mm:ss".to_string()
+        } else if n.fract() == 0.0 {
+            self.regional.short_date_code()
+        } else {
+            format!("{} h:mm:ss", self.regional.short_date_code())
+        };
+        format_number(n, &NumberFormat::Custom(code), self.date_1904, &self.regional)
     }
 }
 
-/// Format a cell value using the given number format, date system, and locale.
+/// Format a cell value using the given number format, date system, and regional settings.
 ///
 /// This is the standalone version of [`CellView::formatted`], useful when
 /// you have the value and format separately.
@@ -84,24 +100,12 @@ pub fn format_cell_value(
     value: &CellValue,
     format: &NumberFormat,
     date_1904: bool,
-    locale: &Locale,
-) -> String {
-    let ssfmt_locale = locale.to_ssfmt();
-    format_cell_value_inner(value, format, date_1904, &ssfmt_locale)
-}
-
-/// Inner implementation shared by [`CellView::formatted`] (which has a
-/// pre-cached `ssfmt::Locale`) and the public [`format_cell_value`].
-fn format_cell_value_inner(
-    value: &CellValue,
-    format: &NumberFormat,
-    date_1904: bool,
-    locale: &ssfmt::Locale,
+    regional: &RegionalSettings,
 ) -> String {
     let effective = value.effective_value();
 
     match effective {
-        CellValue::Number(n) => format_number(*n, format, date_1904, locale),
+        CellValue::Number(n) => format_number(*n, format, date_1904, regional),
         CellValue::String(s) => {
             // Apply the format's text section, if it has one (`0;-0;0;"x "@`, `"Code: "@`)
             let code = format.format_string();
@@ -132,36 +136,50 @@ fn format_number(
     value: f64,
     format: &NumberFormat,
     date_1904: bool,
-    locale: &ssfmt::Locale,
+    regional: &RegionalSettings,
 ) -> String {
+    let mut locale = regional.format_locale();
+    if format.is_date_format() {
+        // A period or comma in a date format (`dd.mm.yyyy`, `mmm d, yyyy`) is the character
+        // itself, not a regional separator.
+        (locale.decimal_separator, locale.thousands_separator) = ('.', ',');
+    }
     let opts = ssfmt::FormatOptions {
         date_system: if date_1904 {
             ssfmt::DateSystem::Date1904
         } else {
             ssfmt::DateSystem::Date1900
         },
-        locale: locale.clone(),
+        locale,
     };
 
     match format {
-        NumberFormat::General => format_general(value),
+        NumberFormat::General => format_general(value, regional.decimal_separator),
         NumberFormat::BuiltIn(_) | NumberFormat::Custom(_) => {
-            // Always go through format_string() so our builtin_format_string()
+            // Always go through display_code() so our builtin_format_string()
             // table is the single source of truth for built-in IDs.
             // (ssfmt::format_with_id uses SheetJS's table which diverges
             // from ECMA-376 on locale-dependent IDs like 14.)
-            let code = format.format_string();
-            match ssfmt::format(value, code, &opts) {
+            let code = format.display_code(regional);
+            match ssfmt::format(value, &code, &opts) {
                 Ok(s) => s,
-                Err(_) => format_general(value),
+                Err(_) => format_general(value, regional.decimal_separator),
             }
         }
     }
 }
 
 /// General format: display numbers without trailing zeros, integers
-/// without decimal point.
-fn format_general(value: f64) -> String {
+/// without decimal point, with the regional decimal separator.
+fn format_general(value: f64, decimal_separator: char) -> String {
+    let text = format_general_with_point(value);
+    match decimal_separator {
+        '.' => text,
+        separator => text.replace('.', &separator.to_string()),
+    }
+}
+
+fn format_general_with_point(value: f64) -> String {
     if value.is_nan() || value.is_infinite() {
         return value.to_string();
     }
@@ -195,7 +213,7 @@ mod tests {
 
     // Helper
     fn fmt(value: &CellValue, format: &NumberFormat, date_1904: bool) -> String {
-        format_cell_value(value, format, date_1904, &Locale::en_us())
+        format_cell_value(value, format, date_1904, &RegionalSettings::default())
     }
 
     // General format
@@ -360,14 +378,14 @@ mod tests {
 
     #[test]
     fn builtin_date_short_1900() {
-        // Format ID 14: "mm-dd-yy"
+        // Format ID 14: the short date, m/d/yyyy in en-US
         // Serial 44927 = 2023-01-01 in 1900 system
         let result = fmt(
             &CellValue::Number(44927.0),
             &NumberFormat::BuiltIn(14),
             false,
         );
-        assert_eq!(result, "01-01-23");
+        assert_eq!(result, "1/1/2023");
     }
 
     #[test]
@@ -414,7 +432,7 @@ mod tests {
             &NumberFormat::BuiltIn(14),
             true,
         );
-        assert_eq!(result, "01-01-23");
+        assert_eq!(result, "1/1/2023");
     }
 
     // Time formats
@@ -578,25 +596,17 @@ mod tests {
 
     // CellView API
 
-    // Cached ssfmt locale for CellView tests (CellView takes &ssfmt::Locale
-    // internally since the worksheet caches the conversion).
-    fn ssfmt_en_us() -> ssfmt::Locale {
-        ssfmt::Locale::en_us()
-    }
-
     #[test]
     fn cell_view_value_accessor() {
         let val = CellValue::Number(3.14);
-        let locale = ssfmt_en_us();
-        let view = CellView::new(&val, None, false, &locale);
+        let view = CellView::new(&val, None, false);
         assert_eq!(view.value(), &CellValue::Number(3.14));
     }
 
     #[test]
     fn cell_view_default_format() {
         let val = CellValue::Number(3.14);
-        let locale = ssfmt_en_us();
-        let view = CellView::new(&val, None, false, &locale);
+        let view = CellView::new(&val, None, false);
         assert_eq!(view.number_format(), &NumberFormat::General);
     }
 
@@ -607,8 +617,7 @@ mod tests {
             number_format: NumberFormat::BuiltIn(9), // "0%"
             ..Default::default()
         };
-        let locale = ssfmt_en_us();
-        let view = CellView::new(&val, Some(&style), false, &locale);
+        let view = CellView::new(&val, Some(&style), false);
         assert_eq!(view.formatted(), "75%");
     }
 
@@ -619,11 +628,10 @@ mod tests {
             number_format: NumberFormat::BuiltIn(2),
             ..Default::default()
         };
-        let locale = ssfmt_en_us();
-        let view = CellView::new(&val, Some(&style), false, &locale);
+        let view = CellView::new(&val, Some(&style), false);
         assert!(view.style().is_some());
 
-        let view_no_style = CellView::new(&val, None, false, &locale);
+        let view_no_style = CellView::new(&val, None, false);
         assert!(view_no_style.style().is_none());
     }
 
@@ -658,7 +666,7 @@ mod tests {
     #[test]
     fn negative_zero() {
         // -0.0 should display as "0" under General format
-        let result = format_general(-0.0);
+        let result = format_general(-0.0, '.');
         assert_eq!(result, "0");
     }
 
@@ -697,5 +705,54 @@ mod tests {
         let fmt_code = NumberFormat::Custom("m/d/yyyy_)".to_string());
         let result = fmt(&val, &fmt_code, false);
         assert_eq!(result, "12/31/2025 ", "underscore-paren should produce a space, not a literal ')'");
+    }
+
+    fn fmt_in(tag: &str, value: f64, format: NumberFormat) -> String {
+        format_cell_value(&CellValue::Number(value), &format, false, &RegionalSettings::from_tag(tag))
+    }
+
+    #[test]
+    fn short_dates_show_in_the_date_order() {
+        // 46331.5625 is 5 November 2026, 13:30.
+        for (tag, short, with_time) in [
+            ("en-US", "11/5/2026", "11/5/2026 13:30"),
+            ("en-GB", "05/11/2026", "05/11/2026 13:30"),
+            ("de-DE", "05.11.2026", "05.11.2026 13:30"),
+            ("sv-SE", "2026-11-05", "2026-11-05 13:30"),
+        ] {
+            assert_eq!(fmt_in(tag, 46331.0, NumberFormat::BuiltIn(14)), short, "{tag}");
+            assert_eq!(fmt_in(tag, 46331.5625, NumberFormat::BuiltIn(22)), with_time, "{tag}");
+        }
+    }
+
+    #[test]
+    fn numbers_show_with_the_regional_separators() {
+        assert_eq!(fmt_in("de-DE", 1.5, NumberFormat::General), "1,5");
+        assert_eq!(fmt_in("de-DE", 1234.5, NumberFormat::Custom("#,##0.00".into())), "1.234,50");
+        assert_eq!(fmt_in("de-DE", 0.125, NumberFormat::BuiltIn(10)), "12,50%");
+        assert_eq!(fmt_in("en-US", 1234.5, NumberFormat::Custom("#,##0.00".into())), "1,234.50");
+        // In a date format a period or comma is the character itself.
+        assert_eq!(fmt_in("de-DE", 46331.0, NumberFormat::Custom("dd.mm.yyyy".into())), "05.11.2026");
+        assert_eq!(fmt_in("de-DE", 46331.0, NumberFormat::Custom("d. mmmm yyyy".into())), "5. November 2026");
+        assert_eq!(fmt_in("fr-FR", 46331.0, NumberFormat::Custom("d mmm, yyyy".into())), "5 nov., 2026");
+    }
+
+    #[test]
+    fn input_text_reads_back_in_the_regional_settings() {
+        let input = |tag: &str, value: f64, format: NumberFormat| {
+            let style = Style { number_format: format, ..Default::default() };
+            let value = CellValue::Number(value);
+            CellView::new(&value, Some(&style), false).with_regional(RegionalSettings::from_tag(tag)).input_text()
+        };
+        assert_eq!(input("en-US", 1.5, NumberFormat::General), "1.5");
+        assert_eq!(input("de-DE", 1234.5, NumberFormat::Custom("#,##0.00".into())), "1234,5");
+        assert_eq!(input("en-US", 0.1 + 0.2, NumberFormat::General), "0.30000000000000004");
+        assert_eq!(input("en-US", 46331.0, NumberFormat::BuiltIn(14)), "11/5/2026");
+        assert_eq!(input("en-GB", 46331.0, NumberFormat::Custom("d mmm yyyy".into())), "05/11/2026");
+        assert_eq!(input("en-GB", 46331.5625, NumberFormat::BuiltIn(22)), "05/11/2026 13:30:00");
+        assert_eq!(input("en-GB", 0.5625, NumberFormat::BuiltIn(20)), "13:30:00");
+        assert_eq!(input("en-US", 0.0, NumberFormat::BuiltIn(14)), "0:00:00");
+        let text = CellValue::string("5/11/2026");
+        assert_eq!(CellView::new(&text, None, false).input_text(), "5/11/2026");
     }
 }

@@ -114,22 +114,32 @@ impl Worksheet {
         }
     }
 
+    /// The cell's value as the grid shows it, in the workbook's regional settings.
     #[wasm_bindgen(js_name = getFormattedValue)]
     pub fn get_formatted_value(&self, address: &str) -> Result<String, JsError> {
-        let wb = self.workbook.borrow();
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        ws.formatted_value(address).map_err(to_js_error)
+        let address = duke_sheets_core::CellAddress::parse(address).map_err(to_js_error)?;
+        self.get_formatted_value_at(address.row, address.col as u32)
     }
 
+    /// The cell's value as the grid shows it, in the workbook's regional settings.
     #[wasm_bindgen(js_name = getFormattedValueAt)]
     pub fn get_formatted_value_at(&self, row: u32, col: u32) -> Result<String, JsError> {
         let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        Ok(ws.formatted_value_at(row, col as u16))
+        Ok(ws.cell_view_at(row, col as u16).with_regional(wb.settings().regional).formatted())
+    }
+
+    /// The cell's value as text to edit, in the workbook's regional settings: typed back
+    /// unchanged, it gives the same value (a date in a date format shows as the short date).
+    #[wasm_bindgen(js_name = getInputTextAt)]
+    pub fn get_input_text_at(&self, row: u32, col: u32) -> Result<String, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        Ok(ws.cell_view_at(row, col as u16).with_regional(wb.settings().regional).input_text())
     }
 
     #[wasm_bindgen(skip_typescript, js_name = getRowsBatch)]
@@ -264,7 +274,7 @@ impl Worksheet {
             }
 
             let value = if use_formatted {
-                ws.formatted_value_at(row, col)
+                ws.cell_view_at(row, col).with_regional(wb.settings().regional).formatted()
             } else if use_calculated {
                 ws.get_calculated_value_at(row, col)
                     .map(|v| v.to_string())

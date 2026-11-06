@@ -26,7 +26,8 @@ pub(crate) fn enter(ctx: &EvaluationContext) -> Option<Restore> {
     (current() != settings).then(|| make_current(settings))
 }
 
-fn make_current(settings: RegionalSettings) -> Restore {
+/// Makes `settings` current until the guard drops.
+pub(crate) fn make_current(settings: RegionalSettings) -> Restore {
     Restore(CURRENT.with(|c| c.replace(settings)))
 }
 

@@ -688,8 +688,15 @@ export interface FormControlInteractionResult {
   linkedCellsChanged: number;
 }
 
+/** A number read from typed text, with the built-in format Excel gives a typed date or time. */
+export interface TypedNumber {
+  value: number;
+  dateFormat?: number;
+}
+
 export interface Worksheet {
   iterateRows(opts?: JsRowsOptions): RowIterator;
+  readTypedNumber(text: string): TypedNumber | undefined;
   setCellStyle(address: string, style: StyleInput): void;
   setCellStyleAt(row: number, col: number, style: StyleInput): void;
   setRangeStyle(range: string, style: StyleInput): void;
@@ -940,6 +947,30 @@ impl Worksheet {
             .map_err(|e| JsError::new(&format!("Invalid cell address: {}", e)))?;
         ws.set_cell_value_at(addr.row, addr.col, cell_value)
             .map_err(to_js_error)
+    }
+
+    /// The number text typed into a cell stands for, read in the workbook's regional settings as
+    /// Excel reads it (`5/11/2026` is 5 November in en-GB, `1,5` is 1.5 in de-DE), with the
+    /// built-in format Excel gives a typed date or time; `undefined` when it isn't a number.
+    #[wasm_bindgen(skip_typescript, js_name = readTypedNumber)]
+    pub fn read_typed_number(&self, text: &str) -> Result<JsValue, JsError> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct TypedNumber {
+            value: f64,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            date_format: Option<u32>,
+        }
+        let wb = self.workbook.borrow();
+        let settings = wb.settings();
+        let Some((mut value, date_format)) = duke_sheets_formula::coerce::typed_number(text, settings.regional) else {
+            return Ok(JsValue::UNDEFINED);
+        };
+        // The text reads as a 1900-system serial; a 1904-system workbook counts from 1904.
+        if settings.date_1904 && value >= 1.0 && date_format.is_some_and(|id| id == 14 || id == 22) {
+            value -= 1462.0;
+        }
+        to_js_value(&TypedNumber { value, date_format })
     }
 
     #[wasm_bindgen(js_name = setFormula)]
@@ -1200,11 +1231,10 @@ thread_local! {
     static REGIONAL: std::cell::Cell<duke_sheets_core::RegionalSettings> = Default::default();
 }
 
-/// Sets the regional settings formulas compute with in workbooks opened or created from now on,
-/// from a language tag such as `en-GB` (the browser's `navigator.language`): the order of day and
-/// month in dates written as text, the language of TEXT's month and day names and date codes, and
-/// the decimal separator. The default is en-US. The grid's own number display doesn't follow it
-/// yet.
+/// Sets the regional settings of workbooks opened or created from now on, from a language tag
+/// such as `en-GB` (the browser's `navigator.language`): the order of day and month in dates
+/// written as text or typed, the language of month and day names and of TEXT's date codes, the
+/// separators numbers are read and shown with, and the short date. The default is en-US.
 #[wasm_bindgen(js_name = setLocale)]
 pub fn set_locale(tag: &str) {
     REGIONAL.with(|r| r.set(duke_sheets_core::RegionalSettings::from_tag(tag)));

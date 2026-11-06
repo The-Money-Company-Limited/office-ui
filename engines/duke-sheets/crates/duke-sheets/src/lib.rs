@@ -115,9 +115,6 @@ pub use duke_sheets_core::{
     Hyperlink,
     IconSetStyle,
     ListSelection,
-    // Locale for cell formatting
-    Locale,
-
     NumberFormat,
 
     PageBreak,
@@ -129,6 +126,7 @@ pub use duke_sheets_core::{
     RawDrawing,
     RawRel,
     RectEmu,
+    RegionalSettings,
     Result,
 
     // Rich text types
