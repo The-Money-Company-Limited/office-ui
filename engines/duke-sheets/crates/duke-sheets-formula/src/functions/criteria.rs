@@ -30,7 +30,7 @@ enum CriteriaType {
     /// Text match (case-insensitive, with wildcards)
     Text(String),
     TextComparison(ComparisonOp, String),
-    /// Match empty values
+    /// `""` or `"="`: matches blank cells and empty text. A blank criteria cell is 0 instead.
     Empty,
     /// An error (`NA()`, `"#N/A"`): matches cells holding that error
     Error(duke_sheets_core::CellError),
@@ -53,9 +53,12 @@ impl CriteriaMatcher {
             FormulaValue::Number(n) => CriteriaType::Number(*n),
             FormulaValue::Boolean(b) => CriteriaType::Boolean(*b),
             FormulaValue::String(s) => Self::parse_string_criteria(s),
-            FormulaValue::Empty => CriteriaType::Empty,
+            // A blank cell as the criteria is 0, as Microsoft documents for COUNTIFS:
+            // COUNTIF(D2:D8,D8) with D8 blank counts the zeros, not the blanks.
+            FormulaValue::Empty => CriteriaType::Number(0.0),
             FormulaValue::Error(e) => CriteriaType::Error(*e),
-            FormulaValue::Array { .. } => CriteriaType::Empty, // Arrays as criteria not supported
+            // An array reaches here only past lifting (array_lift), where it can't be one value.
+            FormulaValue::Array { .. } => CriteriaType::Empty,
         };
 
         Self { criteria_type }
@@ -348,5 +351,12 @@ mod tests {
         assert!(matcher.matches(&FormulaValue::String("".into())));
         assert!(!matcher.matches(&FormulaValue::String("text".into())));
         assert!(!matcher.matches(&FormulaValue::Number(0.0)));
+    }
+
+    #[test]
+    fn test_blank_cell_criteria_is_zero() {
+        let matcher = CriteriaMatcher::new(&FormulaValue::Empty);
+        assert!(matcher.matches(&FormulaValue::Number(0.0)));
+        assert!(!matcher.matches(&FormulaValue::Empty));
     }
 }

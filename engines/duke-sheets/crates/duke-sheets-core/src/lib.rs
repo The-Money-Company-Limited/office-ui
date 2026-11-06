@@ -55,7 +55,7 @@ pub use auto_filter::{
 };
 pub use cell::{
     format_cell_value, CellAddress, CellData, CellError, CellRange, CellValue, CellView,
-    FormulaData,
+    FormulaData, FormulaKind,
 };
 pub use column::{Column, ColumnData};
 pub use comment::CellComment;

@@ -303,11 +303,23 @@ fn date(text: &str) -> Option<(f64, DateWritten)> {
         },
         [a, b] => match (numeric(a), numeric(b)) {
             (None, Some(y)) if b.len() == 4 => (y, month_named(a)?, 1, DateWritten::MonthAndYear),
+            // `Feb 22` and `22 Feb` are a day of the current year; `Feb 30` and `30 Feb`, with no
+            // such day, are February 1930.
+            (None, Some(n)) if b.len() <= 2 => month_and_number(month_named(a)?, n, b.len())?,
+            (Some(n), None) if a.len() <= 2 => month_and_number(month_named(b)?, n, a.len())?,
             _ => return None,
         },
         _ => return None,
     };
     Some((serial(year, month, day)?, written))
+}
+
+fn month_and_number(month: u32, n: i32, digits: usize) -> Option<(i32, u32, i32, DateWritten)> {
+    let year = chrono::Local::now().year();
+    Some(match NaiveDate::from_ymd_opt(year, month, u32::try_from(n).ok()?) {
+        Some(_) => (year, month, n, DateWritten::NamedMonth),
+        None => (full_year(n, digits)?, month, 1, DateWritten::MonthAndYear),
+    })
 }
 
 fn full_year(year: i32, digits: usize) -> Option<i32> {
@@ -378,7 +390,13 @@ mod tests {
         ] {
             assert_eq!(text_to_number(text), Some(number), "{text}");
         }
-        for text in ["2024-02-30", "13/1/2024", "12:60", "13:00 PM", "Marchy 5, 2024"] {
+        let this_year = chrono::Datelike::year(&chrono::Local::now());
+        let feb_22 = crate::functions::date::excel1900_serial_from_ymd(this_year, 2, 22) as f64;
+        assert_eq!(text_to_number("Feb 22"), Some(feb_22));
+        assert_eq!(text_to_number("22 Feb"), Some(feb_22));
+        assert_eq!(text_to_number("Feb 30"), Some(10990.0));
+        assert_eq!(text_to_number("30 Feb"), Some(10990.0));
+        for text in ["2024-02-30", "13/1/2024", "12:60", "13:00 PM", "Marchy 5, 2024", "Q1 22"] {
             assert_eq!(text_to_number(text), None, "{text}");
         }
     }

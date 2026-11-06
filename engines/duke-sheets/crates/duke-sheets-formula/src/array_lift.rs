@@ -26,21 +26,43 @@ pub(crate) fn broadcast_at(
     arr.get(row).and_then(|line| line.get(col))
 }
 
-/// Whether an argument's value comes from cells: a reference, a defined name, or a function that
-/// hands one through (INDEX, OFFSET, or IF(c,A1,B1)). Anything else is typed into the formula,
-/// including IF(1,"5"), other functions' results and LET names.
+/// A result fitted to a `rows` x `cols` block, as a Ctrl+Shift+Enter array formula shows it: a
+/// single value or a single row or column repeats, and cells past the result's end are #N/A.
+pub fn fit_array(result: &FormulaValue, rows: usize, cols: usize) -> Vec<Vec<FormulaValue>> {
+    let data = crate::evaluator::to_array(result);
+    let d = dims(&data);
+    (0..rows)
+        .map(|r| {
+            (0..cols)
+                .map(|c| broadcast_at(&data, d, r, c).cloned().unwrap_or(FormulaValue::Error(CellError::Na)))
+                .collect()
+        })
+        .collect()
+}
+
+/// Whether an argument's value comes from cells: a reference, a defined name, a LET name bound to
+/// a reference, or a function that hands one through (INDEX, OFFSET, XLOOKUP, IF(c,A1,B1), LET's
+/// result). Anything else is typed into the formula, including IF(1,"5") and other functions'
+/// results.
 fn from_cells(expr: &FormulaExpr, ctx: &EvaluationContext) -> bool {
     match expr {
         FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::StructuredRef(_) | FormulaExpr::ExternalRef(_) => true,
-        FormulaExpr::NameRef(name) => ctx.local(name).is_none(),
+        FormulaExpr::NameRef(name) => matches!(ctx.local(name), None | Some(crate::lambda::Binding::Reference(_))),
+        // `@A1:A9` reads one cell of the range.
+        FormulaExpr::UnaryOp { op: crate::ast::UnaryOperator::ImplicitIntersection, operand } => from_cells(operand, ctx),
         // These hand back one of their arguments, so the value is from cells when an argument is.
-        FormulaExpr::Function { name, args } => match crate::evaluator::function_name(name) {
-            "INDEX" | "OFFSET" | "INDIRECT" => true,
-            "IF" | "IFS" | "IFERROR" | "IFNA" | "CHOOSE" | "SWITCH" | "XLOOKUP" | "LET" => {
-                args.iter().any(|arg| from_cells(arg, ctx))
+        FormulaExpr::Function { name, args } => {
+            let name = crate::evaluator::function_name(name);
+            match crate::functions::registry().get(name) {
+                Some(def) => match def.returns {
+                    crate::functions::Returns::Reference => true,
+                    crate::functions::Returns::Last => args.last().is_some_and(|arg| from_cells(arg, ctx)),
+                    _ if def.result_args != crate::functions::ScalarArgs::None => args.iter().any(|arg| from_cells(arg, ctx)),
+                    _ => false,
+                },
+                None => false,
             }
-            _ => false,
-        },
+        }
         _ => false,
     }
 }
@@ -80,6 +102,18 @@ pub(crate) fn coerce_typed_arguments(
             FormulaValue::String(_) => *value = FormulaValue::Empty,
             FormulaValue::Boolean(_) if numeric => *value = FormulaValue::Empty,
             _ => {}
+        }
+    }
+}
+
+/// A one-element array where the function takes one value is that value:
+/// `LEFT(TEXTSPLIT("a, b",", "),1)` with one piece of text.
+pub(crate) fn unwrap_single_elements(func: &FunctionDef, args: &mut [FormulaValue]) {
+    for (position, value) in args.iter_mut().enumerate() {
+        if let FormulaValue::Array { data, .. } = value {
+            if func.scalar_args.includes(position) && dims(data) == (1, 1) {
+                *value = data[0][0].clone();
+            }
         }
     }
 }

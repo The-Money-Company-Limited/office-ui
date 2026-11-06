@@ -606,6 +606,7 @@ impl XlsReader {
             }));
         }
 
+        duke_sheets_formula::legacy::read_all_as_legacy(&mut workbook);
         Ok(workbook)
     }
 

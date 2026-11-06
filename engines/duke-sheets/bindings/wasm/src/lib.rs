@@ -1025,6 +1025,20 @@ impl Worksheet {
         ws.set_cell_formula(address, formula).map_err(to_js_error)
     }
 
+    /// Makes a Ctrl+Shift+Enter array formula over `rows` x `cols` cells from `address`, as undo
+    /// puts one back. Calculating fills its cells.
+    #[wasm_bindgen(js_name = setArrayFormula)]
+    pub fn set_array_formula(&self, address: &str, formula: &str, rows: u32, cols: u32) -> Result<(), JsError> {
+        let addr = CellAddress::parse(address)
+            .map_err(|e| JsError::new(&format!("Invalid cell address: {}", e)))?;
+        let cols = u16::try_from(cols).map_err(|_| JsError::new("Too many columns"))?;
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        ws.set_array_formula_at(addr.row, addr.col, formula, rows, cols).map_err(to_js_error)
+    }
+
     #[wasm_bindgen(js_name = setCellStyle)]
     pub fn set_cell_style(&self, address: &str, style: JsValue) -> Result<(), JsError> {
         let patch: WasmStylePatch = serde_wasm_bindgen::from_value(style).map_err(to_js_error)?;

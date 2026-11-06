@@ -10,22 +10,30 @@
 //! - 254: variable, minimum from this value
 //! - 255: variable, 0 or more
 
-use crate::functions::registry;
+use crate::functions::{registry, ArgClass};
 
-/// PTG operand class for function arguments and reference tokens.
-///
-/// See [MS-XLS] §2.5.198 "Tokens (Ptg)" for the V/R/A class distinction.
-/// The class is encoded in the low bits of certain PTG opcodes (e.g.
-/// PtgRef 0x24=R, 0x44=V, 0x64=A; PtgArea 0x25=R, 0x45=V, 0x65=A).
-///
-/// Only the R and V classes are used by the current writer paths.
-/// Array class (A) is reserved for array-formula encoding.
+/// The class a .xls or .xlsb token is written with ([MS-XLS] §2.5.198), encoded in the low bits
+/// of certain PTG opcodes (PtgRef 0x24=R, 0x44=V, 0x64=A; PtgArea 0x25=R, 0x45=V, 0x65=A). A
+/// function argument's comes from its class in the registry (`function_arg_class`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperandClass {
     /// Reference class — operand must be a cell/range/name reference.
     R,
     /// Value class — operand is coerced to a value before use.
     V,
+    /// Array class — operand is read as an array (SUMPRODUCT's).
+    A,
+}
+
+impl OperandClass {
+    /// The class of a value argument (VR in Excel's tables) inside this one: an array place
+    /// passes its class on, so `SUMPRODUCT(LEN(A1:A3))` writes A1:A3 array-class.
+    pub fn of_value_in(self) -> OperandClass {
+        match self {
+            OperandClass::A => OperandClass::A,
+            _ => OperandClass::V,
+        }
+    }
 }
 
 /// Look up a function's BIFF8 iftab index by name (case-insensitive).
@@ -109,10 +117,12 @@ pub fn function_arg_class(iftab: u16, arg_idx: usize) -> OperandClass {
     let Some(def) = registry().get_by_iftab(iftab) else {
         return OperandClass::V;
     };
-    def.arg_classes
-        .get(arg_idx)
-        .copied()
-        .unwrap_or(def.default_arg_class)
+    // A reference read as an array is written reference-class, as Excel writes INDEX's.
+    match def.arg_class(arg_idx) {
+        ArgClass::R | ArgClass::RA => OperandClass::R,
+        ArgClass::V => OperandClass::V,
+        ArgClass::A => OperandClass::A,
+    }
 }
 
 /// True if BIFF8 emits function `iftab` via the Analysis-ToolPak add-in
@@ -441,7 +451,7 @@ mod tests {
         // Catches any by_name/by_iftab index inconsistency introduced by
         // the registration migration or future edits. (Name comparison is
         // case-insensitive because function_index uppercases.)
-        use crate::functions::registry;
+        use crate::functions::{registry, ArgClass};
 
         for def in registry().iter() {
             let Some(iftab) = def.iftab else { continue };

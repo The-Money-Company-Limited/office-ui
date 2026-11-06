@@ -2325,26 +2325,22 @@ mod tests {
     #[test]
     fn test_row_docs() {
         // Docs: ROW(C10)=10, ROW()=current - need cell context, skip those.
-        // Test ROW with array arg: 3-row column -> {1;2;3}
+        // An array isn't a reference: each element is #VALUE!.
+        let value = FormulaValue::Error(CellError::Value);
         assert_eq!(
-            eval("=ROW({0;0;0})").unwrap(),
-            FormulaValue::Array {
-                data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)],],
-                source: None
-            }
+            eval("=ROW({0;0})").unwrap(),
+            FormulaValue::Array { data: vec![vec![value.clone()], vec![value]], source: None }
         );
     }
 
     #[test]
     fn test_column_docs() {
         // Docs: COLUMN(D10)=4 - need cell context, skip.
-        // Test COLUMN with array arg: 1x3 row -> {1,2,3}
+        // An array isn't a reference: each element is #VALUE!.
+        let value = FormulaValue::Error(CellError::Value);
         assert_eq!(
-            eval("=COLUMN({0,0,0})").unwrap(),
-            FormulaValue::Array {
-                data: vec![vec![n(1.0), n(2.0), n(3.0)]],
-                source: None
-            }
+            eval("=COLUMN({0,0})").unwrap(),
+            FormulaValue::Array { data: vec![vec![value.clone(), value]], source: None }
         );
     }
 

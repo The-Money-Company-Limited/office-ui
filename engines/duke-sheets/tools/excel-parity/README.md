@@ -30,7 +30,7 @@ time and never committed. `--max` fails the run when there are more mismatches t
 $r run ~/Desktop/Code/office-ui/engines/duke-sheets 'mkdir -p /work/ssb && cd /work/ssb &&
   curl -sSL https://huggingface.co/datasets/KAKA22/SpreadsheetBench/resolve/main/spreadsheetbench_verified_400.tar.gz | tar xz'
 $r run ~/Desktop/Code/office-ui/engines/duke-sheets \
-  'node tools/excel-parity/parity.mjs bindings/wasm/pkg /work/ssb /tmp/parity.json --max 75'
+  'node tools/excel-parity/parity.mjs bindings/wasm/pkg /work/ssb /tmp/parity.json --max 42'
 ```
 
 `parity.json` lists each mismatch with its file, cell, formula, Excel's value and the engine's;
@@ -47,7 +47,16 @@ Excel takes regional settings (day-first dates, month names, decimal commas) fro
 a file doesn't record them. Cases set them with a trailing `locale` element (`inLocale` in `cases.mjs`); `parity.mjs` lists the four
 workbooks that weren't computed in en-US, which their saved results show.
 
-Baseline (2026-11-05, COD-1793): 68,264 formulas compared, 75 mismatches in 15 of 800 files, down
-from 7,245 in 191 before COD-1769. 38 are in 49196's init file, whose dates are built with
-`TODAY()`: Excel's saved week numbers are from the day it was saved. About 15 are formulas from
-before dynamic arrays (COD-1790), and the rest are listed on COD-1795.
+Formulas saved before dynamic arrays (no `cm="1"`, and every formula in a .xls file)
+open with Excel 365's `@` where the old rules read one cell of a range (`=SUM(@A1:A3*@B1:B3)`),
+and a Ctrl+Shift+Enter array formula (`t="array"` without `cm`) fills its block instead of
+spilling.
+
+Baseline (2026-11-06, COD-1790 and COD-1795): 68,264 formulas compared, 42 mismatches in 5 of 800
+files, down from 7,245 in 191 before COD-1769; 398 edge cases. 38 are in 49196's init file, whose
+dates are built with `TODAY()`: Excel's saved week numbers are from the day it was saved. 51354's
+B6 (in both files) reads "Feb 22" as February 22 of the year it is computed in, so Excel's saved
+"Jan 24" is from 2024. 48982's B323 includes itself in `MAX(B$7:B377)`: Excel saved 0 for that
+circular reference, while the corpus's other circular cells keep the values Excel computed, as the
+engine does. 55049's B23 multiplies whole columns, which can't spill from row 23; the engine reads
+a whole column only as far as the used cells, so it doesn't see that.

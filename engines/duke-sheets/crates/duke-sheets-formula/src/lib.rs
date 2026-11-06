@@ -28,7 +28,9 @@ pub mod eval_cache;
 pub mod evaluator;
 pub mod functions;
 pub mod lambda;
+pub mod legacy;
 pub mod parser;
+pub mod print;
 mod reference;
 mod regional;
 
@@ -41,4 +43,5 @@ pub use eval_cache::{EvalCache, LookupIndex, RangeKey};
 pub use evaluator::{
     evaluate, EvaluationContext, FormulaValue, ImageInfo, ImageSizing, RangeSource,
 };
+pub use array_lift::fit_array;
 pub use parser::parse_formula;

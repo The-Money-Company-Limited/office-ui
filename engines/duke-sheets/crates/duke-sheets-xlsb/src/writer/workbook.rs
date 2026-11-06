@@ -307,16 +307,7 @@ fn write_builtin_name_record<W: Write>(
 }
 
 fn quote_sheet_name(name: &str) -> String {
-    let needs_quoting = name.contains(' ')
-        || name.contains('\'')
-        || name.contains('!')
-        || name.contains('[')
-        || name.contains(']');
-    if needs_quoting {
-        format!("'{}'", name.replace('\'', "''"))
-    } else {
-        name.to_string()
-    }
+    duke_sheets_formula::print::quoted(name)
 }
 
 fn format_print_area_formula(sheet_name: &str, range: &duke_sheets_core::CellRange) -> String {

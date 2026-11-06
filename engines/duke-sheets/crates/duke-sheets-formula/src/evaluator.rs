@@ -398,20 +398,10 @@ impl<'a> EvaluationContext<'a> {
     /// The value of a defined name: the formula it holds, evaluated (a reference reads its cells).
     /// An unknown name is #NAME?; names that refer to each other without end are #REF!.
     pub fn resolve_named_range(&self, name: &str) -> Result<FormulaValue, FormulaError> {
-        thread_local! {
-            static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-        }
         let Some(formula) = reference::name_formula(name, self) else {
             return Ok(FormulaValue::Error(CellError::Name));
         };
-        let depth = DEPTH.with(|d| d.get());
-        if depth >= 64 {
-            return Ok(FormulaValue::Error(CellError::Ref));
-        }
-        DEPTH.with(|d| d.set(depth + 1));
-        let result = evaluate(&formula, self);
-        DEPTH.with(|d| d.set(depth));
-        result
+        reference::nested(|| evaluate(&formula, self)).unwrap_or(Ok(FormulaValue::Error(CellError::Ref)))
     }
 
     /// Resolve a structured table reference to a formula value.
@@ -543,6 +533,7 @@ pub fn evaluate(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Fo
 
         FormulaExpr::NameRef(name) => match ctx.local(name) {
             Some(Binding::Value(value)) => Ok(value.clone()),
+            Some(Binding::Reference(target)) => Ok(reference::read(ctx, target)),
             // A LAMBDA on its own, not called, is #CALC! in a cell.
             Some(Binding::Lambda(_)) => Ok(FormulaValue::Error(CellError::Calc)),
             // Resolve named range through the evaluation context
@@ -834,6 +825,9 @@ fn evaluate_unary_op(
     if op == UnaryOperator::SpillRange {
         return evaluate_spill_range(operand, ctx);
     }
+    if op == UnaryOperator::ImplicitIntersection {
+        return evaluate_implicit_intersection(operand, ctx);
+    }
 
     let val = evaluate(operand, ctx)?;
 
@@ -880,45 +874,30 @@ fn evaluate_unary_op(
                 .ok_or_else(|| FormulaError::Evaluation("Expected number".into()))?;
             Ok(FormulaValue::Number(n / 100.0))
         }
-        UnaryOperator::ImplicitIntersection => {
-            // @ operator: reduce a multi-value result to a single value.
-            // If the value is an array, pick the element on the same row/column
-            // as the formula cell. If already scalar, pass through.
-            match val {
-                FormulaValue::Array { data: ref rows, .. } => {
-                    if rows.is_empty() {
-                        return Ok(FormulaValue::Error(CellError::Value));
-                    }
-                    let num_rows = rows.len();
-                    let num_cols = rows[0].len();
-                    if num_rows == 1 && num_cols == 1 {
-                        // 1x1 array - return the single element
-                        return Ok(rows[0][0].clone());
-                    }
-                    if num_rows == 1 {
-                        // Single row - select by column (use formula's column offset)
-                        // For simplicity, return the first element
-                        return Ok(rows[0].first().cloned().unwrap_or(FormulaValue::Empty));
-                    }
-                    if num_cols == 1 {
-                        // Single column - select by row (use formula's row)
-                        // For simplicity, return the first element
-                        return Ok(rows
-                            .first()
-                            .and_then(|r| r.first())
-                            .cloned()
-                            .unwrap_or(FormulaValue::Empty));
-                    }
-                    // Multi-row, multi-column: return top-left element
-                    Ok(rows[0][0].clone())
-                }
-                _ => Ok(val), // scalars pass through unchanged
-            }
-        }
+        UnaryOperator::ImplicitIntersection => unreachable!("ImplicitIntersection handled above"),
         UnaryOperator::SpillRange => {
             unreachable!("SpillRange handled above")
         }
     }
+}
+
+/// The @ operator reads one value: a reference's cell in the formula's own row or column (#VALUE!
+/// when there is none), or an array's first element.
+fn evaluate_implicit_intersection(operand: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    if let Some(target) = reference::reference_of(operand, ctx)? {
+        return Ok(match target {
+            Ok(target) => reference::intersect_cell(&target, ctx),
+            Err(e) => FormulaValue::Error(e),
+        });
+    }
+    Ok(match evaluate(operand, ctx)? {
+        FormulaValue::Array { data, .. } => data
+            .first()
+            .and_then(|row| row.first())
+            .cloned()
+            .unwrap_or(FormulaValue::Error(CellError::Value)),
+        value => value,
+    })
 }
 
 /// Evaluate the # (spill range) operator.
@@ -1873,7 +1852,7 @@ pub(crate) fn function_name(name: &str) -> &str {
     name.strip_prefix("_XLWS.").unwrap_or(name)
 }
 
-fn evaluate_function(
+pub(crate) fn evaluate_function(
     name: &str,
     args: &[FormulaExpr],
     ctx: &EvaluationContext,
@@ -1916,7 +1895,7 @@ fn evaluate_function(
         }
     }
 
-    if let Some(result) = evaluate_with_expressions(lookup_name, args, ctx) {
+    if let Some(result) = evaluate_with_expressions(lookup_name, func, args, ctx) {
         return result;
     }
 
@@ -1942,6 +1921,7 @@ fn evaluate_function(
     }
 
     crate::array_lift::coerce_typed_arguments(func.typed_args, args, &mut evaluated_args, ctx);
+    crate::array_lift::unwrap_single_elements(func, &mut evaluated_args);
 
     if let Some(result) = crate::array_lift::lift_over_arrays(func, &evaluated_args, ctx) {
         return result;
@@ -1955,6 +1935,7 @@ fn evaluate_function(
 /// directly. `None` means evaluate the arguments and call the function as usual.
 fn evaluate_with_expressions(
     name: &str,
+    func: &crate::functions::FunctionDef,
     args: &[FormulaExpr],
     ctx: &EvaluationContext,
 ) -> Option<FormulaResult<FormulaValue>> {
@@ -1972,10 +1953,14 @@ fn evaluate_with_expressions(
         "ISFORMULA" => evaluate_isformula(args, ctx),
         "INDIRECT" => value_of(reference::indirect_target(args, ctx)),
         "OFFSET" => value_of(reference::offset_target(args, ctx)),
+        _ if func.per_range => reference::evaluate_per_range(name, args, ctx),
         // The fast lookups find their sheet by name, and another workbook's ('[1]May'!A:A) isn't
         // one: the general path raises ExternalReference, so the cell keeps its saved value.
         "INDEX" | "MATCH" | "XMATCH" | "XLOOKUP" | "VLOOKUP" if args.iter().any(reference::is_external) => None,
-        "INDEX" => evaluate_index_fast(args, ctx),
+        "INDEX" => match args.first() {
+            Some(FormulaExpr::RangeRef(_)) if args.len() < 4 => evaluate_index_fast(args, ctx),
+            _ => reference::index_of_reference(args, ctx),
+        },
         "MATCH" => evaluate_match_fast(args, ctx),
         "XMATCH" => evaluate_xmatch_fast(args, ctx),
         "XLOOKUP" => evaluate_xlookup_fast(args, ctx),
@@ -2012,12 +1997,7 @@ fn evaluate_position(name: &str, args: &[FormulaExpr], ctx: &EvaluationContext) 
     if matches!(name, "ROWS" | "COLUMNS") {
         return Ok(Some(FormulaValue::Number((last - first + 1) as f64)));
     }
-    if first == last {
-        return Ok(Some(FormulaValue::Number((first + 1) as f64)));
-    }
-    let numbers = (first..=last).map(|n| FormulaValue::Number((n + 1) as f64));
-    let data = if rows { numbers.map(|v| vec![v]).collect() } else { vec![numbers.collect()] };
-    Ok(Some(FormulaValue::Array { data, source: None }))
+    Ok(Some(crate::functions::lookup::positions(first, last, rows)))
 }
 
 /// FORMULATEXT requires special handling: it needs the raw cell reference
@@ -3271,39 +3251,16 @@ mod tests {
         // COLUMN() with no args - returns current column (default context is col 0, so 1-indexed = 1)
         assert_eq!(eval("=COLUMN()").unwrap(), FormulaValue::Number(1.0));
 
-        // ROW with single value - returns current row context
-        assert_eq!(eval("=ROW(5)").unwrap(), FormulaValue::Number(1.0));
-
-        // COLUMN with single value - returns current column context
-        assert_eq!(eval("=COLUMN(5)").unwrap(), FormulaValue::Number(1.0));
-
-        // ROW with array - returns column vector of row numbers
-        // For {1;2;3} (3 rows), returns {1;2;3} since default current_row=0 -> 1,2,3
-        let result = eval("=ROW({1;2;3})").unwrap();
-        match result {
-            FormulaValue::Array { data: arr, .. } => {
-                assert_eq!(arr.len(), 3); // 3 rows
-                assert_eq!(arr[0].len(), 1); // 1 column each
-                assert_eq!(arr[0][0], FormulaValue::Number(1.0));
-                assert_eq!(arr[1][0], FormulaValue::Number(2.0));
-                assert_eq!(arr[2][0], FormulaValue::Number(3.0));
+        // A value isn't a reference: each element is #VALUE!, or its own error.
+        assert_eq!(eval("=ROW(5)").unwrap(), FormulaValue::Error(CellError::Value));
+        assert_eq!(eval("=COLUMN(5)").unwrap(), FormulaValue::Error(CellError::Value));
+        assert_eq!(
+            eval("=COLUMN({1,#N/A})").unwrap(),
+            FormulaValue::Array {
+                data: vec![vec![FormulaValue::Error(CellError::Value), FormulaValue::Error(CellError::Na)]],
+                source: None,
             }
-            _ => panic!("Expected array result"),
-        }
-
-        // COLUMN with array - returns row vector of column numbers
-        // For {1,2,3} (3 columns), returns {1,2,3}
-        let result = eval("=COLUMN({1,2,3})").unwrap();
-        match result {
-            FormulaValue::Array { data: arr, .. } => {
-                assert_eq!(arr.len(), 1); // 1 row
-                assert_eq!(arr[0].len(), 3); // 3 columns
-                assert_eq!(arr[0][0], FormulaValue::Number(1.0));
-                assert_eq!(arr[0][1], FormulaValue::Number(2.0));
-                assert_eq!(arr[0][2], FormulaValue::Number(3.0));
-            }
-            _ => panic!("Expected array result"),
-        }
+        );
     }
 
     #[test]

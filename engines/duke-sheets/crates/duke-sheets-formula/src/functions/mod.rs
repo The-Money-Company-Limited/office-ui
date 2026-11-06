@@ -20,7 +20,37 @@ pub mod text;
 pub mod text_extra;
 pub mod wildcard;
 
-use crate::decompile::function_table::OperandClass;
+/// Excel's class for a function argument, from its function table ([MS-XLS] §2.5.198): what the
+/// argument takes, and so how a file writes a reference there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgClass {
+    /// A reference, kept whole (SUM's, COUNTIF's range). Written reference-class.
+    R,
+    /// One value: in a formula from before dynamic arrays a range there reads one cell.
+    /// Written value-class.
+    V,
+    /// An array (SUMPRODUCT's, MMULT's). Written array-class.
+    A,
+    /// A reference read as an array (INDEX's first, LOOKUP's vectors). Written reference-class,
+    /// as Excel writes `=INDEX(A1:A3,1)`.
+    RA,
+}
+
+/// What a function's result can be (see `FunctionDef::returns`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Returns {
+    /// One value, or an array only when an argument that takes one value is given one.
+    #[default]
+    Value,
+    /// An array whatever its arguments: FILTER, SEQUENCE, MMULT.
+    Array,
+    /// A reference it works out: INDEX, OFFSET, INDIRECT, XLOOKUP.
+    Reference,
+    /// A number per row or column of its reference: ROW, COLUMN.
+    PerCell,
+    /// Its last argument's result: LET.
+    Last,
+}
 use crate::error::{FormulaError, FormulaResult};
 use crate::evaluator::{EvaluationContext, FormulaValue};
 use duke_sheets_core::CellError;
@@ -82,10 +112,10 @@ pub struct FunctionDef {
     /// Default operand class for arguments. Most functions use `V` (value);
     /// aggregators (SUM/AVERAGE/etc.) use `R` (reference) so range operands
     /// iterate rather than collapse.
-    pub default_arg_class: OperandClass,
+    pub default_arg_class: ArgClass,
     /// Per-position operand class overrides (indexed by argument position).
     /// Arguments beyond this slice's length fall back to `default_arg_class`.
-    pub arg_classes: &'static [OperandClass],
+    pub arg_classes: &'static [ArgClass],
     /// Whether this function can return a reference (and therefore takes the
     /// operand class of the position it occupies). MS-XLS [MS-XLS] §2.5.198.103
     /// distinguishes reference-class functions (IF, CHOOSE, INDEX, OFFSET, …)
@@ -102,6 +132,30 @@ pub struct FunctionDef {
     pub scalar_args: ScalarArgs,
     /// How values typed into the formula are read (see `TypedArgs`).
     pub typed_args: TypedArgs,
+    /// The arguments it hands back as its result, references included: IF's value_if_true and
+    /// value_if_false, CHOOSE's choices. `SUM(IF(x,A1:A9))` sums the range. Its other arguments
+    /// (IF's condition, CHOOSE's index) decide which.
+    pub result_args: ScalarArgs,
+    /// What the result can be: one value, an array, a reference.
+    pub returns: Returns,
+    /// Given OFFSET over an array of offsets, it gives one result per range OFFSET gives:
+    /// SUBTOTAL, SUMIF, COUNTIF and the like (crate::reference::evaluate_per_range).
+    pub per_range: bool,
+}
+
+impl FunctionDef {
+    /// Excel's class for the argument at `position`. Arguments past `arg_classes` take
+    /// `default_arg_class`, but for the criteria of COUNTIFS, SUMIFS and the like, which take
+    /// one value each.
+    pub fn arg_class(&self, position: usize) -> ArgClass {
+        match self.arg_classes.get(position) {
+            Some(class) => *class,
+            None if matches!(self.scalar_args, ScalarArgs::EveryOtherFrom(_)) && self.scalar_args.includes(position) => {
+                ArgClass::V
+            }
+            None => self.default_arg_class,
+        }
+    }
 }
 
 /// The arguments where a function takes one value. Given an array there, Excel applies the
@@ -114,6 +168,8 @@ pub enum ScalarArgs {
     None,
     All,
     At(&'static [usize]),
+    /// This argument and every one after it.
+    From(usize),
     /// The criteria of COUNTIFS (1, 3, 5, …) or of SUMIFS and the like (2, 4, 6, …).
     EveryOtherFrom(usize),
 }
@@ -124,6 +180,7 @@ impl ScalarArgs {
             ScalarArgs::None => false,
             ScalarArgs::All => true,
             ScalarArgs::At(positions) => positions.contains(&position),
+            ScalarArgs::From(first) => position >= first,
             ScalarArgs::EveryOtherFrom(first) => position >= first && (position - first) % 2 == 0,
         }
     }
@@ -152,16 +209,115 @@ const SCALAR_ARGS: &[(&[&str], ScalarArgs)] = &[
             "WEEKNUM", "ISOWEEKNUM", "DATE", "TIME", "EDATE", "EOMONTH", "DATEDIF", "DAYS", "ABS", "INT",
             "TRUNC", "ROUND", "ROUNDUP", "ROUNDDOWN", "MROUND", "MOD", "SIGN", "SQRT", "POWER", "EXP",
             "LN", "LOG", "LOG10", "CEILING", "FLOOR", "EVEN", "ODD", "QUOTIENT", "FACT", "DOLLAR",
-            "FIXED", "ADDRESS",
+            "FIXED", "ADDRESS", "ERROR.TYPE", "CONCATENATE", "PMT", "FV", "PV", "NPER", "RATE", "IPMT",
+            "PPMT",
         ],
         ScalarArgs::All,
     ),
+    (&["SWITCH"], ScalarArgs::At(&[0])),
     (&["COUNTIF", "SUMIF", "AVERAGEIF", "SMALL", "LARGE"], ScalarArgs::At(&[1])),
-    (&["MATCH", "XMATCH", "VLOOKUP", "HLOOKUP", "XLOOKUP", "LOOKUP"], ScalarArgs::At(&[0])),
+    (&["MATCH", "XMATCH", "XLOOKUP", "LOOKUP"], ScalarArgs::At(&[0])),
+    (&["VLOOKUP", "HLOOKUP"], ScalarArgs::At(&[0, 2])),
     (&["INDEX"], ScalarArgs::At(&[1, 2])),
     (&["COUNTIFS"], ScalarArgs::EveryOtherFrom(1)),
     (&["SUMIFS", "AVERAGEIFS", "MAXIFS", "MINIFS"], ScalarArgs::EveryOtherFrom(2)),
 ];
+
+use ArgClass as Class;
+
+/// Excel's argument classes besides one value (V), the default: references (R), arrays (A) and
+/// references read as arrays (RA), then the class of the arguments past the list. This is the one
+/// place they are set; the .xls and .xlsb writers write a reference's token class from them, and
+/// in a formula from before dynamic arrays a range at a V argument reads one cell
+/// (crate::legacy). The functions that came with dynamic arrays take arrays everywhere but at
+/// their lookup values.
+const ARG_CLASSES: &[(&[&str], &[ArgClass], ArgClass)] = &[
+    (
+        &[
+            "SUM", "AVERAGE", "MIN", "MAX", "COUNT", "COUNTA", "PRODUCT", "STDEV", "VAR", "AND", "OR", "XOR",
+            "MEDIAN", "AVEDEV", "DEVSQ", "GEOMEAN", "HARMEAN", "SUMSQ", "KURT", "SKEW", "SKEW.P", "STDEVP",
+            "VARP", "STDEVA", "STDEVPA", "VARA", "VARPA", "AVERAGEA", "MAXA", "MINA", "STDEV.S", "STDEV.P",
+            "VAR.S", "VAR.P", "MODE.SNGL", "MODE.MULT", "DSUM", "DCOUNT", "DCOUNTA", "DAVERAGE", "DMAX", "DMIN",
+            "DGET", "DPRODUCT", "DSTDEV", "DSTDEVP", "DVAR", "DVARP", "COUNTIFS", "SUMIFS", "AVERAGEIFS",
+            "MAXIFS", "MINIFS", "ROW", "COLUMN", "ROWS", "COLUMNS", "AREAS", "ISREF", "T", "N", "COUNTBLANK",
+            "SHEET", "SHEETS", "FORMULATEXT", "ISFORMULA",
+        ],
+        &[],
+        Class::R,
+    ),
+    (&["IF"], &[Class::V, Class::R, Class::R], Class::V),
+    (&["NPV", "SUBTOTAL", "CHOOSE"], &[Class::V], Class::R),
+    (
+        &[
+            "LARGE", "SMALL", "QUARTILE", "QUARTILE.INC", "QUARTILE.EXC", "PERCENTILE", "PERCENTILE.INC",
+            "PERCENTILE.EXC", "PERCENTRANK", "PERCENTRANK.INC", "PERCENTRANK.EXC", "TRIMMEAN", "ZTEST",
+            "COUNTIF", "OFFSET",
+        ],
+        &[Class::R],
+        Class::V,
+    ),
+    (&["SUMIF", "AVERAGEIF"], &[Class::R, Class::V, Class::R], Class::V),
+    (&["RANK", "RANK.EQ", "RANK.AVG", "MATCH", "VLOOKUP", "HLOOKUP", "CELL"], &[Class::V, Class::R], Class::V),
+    (&["NETWORKDAYS", "WORKDAY"], &[Class::V, Class::V, Class::R], Class::V),
+    (&["NETWORKDAYS.INTL", "WORKDAY.INTL"], &[Class::V, Class::V, Class::V, Class::R], Class::V),
+    (
+        &[
+            "SUMPRODUCT", "MMULT", "MDETERM", "MINVERSE", "TRANSPOSE", "SUMX2MY2", "SUMX2PY2", "SUMXMY2",
+            "CORREL", "COVAR", "COVARIANCE.P", "COVARIANCE.S", "PEARSON", "RSQ", "SLOPE", "INTERCEPT", "STEYX",
+            "FTEST", "F.TEST", "CHITEST", "CHISQ.TEST", "MODE",
+        ],
+        &[],
+        Class::A,
+    ),
+    (&["FORECAST", "FORECAST.LINEAR"], &[Class::V], Class::A),
+    (&["TTEST", "T.TEST", "PROB"], &[Class::A, Class::A], Class::V),
+    (&["INDEX", "IRR", "MIRR"], &[Class::RA], Class::V),
+    (&["LOOKUP"], &[Class::V], Class::RA),
+    (&["FREQUENCY"], &[], Class::RA),
+    (&["LINEST", "LOGEST"], &[Class::RA, Class::RA], Class::V),
+    (&["TREND", "GROWTH"], &[Class::RA, Class::RA, Class::RA], Class::V),
+    // The array form of AGGREGATE (LARGE, SMALL, PERCENTILE, QUARTILE) needs no Ctrl+Shift+Enter.
+    (&["AGGREGATE"], &[Class::V, Class::V], Class::A),
+    (
+        &[
+            "LET", "LAMBDA", "MAP", "REDUCE", "SCAN", "BYROW", "BYCOL", "MAKEARRAY", "ISOMITTED", "FILTER",
+            "SORT", "SORTBY", "UNIQUE", "SEQUENCE", "RANDARRAY", "XLOOKUP", "XMATCH", "TEXTSPLIT",
+            "TEXTBEFORE", "TEXTAFTER", "VSTACK", "HSTACK", "TOCOL", "TOROW", "TAKE", "DROP", "CHOOSECOLS",
+            "CHOOSEROWS", "EXPAND", "WRAPROWS", "WRAPCOLS", "TEXTJOIN", "CONCAT", "PERCENTOF", "TRIMRANGE",
+            "IMAGE",
+        ],
+        &[],
+        Class::A,
+    ),
+];
+
+/// The arguments handed back as the result (see `FunctionDef::result_args`).
+const RESULT_ARGS: &[(&[&str], ScalarArgs)] = &[
+    (&["IF"], ScalarArgs::At(&[1, 2])),
+    (&["IFERROR", "IFNA"], ScalarArgs::At(&[1])),
+    (&["IFS"], ScalarArgs::EveryOtherFrom(1)),
+    (&["SWITCH"], ScalarArgs::EveryOtherFrom(2)),
+    (&["CHOOSE"], ScalarArgs::From(1)),
+];
+
+/// What the functions besides one-value ones return (see `Returns`).
+const RETURNS: &[(&[&str], Returns)] = &[
+    (
+        &[
+            "FILTER", "SORT", "SORTBY", "UNIQUE", "SEQUENCE", "RANDARRAY", "TRANSPOSE", "MMULT", "MINVERSE",
+            "MUNIT", "FREQUENCY", "LINEST", "LOGEST", "TREND", "GROWTH", "TEXTSPLIT", "VSTACK", "HSTACK",
+            "TOCOL", "TOROW", "TAKE", "DROP", "CHOOSECOLS", "CHOOSEROWS", "EXPAND", "WRAPROWS", "WRAPCOLS",
+            "MODE.MULT", "MAP", "SCAN", "BYROW", "BYCOL", "MAKEARRAY", "TRIMRANGE",
+        ],
+        Returns::Array,
+    ),
+    (&["INDEX", "OFFSET", "INDIRECT", "XLOOKUP"], Returns::Reference),
+    (&["ROW", "COLUMN"], Returns::PerCell),
+    (&["LET"], Returns::Last),
+];
+
+/// The functions that give one result per range of an array of references.
+const PER_RANGE: &[&str] = &["SUBTOTAL", "SUMIF", "SUMIFS", "COUNTIF", "COUNTIFS", "AVERAGEIF", "AVERAGEIFS", "MAXIFS", "MINIFS"];
 
 const TYPED_ARGS: &[(&[&str], TypedArgs)] = &[
     (
@@ -191,12 +347,15 @@ impl Default for FunctionDef {
             max_args: None,
             fixed_arity: false,
             volatile: false,
-            default_arg_class: OperandClass::V,
+            default_arg_class: ArgClass::V,
             arg_classes: &[],
             returns_reference: false,
             implementation: fn_not_implemented,
             scalar_args: ScalarArgs::None,
             typed_args: TypedArgs::AsGiven,
+            result_args: ScalarArgs::None,
+            returns: Returns::Value,
+            per_range: false,
         }
     }
 }
@@ -255,6 +414,26 @@ impl FunctionRegistry {
                 registry.function_mut(name).typed_args = *rule;
             }
         }
+        for (names, classes, default) in ARG_CLASSES {
+            for name in *names {
+                let def = registry.function_mut(name);
+                def.arg_classes = classes;
+                def.default_arg_class = *default;
+            }
+        }
+        for (names, rule) in RESULT_ARGS {
+            for name in *names {
+                registry.function_mut(name).result_args = *rule;
+            }
+        }
+        for (names, returns) in RETURNS {
+            for name in *names {
+                registry.function_mut(name).returns = *returns;
+            }
+        }
+        for name in PER_RANGE {
+            registry.function_mut(name).per_range = true;
+        }
 
         registry
     }
@@ -310,7 +489,6 @@ impl FunctionRegistry {
             max_args: None,
             implementation: math::fn_sum,
             volatile: false,
-            default_arg_class: OperandClass::R,
             ..Default::default()
         });
 
@@ -322,7 +500,6 @@ impl FunctionRegistry {
             max_args: None,
             implementation: math::fn_average,
             volatile: false,
-            default_arg_class: OperandClass::R,
             ..Default::default()
         });
 
@@ -334,7 +511,6 @@ impl FunctionRegistry {
             max_args: None,
             implementation: math::fn_min,
             volatile: false,
-            default_arg_class: OperandClass::R,
             ..Default::default()
         });
 
@@ -346,7 +522,6 @@ impl FunctionRegistry {
             max_args: None,
             implementation: math::fn_max,
             volatile: false,
-            default_arg_class: OperandClass::R,
             ..Default::default()
         });
 
@@ -358,7 +533,6 @@ impl FunctionRegistry {
             max_args: None,
             implementation: math::fn_count,
             volatile: false,
-            default_arg_class: OperandClass::R,
             ..Default::default()
         });
 
@@ -971,7 +1145,6 @@ impl FunctionRegistry {
             max_args: None,
             implementation: math_extra::fn_product,
             volatile: false,
-            default_arg_class: OperandClass::R,
             ..Default::default()
         });
         self.register(FunctionDef {
@@ -1199,7 +1372,6 @@ impl FunctionRegistry {
             // reference (PtgRef/PtgArea/PtgName) Excel emits R-class to
             // preserve the reference; for value expressions the leaf
             // class machinery degrades to V automatically.
-            arg_classes: &[OperandClass::V, OperandClass::R, OperandClass::R],
             // IF can return a reference (e.g. SUM(IF(...)) iterates the picked
             // range), so its PtgFunc/PtgFuncVar token takes the class of the
             // position it fills. Verified: SUM(IF(...)) → IF R-class;
@@ -1653,7 +1825,6 @@ impl FunctionRegistry {
             implementation: text::fn_t,
             volatile: false,
             fixed_arity: true,
-            arg_classes: &[OperandClass::R],
             ..Default::default()
         });
 
@@ -1667,7 +1838,6 @@ impl FunctionRegistry {
             implementation: text::fn_n,
             volatile: false,
             fixed_arity: true,
-            arg_classes: &[OperandClass::R],
             ..Default::default()
         });
 
@@ -2020,7 +2190,6 @@ impl FunctionRegistry {
             implementation: info_extra::fn_isref,
             volatile: false,
             fixed_arity: true,
-            arg_classes: &[OperandClass::R],
             ..Default::default()
         });
         self.register(FunctionDef {
@@ -2498,17 +2667,10 @@ impl FunctionRegistry {
             iftab: Some(29),
             declared_argc: 4,
             min_args: 2,
-            max_args: Some(3),
+            max_args: Some(4),
             implementation: lookup::fn_index,
             volatile: false,
-            // INDEX(array, row, [col]): arg 0 is a reference/array, emitted
-            // R-class. Verified against native Excel authoring:
-            //   =INDEX(A1:A3,1)      → PtgArea(R) PtgInt PtgFuncVar(V,29)
-            //   =SUM(INDEX(A1:A3,1)) → PtgArea(R) PtgInt PtgFuncVar(R,29) +Sum
-            // The earlier "PtgName + PtgFuncVar(iftab=255 UDF)" form was Excel
-            // REPAIRING our previously-malformed V-class first arg, not its
-            // canonical emission. arg 0 R-class + returns_reference fixes it.
-            arg_classes: &[OperandClass::R],
+            // INDEX(array, row, [col]) returns a reference; its classes are in ARG_CLASSES.
             returns_reference: true,
             ..Default::default()
         });
@@ -2539,7 +2701,6 @@ impl FunctionRegistry {
             // values. Verified against Excel XLSB authoring. (Without this,
             // Excel reads our V-class area where it expects a reference and
             // repairs it into a PtgName + PtgFuncVar(UDF) wrapper.)
-            arg_classes: &[OperandClass::V, OperandClass::R],
             ..Default::default()
         });
 
@@ -2578,8 +2739,6 @@ impl FunctionRegistry {
             // CHOOSE's Ftab grammar is `CHOOSE: (val, *val_or_ref)`. Arg 0
             // (the selector) is always V; the rest are `val_or_ref` so naked
             // references in a choice position emit R-class. Matches IF.
-            arg_classes: &[OperandClass::V],
-            default_arg_class: OperandClass::R,
             // Like IF, CHOOSE can return a reference, so its function token
             // takes the class of the position it fills. Verified:
             // IF(...,CHOOSE(...),...) → CHOOSE R-class.
@@ -2596,7 +2755,6 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: lookup::fn_row,
             volatile: false,
-            arg_classes: &[OperandClass::R],
             ..Default::default()
         });
 
@@ -2609,7 +2767,6 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: lookup::fn_column,
             volatile: false,
-            arg_classes: &[OperandClass::R],
             ..Default::default()
         });
 
@@ -2674,7 +2831,6 @@ impl FunctionRegistry {
             max_args: Some(5),
             implementation: special_form,
             volatile: true,
-            arg_classes: &[OperandClass::R],
             // OFFSET returns a reference; verified SUM(OFFSET(...)) → OFFSET
             // R-class (0x22), top-level OFFSET → V-class (0x42).
             returns_reference: true,
@@ -2699,7 +2855,6 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: lookup_extra::fn_areas,
             volatile: false,
-            arg_classes: &[OperandClass::R],
             ..Default::default()
         });
         self.register(FunctionDef {
@@ -2906,7 +3061,6 @@ impl FunctionRegistry {
             max_args: None,
             implementation: statistical::fn_counta,
             volatile: false,
-            default_arg_class: OperandClass::R,
             ..Default::default()
         });
 
@@ -2920,7 +3074,6 @@ impl FunctionRegistry {
             implementation: statistical::fn_countblank,
             volatile: false,
             fixed_arity: true,
-            arg_classes: &[OperandClass::R],
             ..Default::default()
         });
 
@@ -3090,7 +3243,6 @@ impl FunctionRegistry {
             max_args: None,
             implementation: statistical::fn_stdev,
             volatile: false,
-            default_arg_class: OperandClass::R,
             ..Default::default()
         });
 
@@ -3111,7 +3263,6 @@ impl FunctionRegistry {
             max_args: None,
             implementation: statistical::fn_var,
             volatile: false,
-            default_arg_class: OperandClass::R,
             ..Default::default()
         });
 

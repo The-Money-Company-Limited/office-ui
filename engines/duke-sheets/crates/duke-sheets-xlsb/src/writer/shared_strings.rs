@@ -109,8 +109,17 @@ pub(crate) fn build_sst(workbook: &Workbook) -> SstMap {
     let mut font_dedup: HashMap<u64, usize> = HashMap::new();
 
     for sheet in workbook.worksheets() {
-        for (_row, _col, cell) in sheet.iter_cells() {
-            match &cell.value {
+        for (row, col, cell) in sheet.iter_cells() {
+            // A spilled or Ctrl+Shift+Enter array's cells are saved as their values.
+            let resolved;
+            let value = match &cell.value {
+                CellValue::SpillTarget { .. } => {
+                    resolved = sheet.get_value_at(row, col);
+                    &resolved
+                }
+                value => value,
+            };
+            match value {
                 CellValue::String(s) => {
                     let s_str = s.as_str();
                     if !plain_index.contains_key(s_str) {

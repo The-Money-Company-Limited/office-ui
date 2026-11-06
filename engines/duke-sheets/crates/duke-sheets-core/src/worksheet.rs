@@ -643,6 +643,7 @@ impl Worksheet {
         value: V,
     ) -> Result<()> {
         self.validate_cell_position(row, col)?;
+        self.release_array_block(row, col);
         let removed_formula = self.remove_formula_state(row, col);
         self.cells.set_value(row, col, value.into());
         self.mutation_count += 1;
@@ -682,6 +683,9 @@ impl Worksheet {
 
         let formula = Self::normalize_formula_text(formula);
 
+        self.release_array_block(row, col);
+        // A new formula in a Ctrl+Shift+Enter block's top-left cell is the block's new formula.
+        let kind = self.cells.get_formula(row, col).map(|f| f.kind).unwrap_or_default();
         self.clear_spill(row, col);
         let style_index = self
             .cells
@@ -690,7 +694,7 @@ impl Worksheet {
             .unwrap_or(0);
         self.cells
             .set(row, col, CellData::with_style(cached_value, style_index));
-        self.cells.set_formula(row, col, FormulaData::new(formula));
+        self.cells.set_formula(row, col, FormulaData { kind, ..FormulaData::new(formula) });
         self.mutation_count += 1;
         self.topology_generation += 1;
         Ok(())
@@ -730,6 +734,7 @@ impl Worksheet {
 
     /// Clear a cell by indices
     pub fn clear_cell_at(&mut self, row: u32, col: u16) {
+        self.release_array_block(row, col);
         let removed_formula = self.remove_formula_state(row, col);
         self.cells.remove(row, col);
         self.mutation_count += 1;
@@ -796,6 +801,7 @@ impl Worksheet {
     pub fn clear_range(&mut self, range: &CellRange) {
         let mut removed_formula = false;
         for addr in range.cells() {
+            self.release_array_block(addr.row, addr.col);
             removed_formula |= self.remove_formula_state(addr.row, addr.col);
             self.cells.remove(addr.row, addr.col);
         }
@@ -2006,6 +2012,71 @@ impl Worksheet {
             return Err(Error::ColumnOutOfBounds(col, MAX_COLS - 1));
         }
         Ok(())
+    }
+
+    /// The Ctrl+Shift+Enter array formula whose block holds (row, col): its top-left cell's row
+    /// and column, and its rows and columns.
+    pub fn array_formula_block(&self, row: u32, col: u16) -> Option<(u32, u16, u32, u16)> {
+        let (anchor_row, anchor_col) = match self.cells.get(row, col).map(|c| &c.value) {
+            Some(CellValue::SpillTarget { source_row, source_col, .. }) => (*source_row, *source_col),
+            _ => (row, col),
+        };
+        match self.cells.get_formula(anchor_row, anchor_col)?.kind {
+            crate::cell::FormulaKind::Cse { rows, cols } => Some((anchor_row, anchor_col, rows, cols)),
+            crate::cell::FormulaKind::Dynamic => None,
+        }
+    }
+
+    /// Makes a Ctrl+Shift+Enter array formula over `rows` x `cols` cells from (row, col), as
+    /// undo puts one back: the block's other cells are cleared, and calculating fills them.
+    pub fn set_array_formula_at(&mut self, row: u32, col: u16, formula: &str, rows: u32, cols: u16) -> Result<()> {
+        if rows == 0 || cols == 0 {
+            return Err(Error::Other("An array formula covers at least one cell".into()));
+        }
+        self.validate_cell_position(row + rows - 1, col + cols - 1)?;
+        for r in row..row + rows {
+            for c in col..col + cols {
+                if (r, c) != (row, col) {
+                    let style = self.cells.get(r, c).map_or(0, |cell| cell.style_index);
+                    self.clear_cell_at(r, c);
+                    if style != 0 {
+                        self.cells.set_style(r, c, style);
+                    }
+                }
+            }
+        }
+        let cached = self.get_value_at(row, col);
+        self.set_formula_with_cached_value_at(row, col, formula, cached)?;
+        if let Some(data) = self.cells.get_formula_mut(row, col) {
+            data.kind = crate::cell::FormulaKind::Cse { rows, cols };
+        }
+        Ok(())
+    }
+
+    /// Excel refuses to change part of a Ctrl+Shift+Enter array, and the editor has no way to say
+    /// so, so changing a cell of a block other than its top-left one turns the block into its
+    /// values first. Clearing the top-left cell clears the whole block.
+    fn release_array_block(&mut self, row: u32, col: u16) {
+        let Some(CellValue::SpillTarget { source_row, source_col, .. }) = self.cells.get(row, col).map(|c| c.value.clone())
+        else {
+            return;
+        };
+        let Some(crate::cell::FormulaKind::Cse { rows, cols }) =
+            self.cells.get_formula(source_row, source_col).map(|f| f.kind)
+        else {
+            return;
+        };
+        let values: Vec<(u32, u16, CellValue)> = (0..rows)
+            .flat_map(|r| (0..cols).map(move |c| (source_row + r, source_col + c)))
+            .map(|(r, c)| (r, c, self.get_value_at(r, c)))
+            .collect();
+        self.remove_formula_state(source_row, source_col);
+        for (r, c, value) in values {
+            self.cells.set_value(r, c, value);
+        }
+        self.mutation_count += 1;
+        self.topology_generation += 1;
+        self.dirty_value_ranges.push((source_row, source_col, source_row + rows - 1, source_col + cols - 1));
     }
 
     fn remove_formula_state(&mut self, row: u32, col: u16) -> bool {

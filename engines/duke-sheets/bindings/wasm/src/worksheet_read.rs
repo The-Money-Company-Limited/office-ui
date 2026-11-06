@@ -5,7 +5,7 @@ use wasm_bindgen::prelude::*;
 use crate::{
     to_js_error, to_js_value,
     types::{
-        WasmAutoFilter, WasmColor, WasmComment, WasmCommentEntry, WasmConditionalFormatRule,
+        WasmArrayFormula, WasmAutoFilter, WasmColor, WasmComment, WasmCommentEntry, WasmConditionalFormatRule,
         WasmDataValidation, WasmFormulaCell, WasmFreezePanes, WasmHyperlink,
         WasmHyperlinkEntry, WasmImageInfo, WasmMergeSpan,
         WasmMergedRegion, WasmPageBreak, WasmPageSetup, WasmProtectedRange, WasmRow, WasmRowCell,
@@ -792,6 +792,26 @@ impl Worksheet {
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
         Ok(ws.get_formula_at(row, col as u16).map(|s| s.to_string()))
+    }
+
+    /// The Ctrl+Shift+Enter array formula whose block holds the cell, as
+    /// `{ row, col, rows, cols, formula }` for its top-left cell, or `null`.
+    #[wasm_bindgen(js_name = arrayFormulaAt)]
+    pub fn array_formula_at(&self, row: u32, col: u32) -> Result<JsValue, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        match ws.array_formula_block(row, col as u16) {
+            Some((row, col, rows, cols)) => to_js_value(&WasmArrayFormula {
+                row,
+                col: col as u32,
+                rows,
+                cols: cols as u32,
+                formula: ws.get_formula_at(row, col).unwrap_or_default().to_string(),
+            }),
+            None => Ok(JsValue::NULL),
+        }
     }
 
     #[wasm_bindgen(getter, js_name = formulaCells)]

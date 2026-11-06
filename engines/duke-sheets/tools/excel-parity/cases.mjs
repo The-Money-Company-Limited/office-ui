@@ -389,6 +389,44 @@ export const cases = [
   ["approximate MATCH skips text", { A1: 1, A2: "a", A3: 3, A4: 7 }, "=MATCH(5,A1:A4)", 3],
   ["approximate VLOOKUP under a header", { A1: "h", A2: 1, A3: 2, A4: 3, B1: "x", B2: "a", B3: "b", B4: "c" }, "=VLOOKUP(2.5,A:B,2)", "b", "D1"],
   ["approximate MATCH of text among numbers", { A1: 1, A2: "b", A3: 3 }, '=MATCH("c",A1:A3)', 2],
+  // The @ operator and arrays at arguments that take one value (COD-1790, COD-1795)
+  ["@ reads the range's cell in the formula's row", n3, "=@A1:A3", 2, "C2"],
+  ["@ with no cell in the formula's row", n3, "=@A1:A3", "#VALUE!", "C5"],
+  ["@ in a file reads as _xlfn.SINGLE", n3, "=_xlfn.SINGLE(A1:A3)", 3, "C3"],
+  // Legacy =SUMPRODUCT(IF(A1:A3>1,1,0)) opens in Excel 365 as this: IF's condition reads one cell.
+  ["@ in IF's condition inside SUMPRODUCT", n3, "=SUMPRODUCT(IF(@A1:A3>1,1,0))", "#VALUE!", "D5"],
+  ["@ on INDEX's reference", n3, "=@INDEX(A1:A3,0,1)", 2, "C2"],
+  ["ROW of IF's reference", {}, "=ROW(IF(TRUE,B3))", 3],
+  ["ROW of CHOOSE's reference", {}, "=ROW(CHOOSE(2,A1,B7))", 7],
+  ["ROW of XLOOKUP's reference", n3, "=ROW(XLOOKUP(2,A1:A3,B1:B3))", 2],
+  ["ROW of a LET name for a range", {}, "=SUM(LET(r,B2:B4,ROW(r)))", 9],
+  ["ROW of two ranges' shared cells", {}, "=SUM(ROW(A1:B3 B2:C4))", 5],
+  ["ROW of a name for INDEX", { "name:Rng": "=INDEX(Sheet1!$A$1:$A$9,2)" }, "=ROW(Rng)", 2],
+  ["ROWS of a spill", { C1: "=SEQUENCE(3)" }, "=ROWS(C1#)", 3],
+  ["INDEX in a union's second area", { A1: 1, C1: 5 }, "=INDEX((A1:B2,C1:D2),1,1,2)", 5],
+  ["ROW of INDEX past the areas", {}, "=ROW(INDEX(A1:B2,1,1,2))", "#REF!"],
+  ["LEFT of a one-piece TEXTSPLIT", {}, '=LEFT(TEXTSPLIT("ab",", "),1)', "a"],
+  ["ERROR.TYPE over an array", { A1: "=1/0", B1: "=NA()" }, "=SUM(ERROR.TYPE(A1:B1))", 9],
+  // As Excel saved IFNA(INDEX(A2:C2,MATCH(3,ERROR.TYPE(COLUMN(IF(A2:C2<>"~N/A",A2:C2))),0)),"") (42354).
+  ["COLUMN of values finds the first non-error", { A1: "=NA()", B1: "x" }, '=MATCH(3,ERROR.TYPE(COLUMN(IF(A1:B1<>"",A1:B1))),0)', 2],
+  ["INDEX in area 1", { A1: 1, B1: 2, A2: 3, B2: 4 }, "=INDEX(A1:B2,2,1,1)", 3],
+  ["INDEX past the areas", { A1: 1, B1: 2, A2: 3, B2: 4 }, "=INDEX(A1:B2,2,1,2)", "#REF!"],
+  // As Excel saved SUMPRODUCT(--(SUBTOTAL(4,OFFSET($B$2:$B$8,,ROW($1:$6)-1,))=B2:G2)) (52532).
+  ["SUBTOTAL of OFFSET over an array of columns", { A1: 1, A2: 2, B1: 10, B2: 20 }, "=SUMPRODUCT(SUBTOTAL(9,OFFSET(A1:A2,,{0,1})))", 33],
+  ["SUBTOTAL of OFFSET gives one result per range", { A1: 1, A2: 2, B1: 10, B2: 20 }, "=INDEX(SUBTOTAL(4,OFFSET(A1:A2,,{0;1})),2)", 20],
+  // As Excel saved SUM(SUMIF(A1:E17,G2,OFFSET(A1:A17,,{1,2,3}))) (50250).
+  ["SUBTOTAL of OFFSET over a name for an array", { A1: 1, A2: 2, B1: 10, B2: 20, "name:Cols": "={0,1}" }, "=SUMPRODUCT(SUBTOTAL(9,OFFSET(A1:A2,,Cols)))", 33],
+  ["INDEX in a union's first area", { A1: 1, B2: 4, C1: 5 }, "=INDEX((A1:B2,C1:D2),2,2)", 4],
+  ["SUMIF over OFFSET columns", { A1: "x", A2: "y", B1: 1, B2: 2, C1: 10, C2: 20 }, '=SUM(SUMIF(A1:A2,"x",OFFSET(A1:A2,,{1,2})))', 11],
+  ["SUMIF sum range takes the range's shape", { A1: "x", B1: "x", C1: 1, D1: 2 }, '=SUMIF(A1:B1,"x",C1)', 3],
+  // A blank criteria cell is 0, as Microsoft documents for COUNTIFS; AGGREGATE(15,6,…,COUNTIF(D$2:D8,D8)) (48620).
+  ["COUNTIFS of a blank criteria cell counts zeros", { A1: 0, A2: 5 }, "=COUNTIFS(A1:A3,D1)", 1],
+  ["COUNTIF of a blank criteria cell counts zeros", { A1: 0, A2: 5 }, "=COUNTIF(A1:A3,D1)", 1],
+  // As Excel saved TEXT(DATE(RIGHT(A2,2),RIGHT(A2,6),),"MMM YY") with "Oct 21" for the month (51354).
+  ["DATE with a month past 32767", {}, "=DATE(1921,45586,0)", "#NUM!"],
+  ["DATE with text month", {}, '=DATE(2020,"x",1)', "#VALUE!"],
+  ["month and day text is this year", {}, '=YEAR("Feb 22")=YEAR(TODAY())', true],
+  ["day of month and day text", {}, '=DAY("22 Feb")', 22],
   // Financial
   ["PMT", {}, "=PMT(0.05/12,360,200000)", -1073.6432460242795],
   ["FV", {}, "=FV(0.05,10,-100)", 1257.7892535548839],

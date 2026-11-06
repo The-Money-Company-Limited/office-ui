@@ -26,7 +26,7 @@ use crate::{
 };
 use ahash::{AHashMap, AHashSet};
 use dashmap::DashMap;
-use duke_sheets_core::{CellAddress, CellRange};
+use duke_sheets_core::{CellAddress, CellRange, FormulaKind};
 use duke_sheets_formula::dependency::CellKey;
 use duke_sheets_formula::functions::FunctionRegistry;
 use duke_sheets_formula::StructuredReference;
@@ -386,6 +386,34 @@ fn shown_result(value: FormulaValue) -> CellValue {
     match value {
         FormulaValue::Empty => CellValue::Number(0.0),
         other => other.into(),
+    }
+}
+
+/// Stores a formula's result: an array spills from a dynamic-array formula, and fills a
+/// Ctrl+Shift+Enter array formula's block, a single row or column repeating across it and #N/A
+/// past the result's end.
+fn store_formula_result(workbook: &mut Workbook, cell_key: CellKey, result: FormulaValue) {
+    let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) else { return };
+    sheet.clear_spill(cell_key.row, cell_key.col);
+    let kind = sheet.formula_data_at(cell_key.row, cell_key.col).map(|f| f.kind);
+    let result = match kind {
+        Some(FormulaKind::Cse { rows, cols }) => FormulaValue::Array {
+            data: duke_sheets_formula::fit_array(&result, rows as usize, cols as usize),
+            source: None,
+        },
+        _ => result,
+    };
+    match result {
+        FormulaValue::Array { data: array, .. } => {
+            let cell_array: Vec<Vec<CellValue>> = array
+                .into_iter()
+                .map(|row| row.into_iter().map(shown_result).collect())
+                .collect();
+            let _ = sheet.set_array_formula_result(cell_key.row, cell_key.col, cell_array);
+        }
+        _ => {
+            let _ = sheet.set_formula_result(cell_key.row, cell_key.col, shown_result(result));
+        }
     }
 }
 
@@ -1363,25 +1391,7 @@ impl CalculationEngine {
             return false;
         };
 
-        if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
-            sheet.clear_spill(cell_key.row, cell_key.col);
-        }
-
-        // Store the result
-        if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
-            match result {
-                FormulaValue::Array { data: array, .. } => {
-                    let cell_array: Vec<Vec<CellValue>> = array
-                        .into_iter()
-                        .map(|row| row.into_iter().map(shown_result).collect())
-                        .collect();
-                    let _ = sheet.set_array_formula_result(cell_key.row, cell_key.col, cell_array);
-                }
-                _ => {
-                    let _ = sheet.set_formula_result(cell_key.row, cell_key.col, shown_result(result));
-                }
-            }
-        }
+        store_formula_result(workbook, cell_key, result);
         // Only report a spill if set_array_formula_result actually created
         // spill targets (1×1 arrays are stored as scalars, no spill).
         let did_spill = workbook
@@ -1475,21 +1485,7 @@ impl CalculationEngine {
     /// Store a pre-computed formula result into the workbook.
     /// Returns `true` if the result spilled.
     fn store_result(workbook: &mut Workbook, cell_key: CellKey, result: FormulaValue) -> bool {
-        if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
-            sheet.clear_spill(cell_key.row, cell_key.col);
-            match result {
-                FormulaValue::Array { data: array, .. } => {
-                    let cell_array: Vec<Vec<CellValue>> = array
-                        .into_iter()
-                        .map(|row| row.into_iter().map(shown_result).collect())
-                        .collect();
-                    let _ = sheet.set_array_formula_result(cell_key.row, cell_key.col, cell_array);
-                }
-                _ => {
-                    let _ = sheet.set_formula_result(cell_key.row, cell_key.col, shown_result(result));
-                }
-            }
-        }
+        store_formula_result(workbook, cell_key, result);
         workbook
             .worksheet(cell_key.sheet)
             .map_or(false, |s| s.is_spill_source(cell_key.row, cell_key.col))
@@ -2618,6 +2614,66 @@ mod tests {
         // Circular cells evaluate using cached/default values (matching Excel
         // behavior) rather than producing #REF! errors.
         assert_eq!(stats.errors, 0, "errors");
+    }
+
+    fn value(workbook: &Workbook, address: &str) -> CellValue {
+        let addr = CellAddress::parse(address).unwrap();
+        workbook.worksheet(0).unwrap().get_value_at(addr.row, addr.col)
+    }
+
+    /// A1:A3 holding 1, 2, 3, and a Ctrl+Shift+Enter block `{=A1:A3*2}` over C1:C4.
+    fn workbook_with_block() -> Workbook {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        for (i, n) in [1.0, 2.0, 3.0].iter().enumerate() {
+            sheet.set_cell_value_at(i as u32, 0, *n).unwrap();
+        }
+        sheet.set_cell_formula("C1", "=A1:A3*2").unwrap();
+        sheet.formula_data_at_mut(0, 2).unwrap().kind = FormulaKind::Cse { rows: 4, cols: 1 };
+        sheet.set_cell_formula("D2", "=A1:A3*2").unwrap();
+        sheet.formula_data_at_mut(1, 3).unwrap().kind = FormulaKind::Cse { rows: 1, cols: 1 };
+        workbook.calculate().unwrap();
+        workbook
+    }
+
+    #[test]
+    fn a_ctrl_shift_enter_block_shows_one_element_per_cell() {
+        let workbook = workbook_with_block();
+        assert_eq!(value(&workbook, "C1"), CellValue::Number(2.0));
+        assert_eq!(value(&workbook, "C3"), CellValue::Number(6.0));
+        assert_eq!(value(&workbook, "C4"), CellValue::Error(CellError::Na), "past the array");
+        assert_eq!(value(&workbook, "D2"), CellValue::Number(2.0), "one cell shows the first element");
+        assert_eq!(value(&workbook, "D3"), CellValue::Empty, "and doesn't spill");
+        assert!(workbook.worksheet(0).unwrap().formula_data_at(1, 2).is_none(), "only the top-left cell holds the formula");
+    }
+
+    #[test]
+    fn changing_part_of_a_block_turns_it_into_values() {
+        let mut workbook = workbook_with_block();
+        workbook.worksheet_mut(0).unwrap().set_cell_value("C2", 9.0).unwrap();
+        workbook.calculate().unwrap();
+        assert!(workbook.worksheet(0).unwrap().formula_data_at(0, 2).is_none());
+        assert_eq!(value(&workbook, "C1"), CellValue::Number(2.0));
+        assert_eq!(value(&workbook, "C2"), CellValue::Number(9.0));
+        assert_eq!(value(&workbook, "C3"), CellValue::Number(6.0));
+    }
+
+    #[test]
+    fn a_block_keeps_its_extent_when_rows_move() {
+        let mut workbook = workbook_with_block();
+        workbook.insert_rows(0, 0, 1).unwrap();
+        assert_eq!(value(&workbook, "C3"), CellValue::Number(4.0), "the block keeps its values until calculated");
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(sheet.formula_data_at(1, 2).map(|f| f.kind), Some(FormulaKind::Cse { rows: 4, cols: 1 }));
+        assert_eq!(value(&workbook, "C4"), CellValue::Number(6.0));
+        assert_eq!(value(&workbook, "C5"), CellValue::Error(CellError::Na));
+        workbook.worksheet_mut(0).unwrap().set_cell_formula("C2", "=A2:A4*3").unwrap();
+        workbook.calculate().unwrap();
+        assert_eq!(value(&workbook, "C4"), CellValue::Number(9.0), "a new formula in the top-left cell is the block's");
+        workbook.worksheet_mut(0).unwrap().clear_cell("C2").unwrap();
+        workbook.calculate().unwrap();
+        assert_eq!(value(&workbook, "C3"), CellValue::Empty, "clearing the top-left cell clears the block");
     }
 
     #[test]

@@ -334,9 +334,11 @@ fn union_parens_survive_outside_sum() {
         s.get_formula_at(0, 3).expect("COUNT formula must survive"),
         "=COUNT((A1,B1))",
     );
+    // A .xls formula reads as one from before dynamic arrays, with Excel's `@` where one value
+    // is expected.
     assert_eq!(
         s.get_formula_at(1, 3).expect("bare union formula must survive"),
-        "=(A1,B1)",
+        "=@(A1,B1)",
     );
 }
 
@@ -1124,4 +1126,23 @@ fn external_udf_round_trips_text_via_externname() {
         f.contains("[1]!TBLink") && f.contains("acct"),
         "external UDF lost from formula: {f:?}"
     );
+}
+
+#[test]
+fn an_arrays_cells_are_saved_as_their_values() {
+    // A spilled array's other cells hold no formula; a .xls file keeps their values.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_formula("A1", "=SEQUENCE(3)").unwrap();
+    ws.set_array_formula_result(
+        0,
+        0,
+        vec![vec![CellValue::Number(1.0)], vec![CellValue::string("two")], vec![CellValue::Number(3.0)]],
+    )
+    .unwrap();
+
+    let parsed = write_then_read(&wb);
+    let s = parsed.worksheet(0).unwrap();
+    assert_eq!(s.get_value_at(1, 0), CellValue::string("two"));
+    assert_eq!(s.get_value_at(2, 0), CellValue::Number(3.0));
 }

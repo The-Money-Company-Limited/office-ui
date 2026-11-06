@@ -717,17 +717,7 @@ fn strip_xlfn_prefix(name: &str) -> &str {
 
 /// Check if a sheet name needs to be quoted in a formula.
 fn needs_quoting(name: &str) -> bool {
-    if name.is_empty() {
-        return true;
-    }
-    // Must quote if contains spaces, special chars, or starts with a digit
-    name.contains(' ')
-        || name.contains('\'')
-        || name.contains('!')
-        || name.contains(':')
-        || name.contains('[')
-        || name.contains(']')
-        || name.chars().next().map_or(false, |c| c.is_ascii_digit())
+    crate::print::sheet_needs_quotes(name)
 }
 
 #[cfg(test)]

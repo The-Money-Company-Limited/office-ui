@@ -17,7 +17,7 @@ use crate::opc::{
 };
 use crate::styles::{roundtrip_theme_data_for, XlsxStyleTable};
 use duke_sheets_core::style::Color;
-use duke_sheets_core::{CellAddress, CellRange, SheetSlot, Workbook};
+use duke_sheets_core::{CellAddress, CellRange, FormulaKind, SheetSlot, Workbook};
 use form_controls::radio_head_flags;
 
 mod chart;
@@ -739,6 +739,10 @@ fn chart_ex_style_num(total_standard_charts: usize, chart_ex_num: usize) -> usiz
 /// XLSX file writer
 pub struct XlsxWriter;
 
+/// Each formula cell's saved text (without its `=`) and whether it is marked as a dynamic-array
+/// formula, by (row, column).
+type SavedFormulas = HashMap<(u32, u16), (String, bool)>;
+
 impl XlsxWriter {
     /// Write a workbook to a file path
     pub fn write_file<P: AsRef<Path>>(workbook: &Workbook, path: P) -> XlsxResult<()> {
@@ -793,7 +797,8 @@ impl XlsxWriter {
     /// Write a workbook to a writer
     pub fn write<W: Write + Seek>(workbook: &Workbook, writer: W) -> XlsxResult<()> {
         let mut zip = zip::ZipWriter::new(writer);
-        let needs_metadata = Self::has_dynamic_arrays(workbook);
+        let saved_formulas = Self::saved_formulas(workbook);
+        let needs_metadata = saved_formulas.iter().flat_map(|sheet| sheet.values()).any(|saved| saved.1);
 
         // Build a workbook-wide style table.
         let style_table = XlsxStyleTable::build(workbook);
@@ -1049,6 +1054,7 @@ impl XlsxWriter {
                 &sheet_table_globals,
                 drawing_num,
                 ctrl_prop_start,
+                &saved_formulas[i],
             )?;
 
             let worksheet_source = format!("xl/worksheets/sheet{}.xml", i + 1);
@@ -1842,18 +1848,7 @@ impl XlsxWriter {
     }
 
     fn quote_sheet_name(name: &str) -> String {
-        let needs_quoting = name.contains(' ')
-            || name.contains('\'')
-            || name.contains('!')
-            || name.contains('[')
-            || name.contains(']')
-            || name.chars().next().is_some_and(|c| c.is_ascii_digit());
-        if needs_quoting {
-            let escaped = name.replace('\'', "''");
-            format!("'{}'", escaped)
-        } else {
-            name.to_string()
-        }
+        duke_sheets_formula::print::quoted(name)
     }
 
     fn defined_name_key(name: &str, scope: &duke_sheets_core::named_range::NameScope) -> String {
@@ -1901,24 +1896,39 @@ impl XlsxWriter {
         })
     }
 
-    fn has_dynamic_arrays(workbook: &Workbook) -> bool {
-        for sheet in workbook.worksheets() {
-            for (row, col, _) in sheet.formula_cells() {
-                if sheet
-                    .formula_data_at(row, col)
-                    .and_then(|formula| formula.array_result.as_ref())
-                    .is_some()
-                {
-                    return true;
-                }
-            }
-            for (_, _, cell) in sheet.iter_cells() {
-                if matches!(&cell.value, duke_sheets_core::CellValue::SpillTarget { .. }) {
-                    return true;
-                }
-            }
-        }
-        false
+    /// How each formula is saved, worked out once per cell: its text without the `=`, and whether
+    /// it is a dynamic-array formula (`cm="1"`), as legacy::saved_formula decides or because it
+    /// spills or is blocked from spilling. A Ctrl+Shift+Enter array formula and a data table's
+    /// TABLE have no mark.
+    fn saved_formulas(workbook: &Workbook) -> Vec<SavedFormulas> {
+        let names = duke_sheets_formula::legacy::Names::of(workbook);
+        workbook
+            .worksheets()
+            .map(|sheet| {
+                sheet
+                    .formula_cells()
+                    .filter_map(|(row, col, text)| {
+                        let formula = sheet.formula_data_at(row, col)?;
+                        let (saved, dynamic) = match formula.kind {
+                            FormulaKind::Cse { .. } => (duke_sheets_formula::legacy::saved_array_formula(text), false),
+                            FormulaKind::Dynamic if text.get(..7).is_some_and(|start| start.eq_ignore_ascii_case("=TABLE(")) => (text.to_string(), false),
+                            FormulaKind::Dynamic => {
+                                let (saved, dynamic) = duke_sheets_formula::legacy::saved_formula(text, &names);
+                                let spills = sheet.is_spill_source(row, col)
+                                    || sheet.get_value_at(row, col)
+                                        == duke_sheets_core::CellValue::Error(duke_sheets_core::CellError::Spill);
+                                (saved, dynamic || spills)
+                            }
+                        };
+                        let saved = match saved.strip_prefix('=') {
+                            Some(body) => body.to_string(),
+                            None => saved,
+                        };
+                        Some(((row, col), (saved, dynamic)))
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     fn write_metadata_xml<W: Write + Seek>(zip: &mut zip::ZipWriter<W>) -> XlsxResult<()> {
@@ -2035,6 +2045,7 @@ impl XlsxWriter {
         sheet_table_globals: &[usize],
         drawing_num: Option<usize>,
         ctrl_prop_start: usize,
+        saved_formulas: &SavedFormulas,
     ) -> XlsxResult<Vec<WorksheetRelationship>> {
         let path = format!("xl/worksheets/sheet{}.xml", index + 1);
         let mut rels = Vec::new();
@@ -2125,7 +2136,7 @@ impl XlsxWriter {
             Self::write_cols(w, sheet)?;
 
             // sheetData (cell data)
-            Self::write_sheet_data(w, sheet, index, style_table, sst)?;
+            Self::write_sheet_data(w, sheet, index, style_table, sst, saved_formulas)?;
 
             // sheetProtection
             Self::write_sheet_protection(w, sheet)?;
@@ -2447,6 +2458,7 @@ impl XlsxWriter {
         sheet_index: usize,
         style_table: &XlsxStyleTable,
         sst: &SharedStringTable,
+        saved_formulas: &SavedFormulas,
     ) -> XlsxResult<()> {
         w.write_event(Event::Start(BytesStart::new("sheetData")))?;
 
@@ -2525,7 +2537,7 @@ impl XlsxWriter {
                 (Some(cols), None) | (None, Some(cols)) => {
                     for col in cols {
                         let cell = sheet.cell_at(row, *col).unwrap_or(&empty_cell);
-                        Self::write_cell(w, row, *col, cell, sheet_index, style_table, sst, sheet)?;
+                        Self::write_cell(w, row, *col, cell, sheet_index, style_table, sst, sheet, saved_formulas)?;
                     }
                 }
                 (Some(grid_cols), Some(formula_only_cols)) => {
@@ -2569,6 +2581,7 @@ impl XlsxWriter {
                             style_table,
                             sst,
                             sheet,
+                            saved_formulas,
                         )?;
                     }
                 }
@@ -2624,18 +2637,37 @@ impl XlsxWriter {
         style_table: &XlsxStyleTable,
         sst: &SharedStringTable,
         worksheet: &duke_sheets_core::Worksheet,
+        saved_formulas: &SavedFormulas,
     ) -> XlsxResult<()> {
         let addr = CellAddress::new(row, col);
         let cell_ref = addr.to_a1_string();
         let xf_id = style_table.xf_id_for(sheet_index, cell.style_index);
         let xf_str = xf_id.to_string();
 
-        if let Some(formula) = worksheet.formula_data_at(row, col) {
-            let formula_text = if formula.text.starts_with('=') {
-                &formula.text[1..]
-            } else {
-                formula.text.as_str()
-            };
+        // The cells of a Ctrl+Shift+Enter block are saved as plain values.
+        if let duke_sheets_core::CellValue::SpillTarget { source_row, source_col, .. } = cell.value {
+            if matches!(worksheet.formula_data_at(source_row, source_col).map(|f| f.kind), Some(FormulaKind::Cse { .. })) {
+                let value = duke_sheets_core::CellData::with_style(worksheet.get_value_at(row, col), cell.style_index);
+                return Self::write_cell(w, row, col, &value, sheet_index, style_table, sst, worksheet, saved_formulas);
+            }
+        }
+
+        if let (Some(formula), Some((formula_text, dynamic))) =
+            (worksheet.formula_data_at(row, col), saved_formulas.get(&(row, col)))
+        {
+            // An array formula names the cells it covers: a dynamic one those it spills over.
+            let array_ref = match formula.kind {
+                FormulaKind::Cse { rows, cols } => Some((rows, cols)),
+                FormulaKind::Dynamic if *dynamic => Some(
+                    worksheet
+                        .get_spill_info(row, col)
+                        .map_or((1, 1), |info| (info.rows, info.cols)),
+                ),
+                FormulaKind::Dynamic => None,
+            }
+            .map(|(rows, cols)| {
+                CellRange::new(addr, CellAddress::new(row + rows - 1, col + cols - 1)).to_a1_string()
+            });
             let mut c = BytesStart::new("c");
             c.push_attribute(("r", cell_ref.as_str()));
             if xf_id != 0 {
@@ -2648,12 +2680,17 @@ impl XlsxWriter {
                 duke_sheets_core::CellValue::Error(_) => c.push_attribute(("t", "e")),
                 _ => {}
             }
-            if formula.array_result.is_some() {
+            if *dynamic {
                 c.push_attribute(("cm", "1"));
             }
             w.write_event(Event::Start(c))?;
-            w.create_element("f")
-                .write_text_content(BytesText::new(formula_text))?;
+            let mut f = w.create_element("f");
+            if let Some(array_ref) = &array_ref {
+                f = f
+                    .with_attribute(("t", "array"))
+                    .with_attribute(("ref", array_ref.as_str()));
+            }
+            f.write_text_content(BytesText::new(formula_text.as_str()))?;
             match &cell.value {
                 duke_sheets_core::CellValue::Number(n) => {
                     let v = n.to_string();

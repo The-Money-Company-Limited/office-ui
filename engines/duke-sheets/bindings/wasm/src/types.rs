@@ -2052,6 +2052,17 @@ pub struct WasmHyperlinkEntry {
     pub hyperlink: WasmHyperlink,
 }
 
+/// A Ctrl+Shift+Enter array formula: its top-left cell, extent and formula.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmArrayFormula {
+    pub row: u32,
+    pub col: u32,
+    pub rows: u32,
+    pub cols: u32,
+    pub formula: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmFormulaCell {

@@ -62,6 +62,12 @@ import {
   type XlsxCommentThread
 } from "./comments";
 import { applyXlsxCut, captureXlsxCut, getXlsxInitialActiveCell } from "./selection-tools";
+import {
+  applyCellMutationState,
+  applyCellMutationStates,
+  captureCellMutationState as captureWorksheetCellState,
+  type CellMutationState
+} from "./cell-history";
 import { safeCalculate, tryRecalculate } from "./safe-calculate";
 import { cellAddressToA1, parseXlsxRange } from "./range-reference";
 import { canUseConfiguredWasmSourceInWorker, getSheetsWasmModule } from "./wasm";
@@ -155,12 +161,6 @@ type SnapshotHistoryEntry = {
   bytes: Uint8Array;
   selection: XlsxCellRange | null;
   tabs: XlsxWorkbookTab[];
-};
-
-type CellMutationState = {
-  formula: string | null;
-  style: CellStyle | null;
-  value: unknown;
 };
 
 type CellEditHistoryEntry = {
@@ -1387,25 +1387,6 @@ function cloneCellStyle(style: unknown): unknown {
     return JSON.parse(JSON.stringify(style));
   } catch {
     return style;
-  }
-}
-
-function applyCellMutationState(
-  worksheet: ReturnType<Workbook["getSheet"]>,
-  cell: XlsxCellAddress,
-  state: CellMutationState
-) {
-  if (state.formula) {
-    worksheet.setFormula(cellAddressToA1(cell), state.formula);
-  } else {
-    worksheet.setCell(cellAddressToA1(cell), normalizeCellValue(state.value));
-  }
-
-  // A cell that had no style gets the default one back, dropping a format typing gave it.
-  if (state.style) {
-    worksheet.setCellStyleAt(cell.row, cell.col, state.style);
-  } else {
-    worksheet.clearCellStyleAt(cell.row, cell.col);
   }
 }
 
@@ -3546,11 +3527,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       return null;
     }
 
-    return {
-      formula: worksheet.getFormulaAt(cell.row, cell.col) ?? null,
-      style: worksheet.getCellStyleAt(cell.row, cell.col),
-      value: worksheet.getCellAt(cell.row, cell.col).toJs()
-    };
+    return captureWorksheetCellState(worksheet, cell);
   }, [getActiveWorksheet]);
 
   const installWorkbookSnapshot = React.useCallback((
@@ -3653,9 +3630,14 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     const visibleSheetIndex = sheets.findIndex((sheet) => sheet.workbookSheetIndex === entry.sheetIndex);
 
     isApplyingHistoryRef.current = true;
-    for (const mutation of entry.mutations) {
-      applyCellMutationState(worksheet, mutation.cell, direction === "undo" ? mutation.before : mutation.after);
-    }
+    applyCellMutationStates(
+      worksheet,
+      entry.mutations.map((mutation) => ({
+        cell: mutation.cell,
+        state: direction === "undo" ? mutation.before : mutation.after
+      })),
+      direction
+    );
     maybeRecalculateWorkbook(workbook);
     refreshWorkbookState(workbook);
 
