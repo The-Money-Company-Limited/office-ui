@@ -675,7 +675,7 @@ export class Worksheet {
     }
     /**
      * The Ctrl+Shift+Enter array formula whose block holds the cell, as
-     * `{ row, col, rows, cols, formula }` for its top-left cell, or `null`.
+     * `{ row, col, rows, cols, formula, values }` for its top-left cell, or `null`.
      * @param {number} row
      * @param {number} col
      * @returns {any}
@@ -1643,19 +1643,18 @@ export class Worksheet {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
-     * Makes a Ctrl+Shift+Enter array formula over `rows` x `cols` cells from `address`, as undo
-     * puts one back. Calculating fills its cells.
+     * Puts back a Ctrl+Shift+Enter array formula from `address`, as undo does: `values` are the
+     * ones `arrayFormulaAt` gave, which its cells show until it is calculated.
      * @param {string} address
      * @param {string} formula
-     * @param {number} rows
-     * @param {number} cols
+     * @param {any} values
      */
-    setArrayFormula(address, formula, rows, cols) {
+    setArrayFormula(address, formula, values) {
         const ptr0 = passStringToWasm0(address, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(formula, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.worksheet_setArrayFormula(this.__wbg_ptr, ptr0, len0, ptr1, len1, rows, cols);
+        const ret = wasm.worksheet_setArrayFormula(this.__wbg_ptr, ptr0, len0, ptr1, len1, values);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }

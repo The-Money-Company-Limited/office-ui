@@ -814,7 +814,7 @@ export class Worksheet {
     [Symbol.dispose](): void;
     /**
      * The Ctrl+Shift+Enter array formula whose block holds the cell, as
-     * `{ row, col, rows, cols, formula }` for its top-left cell, or `null`.
+     * `{ row, col, rows, cols, formula, values }` for its top-left cell, or `null`.
      */
     arrayFormulaAt(row: number, col: number): any;
     /**
@@ -862,10 +862,10 @@ export class Worksheet {
     isSpillTarget(row: number, col: number): boolean;
     mergeCells(range_str: string): void;
     /**
-     * Makes a Ctrl+Shift+Enter array formula over `rows` x `cols` cells from `address`, as undo
-     * puts one back. Calculating fills its cells.
+     * Puts back a Ctrl+Shift+Enter array formula from `address`, as undo does: `values` are the
+     * ones `arrayFormulaAt` gave, which its cells show until it is calculated.
      */
-    setArrayFormula(address: string, formula: string, rows: number, cols: number): void;
+    setArrayFormula(address: string, formula: string, values: any): void;
     setCell(address: string, value: any): void;
     setCellStyle(address: string, style: any): void;
     setCellStyleAt(row: number, col: number, style: any): void;
@@ -1004,7 +1004,7 @@ export interface InitOutput {
     readonly worksheet_mergeCells: (a: number, b: number, c: number) => [number, number];
     readonly worksheet_name: (a: number) => [number, number, number, number];
     readonly worksheet_readTypedNumberAt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
-    readonly worksheet_setArrayFormula: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
+    readonly worksheet_setArrayFormula: (a: number, b: number, c: number, d: number, e: number, f: any) => [number, number];
     readonly worksheet_setCell: (a: number, b: number, c: number, d: any) => [number, number];
     readonly worksheet_setCellStyle: (a: number, b: number, c: number, d: any) => [number, number];
     readonly worksheet_setCellStyleAt: (a: number, b: number, c: number, d: any) => [number, number];
