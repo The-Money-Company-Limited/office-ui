@@ -7,17 +7,14 @@
 use std::borrow::Cow;
 
 use chrono::{Datelike, NaiveDate};
-use duke_sheets_core::{DateOrder, NumberFormat, WorkbookSettings};
+use duke_sheets_core::{DateOrder, FormatKind, NumberFormat, WorkbookSettings};
 
 use crate::regional::month_named;
-
-/// The percent format a typed percent gets: as many decimals as were typed.
-pub const TYPED_PERCENT_FORMAT: &str = "0.##########%";
 
 /// How text that reads as a number was written, which decides the format a typed entry gets.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Written {
-    Number { percent: bool, currency: bool },
+    Number { percent: bool, currency: bool, decimals: bool },
     Date(DateWritten),
     Time { seconds: bool, twelve_hour: bool },
     DateTime,
@@ -46,40 +43,55 @@ fn read(text: &str) -> Option<(f64, Written)> {
     plain_number(text).or_else(|| date_time(text)).filter(|(n, _)| n.is_finite())
 }
 
-/// What text typed into a cell stands for, as Excel reads it in the workbook's settings: the
-/// number, and the format Excel gives the cell. A percent gets a percent format; a date the short
-/// date (14), or d-mmm-yy (15) or mmm-yy (17) when it names the month; a time h:mm or h:mm:ss
-/// (20, 21; 18, 19 with AM/PM), or [h]:mm:ss (46) from 24 hours up; a date with a time 22. `None`
-/// when the text stays text: it isn't a number, it has a currency sign (there is no currency
-/// format to give it), or it is a date before the workbook's first day.
-pub fn typed_number(text: &str, settings: &WorkbookSettings) -> Option<(f64, Option<NumberFormat>)> {
-    let (value, written) = {
+/// What text typed into a cell with the format `current` stands for, as Excel reads it in the
+/// workbook's settings: the number, and the built-in format the cell gets when it should change. Each
+/// entry has a kind and a format Excel gives it: a percent `0%` or `0.00%` (9, 10) as decimals
+/// were typed; a date the short date (14), or d-mmm-yy (15) or mmm-yy (17) when it names the
+/// month; a time h:mm or h:mm:ss (20, 21; 18, 19 with AM/PM); a duration of 24 hours or more
+/// [h]:mm:ss (46); a date with a time 22. The cell keeps its format for an entry of the same kind
+/// (a time in a duration format too) and for a plain number, which in a percent format is a
+/// percent from 1 up (`15` is 15%). `None` when the text stays text: the cell's format is Text,
+/// the text isn't a number, it has a currency sign (no currency format yet), or it is a date
+/// before the workbook's first day.
+pub fn typed_number(text: &str, settings: &WorkbookSettings, current: &NumberFormat) -> Option<(f64, Option<u32>)> {
+    let current = current.kind();
+    if current == FormatKind::Text {
+        return None;
+    }
+    let (mut value, written) = {
         let _restore = crate::regional::make_current(settings.regional);
         read(text)?
     };
-    let builtin = |id| Some(NumberFormat::BuiltIn(id));
-    let format = match written {
+    let (kind, format) = match written {
         Written::Number { currency: true, .. } => return None,
-        Written::Number { percent: true, .. } => Some(NumberFormat::Custom(TYPED_PERCENT_FORMAT.into())),
-        Written::Number { .. } => None,
-        Written::Date(DateWritten::Numbers) => builtin(NumberFormat::ID_DATE_SHORT),
-        Written::Date(DateWritten::NamedMonth) => builtin(NumberFormat::ID_DATE_MEDIUM),
-        Written::Date(DateWritten::MonthAndYear) => builtin(NumberFormat::ID_DATE_MONTH_YEAR),
-        Written::Time { .. } if value >= 1.0 => builtin(NumberFormat::ID_ELAPSED_HOURS),
-        Written::Time { seconds, twelve_hour } => builtin(match (twelve_hour, seconds) {
+        Written::Number { percent: true, decimals, .. } => (FormatKind::Percent, if decimals { NumberFormat::ID_PERCENT_DEC2 } else { NumberFormat::ID_PERCENT_INT }),
+        Written::Number { .. } => {
+            if current == FormatKind::Percent && value.abs() >= 1.0 {
+                value /= 100.0;
+            }
+            return Some((value, None));
+        }
+        Written::Date(DateWritten::Numbers) => (FormatKind::Date, NumberFormat::ID_DATE_SHORT),
+        Written::Date(DateWritten::NamedMonth) => (FormatKind::Date, NumberFormat::ID_DATE_MEDIUM),
+        Written::Date(DateWritten::MonthAndYear) => (FormatKind::Date, NumberFormat::ID_DATE_MONTH_YEAR),
+        Written::Time { .. } if value >= 1.0 => (FormatKind::Duration, NumberFormat::ID_ELAPSED_HOURS),
+        Written::Time { seconds, twelve_hour } => (FormatKind::Time, match (twelve_hour, seconds) {
             (true, false) => NumberFormat::ID_TIME_AMPM,
             (true, true) => NumberFormat::ID_TIME_AMPM_SEC,
             (false, false) => NumberFormat::ID_TIME_24H,
             (false, true) => NumberFormat::ID_TIME_24H_SEC,
         }),
-        Written::DateTime => builtin(NumberFormat::ID_DATETIME),
+        Written::DateTime => (FormatKind::DateTime, NumberFormat::ID_DATETIME),
     };
-    if !matches!(written, Written::Date(_) | Written::DateTime) {
-        return Some((value, format));
+    if matches!(kind, FormatKind::Date | FormatKind::DateTime) && settings.date_1904 {
+        // The text reads as a 1900-system serial; a 1904-system workbook counts days from 1904.
+        value -= 1462.0;
+        if value < 0.0 {
+            return None;
+        }
     }
-    // The text reads as a 1900-system serial; a 1904-system workbook counts days from 1904.
-    let value = if settings.date_1904 { value - 1462.0 } else { value };
-    (value >= 0.0).then_some((value, format))
+    let keeps = current == kind || (current == FormatKind::Duration && kind == FormatKind::Time);
+    Some((value, (!keeps).then_some(format)))
 }
 
 /// `1234`, `-1,234.5`, `1.2E+3`, `$1,234`, `(5)`, `12%`, `+3`.
@@ -156,7 +168,8 @@ fn plain_number(text: &str) -> Option<(f64, Written)> {
     if percent {
         number /= 100.0;
     }
-    Some((if negated { -number } else { sign * number }, Written::Number { percent, currency }))
+    let decimals = fraction.is_some_and(|f| !f.is_empty());
+    Some((if negated { -number } else { sign * number }, Written::Number { percent, currency, decimals }))
 }
 
 /// The date in text that is a date, or a date followed by a time (DATEVALUE).
@@ -257,9 +270,17 @@ fn date(text: &str) -> Option<(f64, DateWritten)> {
         .filter(|p| !p.is_empty())
         .collect();
     let numeric = |s: &str| (s.chars().all(|c| c.is_ascii_digit()) && !s.is_empty()).then(|| s.parse::<i32>().ok()).flatten();
+    // Between the numbers, the same separator each time, with spaces after it if any (cs-CZ
+    // `5. 11. 2026`), and the regional one may also end the date (hu-HU `2026. 11. 05.`).
     let one_separator = || {
-        let separators: Vec<char> = text.chars().filter(|c| !c.is_ascii_digit()).collect();
-        matches!(separators.as_slice(), [a, b] if a == b && (matches!(a, '/' | '-') || *a == settings.date_separator))
+        let text = text.strip_suffix(settings.date_separator).unwrap_or(text);
+        let gaps: Vec<&str> = text.split(|c: char| c.is_ascii_digit()).filter(|gap| !gap.is_empty()).collect();
+        let Some(separator) = gaps.first().and_then(|gap| gap.chars().next()) else {
+            return false;
+        };
+        gaps.len() == 2
+            && (matches!(separator, '/' | '-') || separator == settings.date_separator)
+            && gaps.iter().all(|gap| gap.strip_prefix(separator).is_some_and(|rest| rest.chars().all(|c| c == ' ')))
     };
     let (year, month, day, written) = match parts.as_slice() {
         [a, b, c] => match (numeric(a), numeric(b), numeric(c)) {
@@ -300,8 +321,6 @@ fn serial(year: i32, month: u32, day: i32) -> Option<f64> {
     let date = NaiveDate::from_ymd_opt(year, month, u32::try_from(day).ok()?)?;
     (date.year() >= 1900).then(|| crate::functions::date::excel1900_serial_from_ymd(year, month, day) as f64)
 }
-
-pub use duke_sheets_core::round_15;
 
 /// A number as Excel writes it as text (`&`, CONCATENATE, a text argument), with the regional
 /// decimal separator (duke_sheets_core::number_text).
@@ -391,13 +410,16 @@ mod tests {
         use duke_sheets_core::{NumberFormat, RegionalSettings, WorkbookSettings};
         let typed = |tag: &str, text: &str| {
             let settings = WorkbookSettings { regional: RegionalSettings::from_tag(tag), ..Default::default() };
-            typed_number(text, &settings).map(|(value, format)| (value, format.map(|f| f.format_string().to_string())))
+            typed_number(text, &settings, &NumberFormat::General)
         };
-        let with = |value: f64, id: u32| Some((value, Some(NumberFormat::BuiltIn(id).format_string().to_string())));
+        let with = |value: f64, id: u32| Some((value, Some(id)));
         // 46331 is 5 November 2026, 46153 is 11 May 2026.
         assert_eq!(typed("en-GB", "5/11/2026"), with(46331.0, 14));
         assert_eq!(typed("en-US", "5/11/2026"), with(46153.0, 14));
         assert_eq!(typed("de-DE", "5.11.2026"), with(46331.0, 14));
+        assert_eq!(typed("de-DE", "5.11.2026."), with(46331.0, 14));
+        assert_eq!(typed("cs-CZ", "5. 11. 2026"), with(46331.0, 14));
+        assert_eq!(typed("hu-HU", "2026. 11. 05."), with(46331.0, 14));
         assert_eq!(typed("en-GB", "5/11/2026 13:30"), with(46331.5625, 22));
         assert_eq!(typed("en-US", "15-Mar-2024"), with(45366.0, 15));
         assert_eq!(typed("en-US", "15 March 2024"), with(45366.0, 15));
@@ -408,10 +430,10 @@ mod tests {
         assert_eq!(typed("en-US", "1:30:00 pm"), with(0.5625, 19));
         assert_eq!(typed("en-US", "25:30"), with(25.5 / 24.0, 46));
         assert_eq!(typed("en-US", "2/29/1900"), with(60.0, 14));
-        let percent = Some("0.##########%".to_string());
-        assert_eq!(typed("en-US", "12%"), Some((0.12, percent.clone())));
-        assert_eq!(typed("en-US", "(12%)"), Some((-0.12, percent.clone())));
-        assert_eq!(typed("de-DE", "12,5%"), Some((0.125, percent)));
+        assert_eq!(typed("en-US", "12%"), with(0.12, 9));
+        assert_eq!(typed("en-US", "12.%"), with(0.12, 9));
+        assert_eq!(typed("en-US", "(12.5%)"), with(-0.125, 10));
+        assert_eq!(typed("de-DE", "12,5%"), with(0.125, 10));
         assert_eq!(typed("de-DE", "1,5"), Some((1.5, None)));
         assert_eq!(typed("de-DE", "1.234,5"), Some((1234.5, None)));
         assert_eq!(typed("en-US", " 1,234.5 "), Some((1234.5, None)));
@@ -426,12 +448,37 @@ mod tests {
     }
 
     #[test]
+    fn typed_entries_keep_a_format_of_the_same_kind() {
+        use super::typed_number;
+        use duke_sheets_core::{NumberFormat, WorkbookSettings};
+        let settings = WorkbookSettings::default();
+        let format = |text: &str, current: NumberFormat| typed_number(text, &settings, &current).map(|(_, format)| format);
+        let custom = |code: &str| NumberFormat::Custom(code.into());
+        // Same kind: the cell keeps its format, the toolbar's Date (14) and Time (21) included.
+        assert_eq!(format("Mar 15, 2024", NumberFormat::BuiltIn(14)), Some(None));
+        assert_eq!(format("9:30", NumberFormat::BuiltIn(21)), Some(None));
+        assert_eq!(format("5/11/2026", custom("dd mmm yyyy")), Some(None));
+        assert_eq!(format("9:30", NumberFormat::BuiltIn(46)), Some(None));
+        assert_eq!(format("12.5%", NumberFormat::BuiltIn(9)), Some(None));
+        assert_eq!(format("42", NumberFormat::BuiltIn(14)), Some(None));
+        // Another kind: the entry's format.
+        assert_eq!(format("13:30", custom("dd mmm yyyy")), Some(Some(20)));
+        assert_eq!(format("5/11/2026 9:00", NumberFormat::BuiltIn(14)), Some(Some(22)));
+        assert_eq!(format("5/11/2026", custom("0.00")), Some(Some(14)));
+        // Text stays text; in a percent format a number from 1 up is a percent.
+        assert_eq!(typed_number("5/11/2026", &settings, &NumberFormat::BuiltIn(49)), None);
+        assert_eq!(typed_number("15", &settings, &NumberFormat::BuiltIn(9)), Some((0.15, None)));
+        assert_eq!(typed_number("0.5", &settings, &NumberFormat::BuiltIn(9)), Some((0.5, None)));
+    }
+
+    #[test]
     fn typed_dates_count_from_the_workbooks_first_day() {
         use super::typed_number;
-        use duke_sheets_core::WorkbookSettings;
+        use duke_sheets_core::{NumberFormat, WorkbookSettings};
         let settings = WorkbookSettings { date_1904: true, ..Default::default() };
-        assert_eq!(typed_number("11/5/2026", &settings).map(|(value, _)| value), Some(46331.0 - 1462.0));
-        assert_eq!(typed_number("13:30", &settings).map(|(value, _)| value), Some(0.5625));
-        assert_eq!(typed_number("1/1/1902", &settings), None);
+        let value = |text: &str| typed_number(text, &settings, &NumberFormat::General).map(|(value, _)| value);
+        assert_eq!(value("11/5/2026"), Some(46331.0 - 1462.0));
+        assert_eq!(value("13:30"), Some(0.5625));
+        assert_eq!(value("1/1/1902"), None);
     }
 }

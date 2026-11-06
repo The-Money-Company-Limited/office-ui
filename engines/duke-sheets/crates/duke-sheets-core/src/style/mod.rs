@@ -21,7 +21,7 @@ pub use border::{BorderEdge, BorderLineStyle, BorderStyle, DiagonalDirection};
 pub use color::{Color, ThemePalette};
 pub use fill::{FillStyle, GradientStop, GradientType, PatternType};
 pub use font::{FontStyle, FontVerticalAlign, Underline};
-pub use number_format::NumberFormat;
+pub use number_format::{FormatKind, NumberFormat};
 pub use pool::StylePool;
 
 /// Complete cell style

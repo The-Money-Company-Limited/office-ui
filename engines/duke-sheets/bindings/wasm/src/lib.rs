@@ -688,7 +688,7 @@ export interface FormControlInteractionResult {
   linkedCellsChanged: number;
 }
 
-/** A cell's number format, as getCellStyleAt gives it. */
+/** A cell's number format, as getCellStyle gives it. */
 export interface CellNumberFormat {
   formatType: "general" | "builtin" | "custom";
   id: number | null;
@@ -696,15 +696,27 @@ export interface CellNumberFormat {
   isDateFormat: boolean;
 }
 
-/** A number read from typed text, with the format Excel gives the cell (a date, time or percent format). */
+/** A cell's style, as getCellStyle gives it. */
+export type CellStyle = {
+  font: Record<string, unknown>;
+  fill: Record<string, unknown>;
+  border: Record<string, unknown>;
+  alignment: Record<string, unknown>;
+  numberFormat: CellNumberFormat;
+  protection: { locked: boolean; hidden: boolean };
+};
+
+/** A number read from text typed into a cell, and the format the cell gets when it should change. */
 export interface TypedNumber {
   value: number;
-  numberFormat?: CellNumberFormat;
+  numberFormat?: NumberFormatInput;
 }
 
 export interface Worksheet {
   iterateRows(opts?: JsRowsOptions): RowIterator;
-  readTypedNumber(text: string): TypedNumber | undefined;
+  getCellStyle(address: string): CellStyle | null;
+  getCellStyleAt(row: number, col: number): CellStyle | null;
+  readTypedNumberAt(row: number, col: number, text: string): TypedNumber | undefined;
   setCellStyle(address: string, style: StyleInput): void;
   setCellStyleAt(row: number, col: number, style: StyleInput): void;
   setRangeStyle(range: string, style: StyleInput): void;
@@ -957,21 +969,36 @@ impl Worksheet {
             .map_err(to_js_error)
     }
 
-    /// The number text typed into a cell stands for, read in the workbook's settings as Excel
-    /// reads it (`5/11/2026` is 5 November in en-GB, `1,5` is 1.5 in de-DE), with the format Excel
-    /// gives the cell; `undefined` when the text stays text (duke_sheets_formula::coerce::typed_number).
-    #[wasm_bindgen(skip_typescript, js_name = readTypedNumber)]
-    pub fn read_typed_number(&self, text: &str) -> Result<JsValue, JsError> {
+    /// What text typed into the cell stands for, read in the workbook's settings as Excel reads
+    /// it (`5/11/2026` is 5 November in en-GB, `1,5` is 1.5 in de-DE): the number, and the format
+    /// the cell gets when its own one is of another kind; `undefined` when the text stays text
+    /// (duke_sheets_formula::coerce::typed_number).
+    #[wasm_bindgen(skip_typescript, js_name = readTypedNumberAt)]
+    pub fn read_typed_number_at(&self, row: u32, col: u32, text: &str) -> Result<JsValue, JsError> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct BuiltInFormat {
+            format_type: &'static str,
+            id: u32,
+        }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct TypedNumber {
             value: f64,
             #[serde(skip_serializing_if = "Option::is_none")]
-            number_format: Option<WasmNumberFormat>,
+            number_format: Option<BuiltInFormat>,
         }
         let wb = self.workbook.borrow();
-        match duke_sheets_formula::coerce::typed_number(text, wb.settings()) {
-            Some((value, format)) => to_js_value(&TypedNumber { value, number_format: format.as_ref().map(WasmNumberFormat::from) }),
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        let current = ws.cell_style_at(row, col as u16).map(|style| &style.number_format);
+        let typed = duke_sheets_formula::coerce::typed_number(text, wb.settings(), current.unwrap_or(&duke_sheets_core::NumberFormat::General));
+        match typed {
+            Some((value, format)) => {
+                let number_format = format.map(|id| BuiltInFormat { format_type: "builtin", id });
+                to_js_value(&TypedNumber { value, number_format })
+            }
             None => Ok(JsValue::UNDEFINED),
         }
     }

@@ -36,6 +36,7 @@ pub mod error;
 pub mod form_control;
 pub mod hyperlink;
 pub mod named_range;
+mod number_text;
 pub mod protection;
 pub mod range;
 pub mod regional;
@@ -53,7 +54,7 @@ pub use auto_filter::{
     Top10Filter, ValueFilter,
 };
 pub use cell::{
-    format_cell_value, number_text, round_15, CellAddress, CellData, CellError, CellRange, CellValue, CellView,
+    format_cell_value, CellAddress, CellData, CellError, CellRange, CellValue, CellView,
     FormulaData,
 };
 pub use column::{Column, ColumnData};
@@ -78,6 +79,7 @@ pub use form_control::{
 };
 pub use hyperlink::Hyperlink;
 pub use protection::{hash_legacy_protection_password, ProtectedRange, WorkbookProtection};
+pub use number_text::{number_text, round_15, with_decimal_separator};
 pub use regional::{DateOrder, Language, RegionalSettings};
 pub use rich_text::{rich_text_to_plain, RichTextRun, RunFont};
 pub use table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};
@@ -91,7 +93,7 @@ pub use worksheet::{
 // Re-export all style types for convenience
 pub use style::{
     Alignment, BorderEdge, BorderLineStyle, BorderStyle, Color, FillStyle, FontStyle,
-    HorizontalAlignment, NumberFormat, Style, StylePool, ThemePalette, VerticalAlignment,
+    FormatKind, HorizontalAlignment, NumberFormat, Style, StylePool, ThemePalette, VerticalAlignment,
 };
 
 /// Maximum number of rows in a worksheet (Excel limit)

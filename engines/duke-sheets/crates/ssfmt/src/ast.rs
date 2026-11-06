@@ -424,6 +424,33 @@ impl NumberFormat {
         self.sections.iter().any(|s| s.has_percent())
     }
 
+    /// Returns true if any section shows AM/PM.
+    pub fn has_am_pm(&self) -> bool {
+        self.sections.iter().any(|s| s.metadata.has_ampm)
+    }
+
+    /// Returns true if any section shows elapsed time (`[h]`, `[m]`, `[s]`).
+    pub fn has_elapsed_time(&self) -> bool {
+        self.sections.iter().any(|s| s.metadata.has_elapsed_time)
+    }
+
+    /// Returns true if any section shows a calendar date: a year, month, day or weekday.
+    pub fn has_calendar_date(&self) -> bool {
+        self.date_parts().any(|p| !is_time_of_day(p))
+    }
+
+    /// Returns true if any section shows a time of day: hours, minutes, seconds or AM/PM.
+    pub fn has_time_of_day(&self) -> bool {
+        self.has_am_pm() || self.date_parts().any(is_time_of_day)
+    }
+
+    fn date_parts(&self) -> impl Iterator<Item = DatePart> + '_ {
+        self.sections.iter().flat_map(|s| &s.parts).filter_map(|p| match p {
+            FormatPart::DatePart(part) => Some(*part),
+            _ => None,
+        })
+    }
+
     /// Returns true if any section has a color.
     pub fn has_color(&self) -> bool {
         self.sections.iter().any(|s| s.color.is_some())
@@ -438,4 +465,17 @@ impl NumberFormat {
     pub fn parse(format_code: &str) -> Result<NumberFormat, ParseError> {
         crate::parser::parse(format_code)
     }
+}
+
+fn is_time_of_day(part: DatePart) -> bool {
+    matches!(
+        part,
+        DatePart::Hour
+            | DatePart::Hour2
+            | DatePart::Minute
+            | DatePart::Minute2
+            | DatePart::Second
+            | DatePart::Second2
+            | DatePart::SubSecond(_)
+    )
 }

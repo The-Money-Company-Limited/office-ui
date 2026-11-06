@@ -4,6 +4,22 @@ use std::borrow::Cow;
 
 use crate::RegionalSettings;
 
+/// What a number format shows a number as. A value typed into a cell keeps the cell's format
+/// when it is of the same kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatKind {
+    General,
+    Number,
+    Percent,
+    Date,
+    Time,
+    DateTime,
+    /// Elapsed time, `[h]:mm:ss`.
+    Duration,
+    /// `@`: what is typed stays text.
+    Text,
+}
+
 /// Number format for cell display
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum NumberFormat {
@@ -155,6 +171,32 @@ impl NumberFormat {
             NumberFormat::BuiltIn(Self::ID_DATE_SHORT) => regional.short_date_code().into(),
             NumberFormat::BuiltIn(Self::ID_DATETIME) => regional.date_time_code().into(),
             _ => self.format_string().into(),
+        }
+    }
+
+    /// What this format shows a number as.
+    pub fn kind(&self) -> FormatKind {
+        let code = self.format_string();
+        if code.eq_ignore_ascii_case("general") {
+            return FormatKind::General;
+        }
+        let Ok(parsed) = ssfmt::NumberFormat::parse(code) else {
+            return FormatKind::Number;
+        };
+        if parsed.is_text_format() {
+            FormatKind::Text
+        } else if parsed.has_elapsed_time() {
+            FormatKind::Duration
+        } else if parsed.is_date_format() {
+            match (parsed.has_calendar_date(), parsed.has_time_of_day()) {
+                (true, true) => FormatKind::DateTime,
+                (true, false) => FormatKind::Date,
+                _ => FormatKind::Time,
+            }
+        } else if parsed.is_percentage() {
+            FormatKind::Percent
+        } else {
+            FormatKind::Number
         }
     }
 

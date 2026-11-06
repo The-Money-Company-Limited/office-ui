@@ -99,7 +99,7 @@ impl Worksheet {
         to_js_value(&selections)
     }
 
-    #[wasm_bindgen(js_name = getCellStyle)]
+    #[wasm_bindgen(skip_typescript, js_name = getCellStyle)]
     pub fn get_cell_style(&self, address: &str) -> Result<JsValue, JsError> {
         let wb = self.workbook.borrow();
         let ws = wb
@@ -112,7 +112,7 @@ impl Worksheet {
         }
     }
 
-    #[wasm_bindgen(js_name = getCellStyleAt)]
+    #[wasm_bindgen(skip_typescript, js_name = getCellStyleAt)]
     pub fn get_cell_style_at(&self, row: u32, col: u32) -> Result<JsValue, JsError> {
         let wb = self.workbook.borrow();
         let ws = wb

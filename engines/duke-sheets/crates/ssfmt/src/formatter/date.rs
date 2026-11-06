@@ -4,7 +4,7 @@ use crate::ast::{AmPmStyle, DatePart, ElapsedPart, FormatPart, Section};
 use crate::date_serial::{serial_to_date, serial_to_weekday};
 use crate::error::FormatError;
 use crate::locale::Locale;
-use crate::options::FormatOptions;
+use crate::options::{DateSystem, FormatOptions};
 
 /// Format a value as a date/time using the given section.
 pub fn format_date(
@@ -42,7 +42,8 @@ pub fn format_date(
 
     // Get date components
     // For time-only values (serial < 1), use a default date since we only need time
-    let (mut year, mut month, mut day) = if value >= 1.0 {
+    // Day 0 is 1 January 1904 in the 1904 system, but has no date in the 1900 one.
+    let (mut year, mut month, mut day) = if value >= 1.0 || opts.date_system == DateSystem::Date1904 {
         serial_to_date(value, opts.date_system)
             .ok_or(FormatError::DateOutOfRange { serial: value })?
     } else {
@@ -113,7 +114,9 @@ pub fn format_date(
 
     for (i, part) in section.parts.iter().enumerate() {
         match part {
-            // The decimal point of fractional seconds (ss.0) is the regional one.
+            // The decimal point of fractional seconds (ss.0) is the regional one. The parser
+            // writes it as Literal(".") right before the SubSecond part; every other `.` in a
+            // date format is a DecimalPoint, written as a period below.
             FormatPart::Literal(s)
                 if s == "."
                     && matches!(section.parts.get(i + 1), Some(FormatPart::DatePart(DatePart::SubSecond(_)))) =>

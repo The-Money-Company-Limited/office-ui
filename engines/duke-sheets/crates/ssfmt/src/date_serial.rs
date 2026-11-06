@@ -38,7 +38,9 @@ use crate::options::DateSystem;
 pub fn serial_to_date(serial: f64, system: DateSystem) -> Option<(i32, u32, u32)> {
     let days = serial.floor() as i64;
 
-    if days < 1 {
+    // Day 0 is 1 January 1904 in the 1904 system; the 1900 system starts at day 1.
+    let first_day = if system == DateSystem::Date1904 { 0 } else { 1 };
+    if days < first_day {
         return None;
     }
 

@@ -100,7 +100,7 @@ impl RegionalSettings {
         let date_separator = match (language_code.as_str(), region.as_str()) {
             ("de" | "fi" | "nb" | "no" | "da" | "pl" | "ru" | "tr" | "cs" | "sk" | "uk" | "ro" | "hr" | "sl" | "lv" | "et" | "bg" | "hu", _) => '.',
             ("fr", "CH") | ("it", "CH") => '.',
-            ("nl" | "sv", _) | ("en" | "fr", "CA") | ("en", "ZA") => '-',
+            ("nl" | "sv", _) | ("en" | "fr", "CA") => '-',
             _ => '/',
         };
         Self { language, date_order, date_separator, decimal_separator, thousands_separator }
@@ -219,8 +219,9 @@ mod tests {
         assert_eq!(code("en-GB"), ("dd/mm/yyyy".into(), "dd/mm/yyyy hh:mm".into()));
         assert_eq!(code("de-DE"), ("dd.mm.yyyy".into(), "dd.mm.yyyy hh:mm".into()));
         assert_eq!(code("sv-SE").0, "yyyy-mm-dd");
-        for tag in ["en-CA", "fr-CA", "en-ZA"] {
+        for tag in ["en-CA", "fr-CA"] {
             assert_eq!(code(tag).0, "yyyy-mm-dd", "{tag}");
         }
+        assert_eq!(code("en-ZA").0, "yyyy/mm/dd");
     }
 }
