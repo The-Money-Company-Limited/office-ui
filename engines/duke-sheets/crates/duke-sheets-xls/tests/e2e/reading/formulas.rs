@@ -494,7 +494,11 @@ fn test_xls_formula_cse_array_formula() {
 
     let val = ws.get_value_at(0, 2); // C1
     let text = formula_text(ws, 0, 2);
-    assert_eq!(text, "{=SUM(A1:A3*B1:B3)}", "CSE array formula");
+    assert_eq!(text, "=SUM(A1:A3*B1:B3)", "CSE array formula");
+    assert_eq!(
+        ws.formula_data_at(0, 2).map(|f| f.kind),
+        Some(duke_sheets_core::FormulaKind::Cse { rows: 1, cols: 1 })
+    );
 
     // Cached value should be 1*10 + 2*20 + 3*30 = 140
     assert!(

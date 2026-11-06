@@ -398,20 +398,11 @@ impl<'a> EvaluationContext<'a> {
     /// The value of a defined name: the formula it holds, evaluated (a reference reads its cells).
     /// An unknown name is #NAME?; names that refer to each other without end are #REF!.
     pub fn resolve_named_range(&self, name: &str) -> Result<FormulaValue, FormulaError> {
-        thread_local! {
-            static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-        }
         let Some(formula) = reference::name_formula(name, self) else {
             return Ok(FormulaValue::Error(CellError::Name));
         };
-        let depth = DEPTH.with(|d| d.get());
-        if depth >= 64 {
-            return Ok(FormulaValue::Error(CellError::Ref));
-        }
-        DEPTH.with(|d| d.set(depth + 1));
-        let result = evaluate(&formula, self);
-        DEPTH.with(|d| d.set(depth));
-        result
+        reference::nested(|| evaluate(&formula, self))
+            .unwrap_or(Ok(FormulaValue::Error(CellError::Ref)))
     }
 
     /// Resolve a structured table reference to a formula value.
@@ -543,6 +534,7 @@ pub fn evaluate(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Fo
 
         FormulaExpr::NameRef(name) => match ctx.local(name) {
             Some(Binding::Value(value)) => Ok(value.clone()),
+            Some(Binding::Reference(target)) => Ok(reference::read(ctx, target)),
             // A LAMBDA on its own, not called, is #CALC! in a cell.
             Some(Binding::Lambda(_)) => Ok(FormulaValue::Error(CellError::Calc)),
             // Resolve named range through the evaluation context
@@ -748,7 +740,7 @@ fn evaluate_binary_op(
 }
 
 /// Compare two values for ordering (Excel-style comparison)
-fn compare_values(left: &FormulaValue, right: &FormulaValue) -> i32 {
+pub(crate) fn compare_values(left: &FormulaValue, right: &FormulaValue) -> i32 {
     // Coerce Empty depending on what it's being compared against:
     // Empty vs number → 0.0, Empty vs string → "", Empty vs bool → FALSE
     let empty_num = FormulaValue::Number(0.0);
@@ -834,6 +826,9 @@ fn evaluate_unary_op(
     if op == UnaryOperator::SpillRange {
         return evaluate_spill_range(operand, ctx);
     }
+    if op == UnaryOperator::ImplicitIntersection {
+        return evaluate_implicit_intersection(operand, ctx);
+    }
 
     let val = evaluate(operand, ctx)?;
 
@@ -880,45 +875,28 @@ fn evaluate_unary_op(
                 .ok_or_else(|| FormulaError::Evaluation("Expected number".into()))?;
             Ok(FormulaValue::Number(n / 100.0))
         }
-        UnaryOperator::ImplicitIntersection => {
-            // @ operator: reduce a multi-value result to a single value.
-            // If the value is an array, pick the element on the same row/column
-            // as the formula cell. If already scalar, pass through.
-            match val {
-                FormulaValue::Array { data: ref rows, .. } => {
-                    if rows.is_empty() {
-                        return Ok(FormulaValue::Error(CellError::Value));
-                    }
-                    let num_rows = rows.len();
-                    let num_cols = rows[0].len();
-                    if num_rows == 1 && num_cols == 1 {
-                        // 1x1 array - return the single element
-                        return Ok(rows[0][0].clone());
-                    }
-                    if num_rows == 1 {
-                        // Single row - select by column (use formula's column offset)
-                        // For simplicity, return the first element
-                        return Ok(rows[0].first().cloned().unwrap_or(FormulaValue::Empty));
-                    }
-                    if num_cols == 1 {
-                        // Single column - select by row (use formula's row)
-                        // For simplicity, return the first element
-                        return Ok(rows
-                            .first()
-                            .and_then(|r| r.first())
-                            .cloned()
-                            .unwrap_or(FormulaValue::Empty));
-                    }
-                    // Multi-row, multi-column: return top-left element
-                    Ok(rows[0][0].clone())
-                }
-                _ => Ok(val), // scalars pass through unchanged
-            }
-        }
+        UnaryOperator::ImplicitIntersection => unreachable!("ImplicitIntersection handled above"),
         UnaryOperator::SpillRange => {
             unreachable!("SpillRange handled above")
         }
     }
+}
+
+/// The @ operator reads one value: a reference's cell in the formula's own row or column (#VALUE!
+/// when there is none), or an array's first element.
+fn evaluate_implicit_intersection(
+    operand: &FormulaExpr,
+    ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    Ok(match reference::resolve_value(operand, ctx)? {
+        reference::Resolved::Reference(target) => reference::intersect_cell(&target, ctx),
+        reference::Resolved::Value(FormulaValue::Array { data, .. }) => data
+            .first()
+            .and_then(|row| row.first())
+            .cloned()
+            .unwrap_or(FormulaValue::Error(CellError::Value)),
+        reference::Resolved::Value(value) => value,
+    })
 }
 
 /// Evaluate the # (spill range) operator.
@@ -1873,7 +1851,7 @@ pub(crate) fn function_name(name: &str) -> &str {
     name.strip_prefix("_XLWS.").unwrap_or(name)
 }
 
-fn evaluate_function(
+pub(crate) fn evaluate_function(
     name: &str,
     args: &[FormulaExpr],
     ctx: &EvaluationContext,
@@ -1916,15 +1894,29 @@ fn evaluate_function(
         }
     }
 
-    if let Some(result) = evaluate_with_expressions(lookup_name, args, ctx) {
+    if let Some(result) = evaluate_with_expressions(lookup_name, func, args, ctx) {
         return result;
     }
+    call_with(func, args, vec![None; args.len()], ctx)
+}
 
+/// Calls a registry function on its arguments' values: `given` holds those already read (the
+/// others are evaluated here), and arrays at arguments that take one value are lifted over.
+pub(crate) fn call_with(
+    func: &crate::functions::FunctionDef,
+    args: &[FormulaExpr],
+    given: Vec<Option<FormulaValue>>,
+    ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
     // Evaluate arguments. A failure inside an argument is that argument's error value, so
     // IFERROR, ISERROR and AGGREGATE see it: `IFERROR(A1-B1,0)` with text in B1 is 0. A value
     // that must come from the file (another workbook's cells) passes through.
     let mut evaluated_args = Vec::with_capacity(args.len());
-    for arg in args {
+    for (arg, given) in args.iter().zip(given) {
+        if let Some(value) = given {
+            evaluated_args.push(value);
+            continue;
+        }
         evaluated_args.push(match evaluate(arg, ctx) {
             Ok(value) => value,
             Err(error @ (FormulaError::ExternalFunctionUnresolved(_) | FormulaError::ExternalReference(_))) => {
@@ -1937,11 +1929,12 @@ fn evaluate_function(
 
     // TEXTJOIN(",",,A1:A3) skips empty text: Excel reads that left-out flag as TRUE, though a
     // blank cell there is FALSE.
-    if lookup_name.eq_ignore_ascii_case("TEXTJOIN") && matches!(args.get(1), Some(FormulaExpr::Empty)) {
+    if func.name == "TEXTJOIN" && matches!(args.get(1), Some(FormulaExpr::Empty)) {
         evaluated_args[1] = FormulaValue::Boolean(true);
     }
 
     crate::array_lift::coerce_typed_arguments(func.typed_args, args, &mut evaluated_args, ctx);
+    crate::array_lift::unwrap_single_elements(func, &mut evaluated_args);
 
     if let Some(result) = crate::array_lift::lift_over_arrays(func, &evaluated_args, ctx) {
         return result;
@@ -1955,6 +1948,7 @@ fn evaluate_function(
 /// directly. `None` means evaluate the arguments and call the function as usual.
 fn evaluate_with_expressions(
     name: &str,
+    func: &crate::functions::FunctionDef,
     args: &[FormulaExpr],
     ctx: &EvaluationContext,
 ) -> Option<FormulaResult<FormulaValue>> {
@@ -1972,10 +1966,14 @@ fn evaluate_with_expressions(
         "ISFORMULA" => evaluate_isformula(args, ctx),
         "INDIRECT" => value_of(reference::indirect_target(args, ctx)),
         "OFFSET" => value_of(reference::offset_target(args, ctx)),
+        _ if func.per_range => reference::evaluate_per_range(name, args, ctx),
         // The fast lookups find their sheet by name, and another workbook's ('[1]May'!A:A) isn't
         // one: the general path raises ExternalReference, so the cell keeps its saved value.
         "INDEX" | "MATCH" | "XMATCH" | "XLOOKUP" | "VLOOKUP" if args.iter().any(reference::is_external) => None,
-        "INDEX" => evaluate_index_fast(args, ctx),
+        "INDEX" => match args.first() {
+            Some(FormulaExpr::RangeRef(_)) if args.len() < 4 => evaluate_index_fast(args, ctx),
+            _ => Some(reference::evaluate_index(args, ctx)),
+        },
         "MATCH" => evaluate_match_fast(args, ctx),
         "XMATCH" => evaluate_xmatch_fast(args, ctx),
         "XLOOKUP" => evaluate_xlookup_fast(args, ctx),
@@ -1999,10 +1997,18 @@ fn evaluate_position(name: &str, args: &[FormulaExpr], ctx: &EvaluationContext) 
         let here = if rows { ctx.current_row + 1 } else { ctx.current_col as u32 + 1 };
         return Ok(matches!(name, "ROW" | "COLUMN").then_some(FormulaValue::Number(here as f64)));
     };
-    let range = match reference::reference_of(arg, ctx)? {
-        Some(Ok((_, range))) => range,
-        Some(Err(e)) => return Ok(Some(FormulaValue::Error(e))),
-        None => return Ok(None),
+    // A value read once goes to the registry function: ROW(IF(…)) of an array.
+    let range = match reference::resolve_value(arg, ctx)? {
+        reference::Resolved::Reference((_, range)) => range,
+        reference::Resolved::Value(FormulaValue::Error(e)) => {
+            return Ok(Some(FormulaValue::Error(e)))
+        }
+        reference::Resolved::Value(value) => {
+            let func = get_function_registry()
+                .get(name)
+                .expect("ROW, COLUMN, ROWS and COLUMNS are registered");
+            return (func.implementation)(&[value], ctx).map(Some);
+        }
     };
     let (first, last) = if rows {
         (range.start.row, range.end.row)
@@ -2012,12 +2018,7 @@ fn evaluate_position(name: &str, args: &[FormulaExpr], ctx: &EvaluationContext) 
     if matches!(name, "ROWS" | "COLUMNS") {
         return Ok(Some(FormulaValue::Number((last - first + 1) as f64)));
     }
-    if first == last {
-        return Ok(Some(FormulaValue::Number((first + 1) as f64)));
-    }
-    let numbers = (first..=last).map(|n| FormulaValue::Number((n + 1) as f64));
-    let data = if rows { numbers.map(|v| vec![v]).collect() } else { vec![numbers.collect()] };
-    Ok(Some(FormulaValue::Array { data, source: None }))
+    Ok(Some(crate::functions::lookup::positions(first, last, rows)))
 }
 
 /// FORMULATEXT requires special handling: it needs the raw cell reference
@@ -3271,39 +3272,25 @@ mod tests {
         // COLUMN() with no args - returns current column (default context is col 0, so 1-indexed = 1)
         assert_eq!(eval("=COLUMN()").unwrap(), FormulaValue::Number(1.0));
 
-        // ROW with single value - returns current row context
-        assert_eq!(eval("=ROW(5)").unwrap(), FormulaValue::Number(1.0));
-
-        // COLUMN with single value - returns current column context
-        assert_eq!(eval("=COLUMN(5)").unwrap(), FormulaValue::Number(1.0));
-
-        // ROW with array - returns column vector of row numbers
-        // For {1;2;3} (3 rows), returns {1;2;3} since default current_row=0 -> 1,2,3
-        let result = eval("=ROW({1;2;3})").unwrap();
-        match result {
-            FormulaValue::Array { data: arr, .. } => {
-                assert_eq!(arr.len(), 3); // 3 rows
-                assert_eq!(arr[0].len(), 1); // 1 column each
-                assert_eq!(arr[0][0], FormulaValue::Number(1.0));
-                assert_eq!(arr[1][0], FormulaValue::Number(2.0));
-                assert_eq!(arr[2][0], FormulaValue::Number(3.0));
+        // A value isn't a reference: each element is #VALUE!, or its own error.
+        assert_eq!(
+            eval("=ROW(5)").unwrap(),
+            FormulaValue::Error(CellError::Value)
+        );
+        assert_eq!(
+            eval("=COLUMN(5)").unwrap(),
+            FormulaValue::Error(CellError::Value)
+        );
+        assert_eq!(
+            eval("=COLUMN({1,#N/A})").unwrap(),
+            FormulaValue::Array {
+                data: vec![vec![
+                    FormulaValue::Error(CellError::Value),
+                    FormulaValue::Error(CellError::Na)
+                ]],
+                source: None,
             }
-            _ => panic!("Expected array result"),
-        }
-
-        // COLUMN with array - returns row vector of column numbers
-        // For {1,2,3} (3 columns), returns {1,2,3}
-        let result = eval("=COLUMN({1,2,3})").unwrap();
-        match result {
-            FormulaValue::Array { data: arr, .. } => {
-                assert_eq!(arr.len(), 1); // 1 row
-                assert_eq!(arr[0].len(), 3); // 3 columns
-                assert_eq!(arr[0][0], FormulaValue::Number(1.0));
-                assert_eq!(arr[0][1], FormulaValue::Number(2.0));
-                assert_eq!(arr[0][2], FormulaValue::Number(3.0));
-            }
-            _ => panic!("Expected array result"),
-        }
+        );
     }
 
     #[test]

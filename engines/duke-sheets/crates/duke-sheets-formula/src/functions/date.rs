@@ -19,10 +19,6 @@ fn ctx_date_1904(ctx: &EvaluationContext) -> bool {
         .unwrap_or(false)
 }
 
-fn to_i32_trunc(v: &FormulaValue) -> Option<i32> {
-    v.as_number().map(|n| n.trunc() as i32)
-}
-
 fn is_leap_gregorian(year: i32) -> bool {
     (year % 4 == 0) && ((year % 100 != 0) || (year % 400 == 0))
 }
@@ -287,9 +283,17 @@ pub fn fn_date(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<
         }
     }
 
-    let mut year = to_i32_trunc(args.first().unwrap()).unwrap_or(0);
-    let month = to_i32_trunc(args.get(1).unwrap()).unwrap_or(0);
-    let day = to_i32_trunc(args.get(2).unwrap()).unwrap_or(0);
+    // Text that isn't a number is #VALUE!. Each part is a 16-bit whole number, as in Lotus:
+    // DATE(2021,"Oct 21",1) reads the month as the date Oct 21, 45586, which is #NUM!.
+    let part = |v: &FormulaValue| match v.as_number() {
+        Some(n) if (-32768.0..32768.0).contains(&n.trunc()) => Ok(n.trunc() as i32),
+        Some(_) => Err(CellError::Num),
+        None => Err(CellError::Value),
+    };
+    let (mut year, month, day) = match (part(&args[0]), part(&args[1]), part(&args[2])) {
+        (Ok(y), Ok(m), Ok(d)) => (y, m, d),
+        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => return Ok(FormulaValue::Error(e)),
+    };
 
     // Excel: years 0..1899 are treated as 1900..3799
     if (0..1900).contains(&year) {

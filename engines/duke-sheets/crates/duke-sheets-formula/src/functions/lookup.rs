@@ -380,97 +380,62 @@ pub fn fn_choose(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
     Ok(args[index as usize].clone())
 }
 
-/// ROW([reference]) - Returns the row number of a reference
-///
-/// Reference: LibreOffice ScInterpreter::ScRow, Microsoft ROW function
-///
-/// - ROW() with no args returns the row of the current cell (1-indexed)
-/// - ROW(reference) returns the row number of the reference
-/// - ROW(range) returns an array of row numbers
-///
-/// Note: Since arguments are evaluated before reaching the function, we can't
-/// distinguish between ROW(A1) and ROW(5) - both arrive as the value. For ranges,
-/// we return an array of sequential row numbers based on array dimensions.
+/// ROW([reference]): the row of the formula's cell, or of each row of a reference. A reference
+/// as written is measured before evaluation (`evaluate_position`); what reaches here is a value.
 pub fn fn_row(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    if args.is_empty() {
-        // ROW() with no args - return current row (1-indexed like Excel)
-        return Ok(FormulaValue::Number((ctx.current_row + 1) as f64));
-    }
-
-    let arg = &args[0];
-    match arg {
-        FormulaValue::Error(e) => Ok(FormulaValue::Error(*e)),
-        FormulaValue::Array { data: arr, .. } => {
-            // For an array, return a column vector of row numbers
-            // This matches Excel's behavior: ROW(A1:A5) returns {1;2;3;4;5}
-            let rows = arr.len();
-            if rows == 0 {
-                return Ok(FormulaValue::Error(CellError::Value));
-            }
-
-            // Return column vector (rows x 1) with row indices
-            // The actual row numbers should come from the reference, but since
-            // we don't have that info, we return 1..n as relative row indices
-            // This is a limitation - full support needs unevaluated reference passing
-            let result: Vec<Vec<FormulaValue>> = (0..rows)
-                .map(|i| {
-                    vec![FormulaValue::Number(
-                        (ctx.current_row + 1 + i as u32) as f64,
-                    )]
-                })
-                .collect();
-            Ok(FormulaValue::Array {
-                data: result,
-                source: None,
-            })
-        }
-        // Single value = assume it's from the current cell context
-        _ => Ok(FormulaValue::Number((ctx.current_row + 1) as f64)),
-    }
+    position_of_value(args, ctx, true)
 }
 
-/// COLUMN([reference]) - Returns the column number of a reference
-///
-/// Reference: LibreOffice ScInterpreter::ScColumn, Microsoft COLUMN function
-///
-/// - COLUMN() with no args returns the column of the current cell (1-indexed)
-/// - COLUMN(reference) returns the column number of the reference
-/// - COLUMN(range) returns an array of column numbers
-///
-/// Note: Since arguments are evaluated before reaching the function, we can't
-/// distinguish between COLUMN(A1) and COLUMN(1) - both arrive as the value. For ranges,
-/// we return an array of sequential column numbers based on array dimensions.
+/// COLUMN([reference]): the column of the formula's cell, or of each column of a reference.
 pub fn fn_column(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    if args.is_empty() {
-        // COLUMN() with no args - return current column (1-indexed like Excel)
-        return Ok(FormulaValue::Number((ctx.current_col + 1) as f64));
+    position_of_value(args, ctx, false)
+}
+
+/// The numbers of rows or columns `first..=last` (counted from 0): one number for one, else a
+/// column of row numbers or a row of column numbers.
+pub(crate) fn positions(first: u32, last: u32, rows: bool) -> FormulaValue {
+    if first == last {
+        return FormulaValue::Number((first + 1) as f64);
     }
+    let numbers = (first..=last).map(|n| FormulaValue::Number((n + 1) as f64));
+    let data = if rows {
+        numbers.map(|v| vec![v]).collect()
+    } else {
+        vec![numbers.collect()]
+    };
+    FormulaValue::Array { data, source: None }
+}
 
-    let arg = &args[0];
-    match arg {
-        FormulaValue::Error(e) => Ok(FormulaValue::Error(*e)),
-        FormulaValue::Array { data: arr, .. } => {
-            // For an array, return a row vector of column numbers
-            // This matches Excel's behavior: COLUMN(A1:E1) returns {1,2,3,4,5}
-            let cols = arr.first().map(|r| r.len()).unwrap_or(0);
-            if cols == 0 {
-                return Ok(FormulaValue::Error(CellError::Value));
-            }
-
-            // Return row vector (1 x cols) with column indices
-            // The actual column numbers should come from the reference, but since
-            // we don't have that info, we return 1..n as relative column indices
-            let result: Vec<FormulaValue> = (0..cols)
-                .map(|i| FormulaValue::Number((ctx.current_col + 1 + i as u16) as f64))
-                .collect();
-            Ok(FormulaValue::Array {
-                data: vec![result],
-                source: None,
-            })
+/// ROW or COLUMN of a value. A range's values still know their cells; anything else isn't a
+/// reference, so each element is #VALUE! or its own error: COLUMN(IF(A2:C2<>"",A2:C2)) gives
+/// {#VALUE!,#N/A,#VALUE!} over an #N/A in B2, which ERROR.TYPE then reads.
+fn position_of_value(
+    args: &[FormulaValue],
+    ctx: &EvaluationContext,
+    rows: bool,
+) -> FormulaResult<FormulaValue> {
+    let not_a_reference = |value: &FormulaValue| match value {
+        FormulaValue::Error(e) => FormulaValue::Error(*e),
+        _ => FormulaValue::Error(CellError::Value),
+    };
+    Ok(match args.first() {
+        None if rows => FormulaValue::Number((ctx.current_row + 1) as f64),
+        None => FormulaValue::Number((ctx.current_col + 1) as f64),
+        Some(FormulaValue::Array { source: Some(source), .. }) if rows => {
+            positions(source.start_row, source.end_row, true)
         }
-        // Single value = assume it's from the current cell context
-        _ => Ok(FormulaValue::Number((ctx.current_col + 1) as f64)),
-    }
+        Some(FormulaValue::Array { source: Some(source), .. }) => {
+            positions(source.start_col.into(), source.end_col.into(), false)
+        }
+        Some(FormulaValue::Array { data, .. }) => FormulaValue::Array {
+            data: data
+                .iter()
+                .map(|row| row.iter().map(not_a_reference).collect())
+                .collect(),
+            source: None,
+        },
+        Some(value) => not_a_reference(value),
+    })
 }
 
 /// VLOOKUP(lookup_value, table_array, col_index_num, [range_lookup])

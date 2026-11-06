@@ -2800,6 +2800,29 @@ mod tests {
     }
 
     #[test]
+    fn an_arrays_cells_are_saved_as_their_values() {
+        // A spilled array's other cells hold no formula; a .xlsb file keeps their values.
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_formula("A1", "=SEQUENCE(3)").unwrap();
+        ws.set_array_formula_result(
+            0,
+            0,
+            vec![
+                vec![CellValue::Number(1.0)],
+                vec![CellValue::string("two")],
+                vec![CellValue::Number(3.0)],
+            ],
+        )
+        .unwrap();
+
+        let ws2 = round_trip(&wb);
+        let ws2 = ws2.worksheet(0).unwrap();
+        assert_eq!(ws2.get_value_at(1, 0), CellValue::string("two"));
+        assert_eq!(ws2.get_value_at(2, 0), CellValue::Number(3.0));
+    }
+
+    #[test]
     fn union_parens_survive_outside_sum() {
         // Union parens are semantic: =COUNT((A1,B1)) has one argument.
         let mut wb = Workbook::new();

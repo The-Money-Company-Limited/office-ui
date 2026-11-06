@@ -16,10 +16,12 @@ pub struct Local<'a> {
     outer: Option<&'a Local<'a>>,
 }
 
-/// What a local name stands for: a value, or a LAMBDA that can be called by that name.
+/// What a local name stands for: a value, a reference (`LET(r,A1:A3,ROW(r))`), or a LAMBDA that
+/// can be called by that name.
 #[derive(Clone)]
 pub enum Binding {
     Value(FormulaValue),
+    Reference(crate::reference::Target),
     Lambda(Arc<Lambda>),
 }
 
@@ -96,7 +98,10 @@ pub(crate) fn evaluate_let(args: &[FormulaExpr], ctx: &EvaluationContext) -> For
     };
     let binding = match lambda_of(&args[1], ctx) {
         Some(lambda) => Binding::Lambda(lambda),
-        None => Binding::Value(evaluate(&args[1], ctx)?),
+        None => match crate::reference::resolve_value(&args[1], ctx)? {
+            crate::reference::Resolved::Reference(target) => Binding::Reference(target),
+            crate::reference::Resolved::Value(value) => Binding::Value(value),
+        },
     };
     let local = Local { name: local_name(name), binding, outer: ctx.locals };
     let inner = ctx.with_locals(Some(&local));

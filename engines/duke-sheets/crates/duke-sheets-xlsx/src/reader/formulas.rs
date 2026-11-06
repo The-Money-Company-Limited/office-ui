@@ -21,6 +21,17 @@ pub(crate) struct CellFormulaState {
     pub(super) data_table_input2_ref: Option<String>,
 }
 
+impl CellFormulaState {
+    /// The shared formula (`si`) the cell belongs to.
+    pub(super) fn shared_index(&self) -> Option<u32> {
+        if self.kind == CellFormulaKind::Shared {
+            self.shared_index
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct SharedFormulaMaster {
     pub(super) base_cell_ref: String,
@@ -432,6 +443,98 @@ mod tests {
         );
     }
 
+    fn kind_at(
+        sheet: &duke_sheets_core::Worksheet,
+        address: &str,
+    ) -> Option<duke_sheets_core::FormulaKind> {
+        let addr = CellAddress::parse(address).unwrap();
+        sheet
+            .formula_data_at(addr.row, addr.col)
+            .map(|formula| formula.kind)
+    }
+
+    fn sheet_xml_of(bytes: &[u8]) -> String {
+        use std::io::Read;
+        let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        zip.by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        xml
+    }
+
+    #[test]
+    fn formula_kinds_survive_a_round_trip() {
+        use duke_sheets_core::FormulaKind;
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1"><v>1</v></c>
+      <c r="B1"><f>A1:A3*2</f><v>2</v></c>
+      <c r="C1"><f t="array" ref="C1:C2">A1:A2*2</f><v>2</v></c>
+      <c r="D1" cm="1"><f t="array" ref="D1">SUM(A1:A3*2)</f><v>2</v></c>
+      <c r="F1" cm="1"><f t="array" ref="F1">SUM(_xlfn.SINGLE(A1:A3))</f><v>1</v></c>
+    </row>
+    <row r="2"><c r="C2"><v>4</v></c></row>
+  </sheetData>
+</worksheet>"#;
+        let mut workbook =
+            XlsxReader::read(Cursor::new(build_single_sheet_xlsx(sheet_xml))).unwrap();
+        workbook
+            .worksheet_mut(0)
+            .unwrap()
+            .set_cell_formula("E1", "=SUM(A1:A3*2)")
+            .unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            formula_text_at(sheet, "B1"),
+            Some("=@A1:A3*2"),
+            "a legacy formula shows Excel's @"
+        );
+        assert_eq!(
+            kind_at(sheet, "C1"),
+            Some(FormulaKind::Cse { rows: 2, cols: 1 })
+        );
+        assert_eq!(
+            formula_text_at(sheet, "C2"),
+            None,
+            "only the top-left cell holds the formula"
+        );
+        assert_eq!(sheet.get_value_at(1, 2), CellValue::Number(4.0));
+        assert_eq!(formula_text_at(sheet, "D1"), Some("=SUM(A1:A3*2)"));
+        assert_eq!(formula_text_at(sheet, "F1"), Some("=SUM(@A1:A3)"));
+
+        let mut bytes = Vec::new();
+        crate::XlsxWriter::write(&workbook, Cursor::new(&mut bytes)).unwrap();
+        let xml = sheet_xml_of(&bytes);
+        assert!(
+            xml.contains(r#"<c r="B1"><f>A1:A3*2</f>"#),
+            "legacy is saved plain: {xml}"
+        );
+        assert!(
+            xml.contains(r#"<c r="C1"><f t="array" ref="C1:C2">A1:A2*2</f>"#),
+            "{xml}"
+        );
+        assert!(xml.contains(r#"<c r="C2"><v>4</v></c>"#), "{xml}");
+        assert!(
+            xml.contains(r#"cm="1"><f t="array" ref="E1">SUM(A1:A3*2)</f>"#),
+            "typed formula is marked: {xml}"
+        );
+        assert!(xml.contains(r#"<f>SUM(_xlfn.SINGLE(A1:A3))</f>"#), "{xml}");
+
+        let reread = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = reread.worksheet(0).unwrap();
+        assert_eq!(formula_text_at(sheet, "B1"), Some("=@A1:A3*2"));
+        assert_eq!(
+            kind_at(sheet, "C1"),
+            Some(FormulaKind::Cse { rows: 2, cols: 1 })
+        );
+        assert_eq!(formula_text_at(sheet, "E1"), Some("=SUM(A1:A3*2)"));
+        assert_eq!(formula_text_at(sheet, "F1"), Some("=SUM(@A1:A3)"));
+    }
+
     #[test]
     fn test_read_array_formula_anchor_and_spill() {
         let sheet_xml = r#"<?xml version="1.0"?>
@@ -458,22 +561,10 @@ mod tests {
         );
         assert_eq!(a1.as_number(), Some(1.0));
 
-        // Non-anchor cells: replicated formula with their own cached values
-        let a2 = sheet.get_value("A2").unwrap();
-        assert_eq!(
-            formula_text_at(sheet, "A2"),
-            Some("=ROW(A1:A3)"),
-            "A2 should have the array formula"
-        );
-        assert_eq!(a2.as_number(), Some(2.0));
-
-        let a3 = sheet.get_value("A3").unwrap();
-        assert_eq!(
-            formula_text_at(sheet, "A3"),
-            Some("=ROW(A1:A3)"),
-            "A3 should have the array formula"
-        );
-        assert_eq!(a3.as_number(), Some(3.0));
+        // The other cells show the array's saved values; only the anchor holds the formula.
+        assert_eq!(formula_text_at(sheet, "A2"), None);
+        assert_eq!(sheet.get_value_at(1, 0).as_number(), Some(2.0));
+        assert_eq!(sheet.get_value_at(2, 0).as_number(), Some(3.0));
     }
 
     #[test]
@@ -505,13 +596,11 @@ mod tests {
         );
         assert_eq!(a1.as_number(), Some(10.0));
 
-        // All cells have formula + their own cached value
-        assert_eq!(formula_text_at(sheet, "B1"), Some("=A1:B2*2"));
-        assert_eq!(sheet.get_value("B1").unwrap().as_number(), Some(20.0));
-        assert_eq!(formula_text_at(sheet, "A2"), Some("=A1:B2*2"));
-        assert_eq!(sheet.get_value("A2").unwrap().as_number(), Some(30.0));
-        assert_eq!(formula_text_at(sheet, "B2"), Some("=A1:B2*2"));
-        assert_eq!(sheet.get_value("B2").unwrap().as_number(), Some(40.0));
+        // The other cells show the array's saved values.
+        assert_eq!(formula_text_at(sheet, "B1"), None);
+        assert_eq!(sheet.get_value_at(0, 1).as_number(), Some(20.0));
+        assert_eq!(sheet.get_value_at(1, 0).as_number(), Some(30.0));
+        assert_eq!(sheet.get_value_at(1, 1).as_number(), Some(40.0));
     }
 
     #[test]
@@ -580,6 +669,10 @@ mod tests {
         assert_eq!(formula_text_at(sheet, "C2"), Some("=TABLE(A1,A2)"));
         assert_eq!(formula_text_at(sheet, "B3"), Some("=TABLE(A1,A2)"));
         assert_eq!(formula_text_at(sheet, "C3"), Some("=TABLE(A1,A2)"));
+        assert_eq!(
+            kind_at(sheet, "C3"),
+            Some(duke_sheets_core::FormulaKind::DataTable)
+        );
 
         assert_eq!(sheet.get_value("B2").unwrap().as_number(), Some(10.0));
         assert_eq!(sheet.get_value("C2").unwrap().as_number(), Some(20.0));

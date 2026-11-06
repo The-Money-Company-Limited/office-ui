@@ -813,6 +813,17 @@ export class Worksheet {
     free(): void;
     [Symbol.dispose](): void;
     /**
+     * The Ctrl+Shift+Enter array formula whose block holds the cell, as
+     * `{ row, col, rows, cols, formula }` for its top-left cell, or `null`.
+     */
+    arrayFormulaAt(row: number, col: number): any;
+    /**
+     * The values the cells of the Ctrl+Shift+Enter array formula whose block holds the cell show,
+     * row by row, as `setArrayFormula` takes them back: `null` when blank, an error as
+     * `{ error: "#N/A" }`. `null` when the cell isn't in a block.
+     */
+    arrayFormulaValuesAt(row: number, col: number): any;
+    /**
      * Gives the cell the default style, as a cell that was never styled has.
      */
     clearCellStyleAt(row: number, col: number): void;
@@ -856,6 +867,11 @@ export class Worksheet {
     isSpillSource(row: number, col: number): boolean;
     isSpillTarget(row: number, col: number): boolean;
     mergeCells(range_str: string): void;
+    /**
+     * Puts back a Ctrl+Shift+Enter array formula from `address`, as undo does: `values` are the
+     * ones `arrayFormulaValuesAt` gave, which its cells show until it is calculated.
+     */
+    setArrayFormula(address: string, formula: string, values: any): void;
     setCell(address: string, value: any): void;
     setCellStyle(address: string, style: any): void;
     setCellStyleAt(row: number, col: number, style: any): void;
@@ -994,6 +1010,7 @@ export interface InitOutput {
     readonly worksheet_mergeCells: (a: number, b: number, c: number) => [number, number];
     readonly worksheet_name: (a: number) => [number, number, number, number];
     readonly worksheet_readTypedNumberAt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+    readonly worksheet_setArrayFormula: (a: number, b: number, c: number, d: number, e: number, f: any) => [number, number];
     readonly worksheet_setCell: (a: number, b: number, c: number, d: any) => [number, number];
     readonly worksheet_setCellStyle: (a: number, b: number, c: number, d: any) => [number, number];
     readonly worksheet_setCellStyleAt: (a: number, b: number, c: number, d: any) => [number, number];
@@ -1005,6 +1022,8 @@ export interface InitOutput {
     readonly worksheet_setRowHeight: (a: number, b: number, c: number) => [number, number];
     readonly worksheet_unmergeCells: (a: number, b: number, c: number) => [number, number, number];
     readonly worksheet_usedRange: (a: number) => [number, number, number];
+    readonly worksheet_arrayFormulaAt: (a: number, b: number, c: number) => [number, number, number];
+    readonly worksheet_arrayFormulaValuesAt: (a: number, b: number, c: number) => [number, number, number];
     readonly worksheet_autoFilter: (a: number) => [number, number, number];
     readonly worksheet_cellCount: (a: number) => [number, number, number];
     readonly worksheet_colBreaks: (a: number) => [number, number, number];

@@ -28,8 +28,8 @@ use duke_sheets_core::conditional_format::{
 use duke_sheets_core::style::{Color, Style};
 use duke_sheets_core::validation::DataValidation;
 use duke_sheets_core::{
-    CellAddress, CellError, CellRange, CellValue, Hyperlink, PageBreak, SheetSlot, SplitPanes,
-    Workbook,
+    CellAddress, CellError, CellRange, CellValue, FormulaKind, Hyperlink, PageBreak, SheetSlot,
+    SplitPanes, Workbook,
 };
 use formulas::{
     parse_cell_formula_state, resolve_cell_formula, CellFormulaKind, SharedFormulaMaster,
@@ -899,6 +899,7 @@ impl XlsxReader {
         // Worksheets and chartsheets are interleaved in workbook.xml <sheets>;
         // we store them in separate Vecs but record ordering in sheet_order.
         let mut ws_count: usize = 0;
+        let mut formula_cells: Vec<duke_sheets_formula::legacy::FileFormula> = Vec::new();
         for (_idx, sheet_entry) in sheet_info.iter().enumerate() {
             if let Some(path) = sheet_paths.get(&sheet_entry.r_id) {
                 let sheet_idx = workbook.add_worksheet_with_name_unchecked(&sheet_entry.name);
@@ -916,6 +917,7 @@ impl XlsxReader {
                     .push(SheetSlot::Worksheet(sheet_idx));
                 let sheet_rels = read_part_rels(&mut package, path)?;
                 let worksheet_file = package.open_zip_name(path)?;
+                let mut sheet_formula_cells = Vec::new();
                 let pending_controls =
                     form_controls::dedupe_pending_controls(Self::read_worksheet(
                     worksheet_file,
@@ -925,7 +927,17 @@ impl XlsxReader {
                     &dxf_styles,
                     &sheet_rels,
                     &value_errors,
+                    &mut sheet_formula_cells,
                 )?);
+                formula_cells.extend(sheet_formula_cells.into_iter().map(
+                    |(row, col, dynamic, shared)| duke_sheets_formula::legacy::FileFormula {
+                        sheet: sheet_idx,
+                        row,
+                        col,
+                        dynamic,
+                        shared,
+                    },
+                ));
 
                 // Read comments for this worksheet (if present).
                 // Resolve paths via sheet .rels relationships; fall back to
@@ -1124,6 +1136,8 @@ impl XlsxReader {
                 )));
             }
         }
+
+        duke_sheets_formula::legacy::read_formulas(&mut workbook, &formula_cells);
 
         // Apply print area and print titles from named ranges to worksheets.
         Self::apply_print_settings(&mut workbook);
@@ -1470,6 +1484,7 @@ impl XlsxReader {
         dxf_styles: &[Style],
         sheet_rels: &RelationshipSet,
         value_errors: &HashMap<u32, CellError>,
+        formula_cells: &mut Vec<(u32, u16, bool, Option<u32>)>,
     ) -> XlsxResult<Vec<form_controls::PendingControl>> {
         let mut xml_reader = Reader::from_reader(BufReader::new(reader));
         xml_reader.config_mut().trim_text(false);
@@ -1505,13 +1520,12 @@ impl XlsxReader {
         let mut shared_formula_masters: HashMap<u32, SharedFormulaMaster> = HashMap::new();
 
         // Pending array/dataTable formulas with ref ranges - post-processed after all cells.
-        // Each entry: (anchor_cell_ref, ref_range, kind, formula_text, r1, r2)
+        // Each entry: (anchor_cell_ref, ref_range, kind, r1, r2)
         #[allow(clippy::type_complexity)]
         let mut pending_array_formulas: Vec<(
             String,
             String,
             CellFormulaKind,
-            String,
             Option<String>,
             Option<String>,
         )> = Vec::new();
@@ -2301,6 +2315,20 @@ impl XlsxReader {
                                         cell_styles,
                                     )?;
                                 }
+                                // Each formula is spelled as the editor shows it once the
+                                // workbook's names are read (legacy::read_formulas): one
+                                // without the dynamic-array mark is from before dynamic arrays. A data table's
+                                // cells hold TABLE.
+                                if worksheet.has_formula_at(addr.row, addr.col)
+                                    && current_formula_state.kind != CellFormulaKind::DataTable
+                                {
+                                    formula_cells.push((
+                                        addr.row,
+                                        addr.col,
+                                        current_cell_cm == Some(1),
+                                        current_formula_state.shared_index(),
+                                    ));
+                                }
                             }
                             // Record array/dataTable formulas with ref for post-processing
                             if let Some(ref cell_ref) = current_cell_ref {
@@ -2308,13 +2336,10 @@ impl XlsxReader {
                                     if current_formula_state.kind == CellFormulaKind::Array
                                         || current_formula_state.kind == CellFormulaKind::DataTable
                                     {
-                                        let formula_text =
-                                            current_formula.clone().unwrap_or_default();
                                         pending_array_formulas.push((
                                             cell_ref.clone(),
                                             array_ref.clone(),
                                             current_formula_state.kind,
-                                            formula_text,
                                             current_formula_state.data_table_input1_ref.clone(),
                                             current_formula_state.data_table_input2_ref.clone(),
                                         ));
@@ -3360,90 +3385,58 @@ impl XlsxReader {
             buf.clear();
         }
 
-        // Post-process array/dataTable formulas: replicate formula to all
-        // cells in the ref range and build array_result on the anchor cell.
-        // A dynamic array (an anchor with cell metadata, `cm`) is not replicated: its `ref` is the
-        // area it spilled over, whose cells hold plain values.
+        // An array formula (`t="array"`) is held by the top-left cell of its `ref`: a dynamic array
+        // (`cm="1"`) spilled over it, and a Ctrl+Shift+Enter array formula fills it. Its other
+        // cells keep their saved values as the array's. Each cell of a data table holds TABLE.
         let mut dynamic_array_extents: HashMap<(u32, u16), (u32, u16)> = HashMap::new();
-        for (anchor_ref, ref_range, kind, formula_text, r1, r2) in pending_array_formulas {
-            let anchor = match CellAddress::parse(&anchor_ref) {
-                Ok(a) => a,
-                Err(_) => continue,
-            };
-            let range = match CellRange::parse(&ref_range) {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-            if kind == CellFormulaKind::Array && dynamic_array_anchors.contains(&(anchor.row, anchor.col)) {
-                dynamic_array_extents.insert(
-                    (anchor.row, anchor.col),
-                    (range.end.row - range.start.row + 1, range.end.col - range.start.col + 1),
-                );
+        let mut cse_anchors: Vec<(u32, u16)> = Vec::new();
+        for (anchor_ref, ref_range, kind, r1, r2) in pending_array_formulas {
+            let (Ok(anchor), Ok(range)) = (
+                CellAddress::parse(&anchor_ref),
+                CellRange::parse(&ref_range),
+            ) else {
                 continue;
-            }
-
-            let formula_for_cells = match kind {
-                CellFormulaKind::Array => {
-                    let f = if formula_text.starts_with('=') {
-                        formula_text.clone()
-                    } else {
-                        format!("={}", formula_text)
-                    };
-                    f
-                }
-                CellFormulaKind::DataTable => {
-                    let arg1 = r1.as_deref().unwrap_or("");
-                    let arg2 = r2.as_deref().unwrap_or("");
-                    format!("=TABLE({},{})", arg1, arg2)
-                }
-                _ => continue,
             };
-
-            // Collect cached values from the ref range into a 2D array.
-            let num_rows = (range.end.row - range.start.row + 1) as usize;
-            let num_cols = (range.end.col - range.start.col + 1) as usize;
-            let mut array_result: Vec<Vec<CellValue>> = Vec::with_capacity(num_rows);
-
-            for r in range.start.row..=range.end.row {
-                let mut row_values: Vec<CellValue> = Vec::with_capacity(num_cols);
-                for c in range.start.col..=range.end.col {
-                    // Extract the current cached value from the cell
-                    let cached = worksheet.get_value_at(r, c);
-                    row_values.push(cached);
-                }
-                array_result.push(row_values);
-            }
-
-            // For array formulas: set array_result on anchor, replicate formula to non-anchor cells.
-            // For dataTable: replicate TABLE formula to all cells in range.
-            for r in range.start.row..=range.end.row {
-                for c in range.start.col..=range.end.col {
-                    let is_anchor = r == anchor.row && c == anchor.col;
-                    let row_offset = (r - range.start.row) as usize;
-                    let col_offset = (c - range.start.col) as usize;
-                    let cached = array_result[row_offset][col_offset].clone();
-
-                    let _ = worksheet.set_formula_with_cached_value_at(
-                        r,
-                        c,
-                        &formula_for_cells,
-                        cached,
-                    );
-                    if is_anchor && kind == CellFormulaKind::Array {
-                        if let Some(formula) = worksheet.formula_data_at_mut(r, c) {
-                            formula.array_result = Some(array_result.clone());
+            let (rows, cols) = (
+                range.end.row - range.start.row + 1,
+                range.end.col - range.start.col + 1,
+            );
+            match kind {
+                CellFormulaKind::Array => {
+                    dynamic_array_extents.insert((anchor.row, anchor.col), (rows, cols));
+                    if !dynamic_array_anchors.contains(&(anchor.row, anchor.col)) {
+                        if let Some(formula) = worksheet.formula_data_at_mut(anchor.row, anchor.col)
+                        {
+                            formula.kind = FormulaKind::Cse { rows, cols };
+                            cse_anchors.push((anchor.row, anchor.col));
                         }
                     }
                 }
+                CellFormulaKind::DataTable => {
+                    let table = format!(
+                        "=TABLE({},{})",
+                        r1.as_deref().unwrap_or(""),
+                        r2.as_deref().unwrap_or("")
+                    );
+                    for r in range.start.row..=range.end.row {
+                        for c in range.start.col..=range.end.col {
+                            let cached = worksheet.get_value_at(r, c);
+                            let _ =
+                                worksheet.set_formula_with_cached_value_at(r, c, &table, cached);
+                            if let Some(formula) = worksheet.formula_data_at_mut(r, c) {
+                                formula.kind = FormulaKind::DataTable;
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
-        // Post-process dynamic array formulas (cm="1" anchors + cm="2" ghosts).
-        // For each anchor, determine the spill rectangle by scanning the ghost set,
-        // build array_result from cached values, then create SpillTarget cells.
-        for &(anchor_row, anchor_col) in &dynamic_array_anchors {
-            // The spill rectangle is the anchor's `ref`, as Excel writes it, else the ghosts (cm="2")
-            // that extend right and down from the anchor, as other writers mark spilled cells.
+        // Each array formula's cells become its array's: the anchor's `ref` gives their extent,
+        // else the ghosts (cm="2") that extend right and down from it, as other writers mark
+        // spilled cells.
+        for &(anchor_row, anchor_col) in dynamic_array_anchors.iter().chain(&cse_anchors) {
             let (num_rows, num_cols) = match dynamic_array_extents.get(&(anchor_row, anchor_col)) {
                 Some(&extent) => extent,
                 None => {
@@ -3464,55 +3457,7 @@ impl XlsxReader {
                 }
             };
 
-            if !worksheet.has_formula_at(anchor_row, anchor_col) {
-                continue;
-            }
-
-            let anchor_cached = worksheet.get_value_at(anchor_row, anchor_col);
-
-            let mut array_result: Vec<Vec<CellValue>> = Vec::with_capacity(num_rows as usize);
-            for r in 0..num_rows {
-                let mut row_values: Vec<CellValue> = Vec::with_capacity(num_cols as usize);
-                for c in 0..num_cols {
-                    let cell_row = anchor_row + r;
-                    let cell_col = anchor_col + c;
-                    let val = if r == 0 && c == 0 {
-                        anchor_cached.clone()
-                    } else {
-                        worksheet.get_value_at(cell_row, cell_col)
-                    };
-                    row_values.push(val);
-                }
-                array_result.push(row_values);
-            }
-
-            if let Some(formula) = worksheet.formula_data_at_mut(anchor_row, anchor_col) {
-                formula.array_result = Some(array_result);
-            }
-            if num_rows > 1 || num_cols > 1 {
-                worksheet.register_spill(anchor_row, anchor_col, num_rows, num_cols);
-            }
-
-            // Replace ghost cells with SpillTarget values.
-            for r in 0..num_rows {
-                for c in 0..num_cols {
-                    if r == 0 && c == 0 {
-                        continue;
-                    }
-                    let cell_row = anchor_row + r;
-                    let cell_col = anchor_col + c;
-                    let _ = worksheet.set_cell_value_at(
-                        cell_row,
-                        cell_col,
-                        CellValue::SpillTarget {
-                            source_row: anchor_row,
-                            source_col: anchor_col,
-                            offset_row: r,
-                            offset_col: c,
-                        },
-                    );
-                }
-            }
+            worksheet.hold_saved_array(anchor_row, anchor_col, num_rows, num_cols);
         }
 
         Ok(pending_controls)

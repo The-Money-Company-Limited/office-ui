@@ -28,10 +28,13 @@ pub mod eval_cache;
 pub mod evaluator;
 pub mod functions;
 pub mod lambda;
+pub mod legacy;
 pub mod parser;
+pub mod print;
 mod reference;
 mod regional;
 
+pub use array_lift::fit_array;
 pub use ast::{
     BinaryOperator, CellReference, ExternalReference, FormulaExpr, RangeReference,
     StructuredRefSpecifier, StructuredReference, UnaryOperator,

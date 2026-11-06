@@ -306,21 +306,8 @@ fn write_builtin_name_record<W: Write>(
     rw.write_record(records::BRT_NAME, &payload)
 }
 
-fn quote_sheet_name(name: &str) -> String {
-    let needs_quoting = name.contains(' ')
-        || name.contains('\'')
-        || name.contains('!')
-        || name.contains('[')
-        || name.contains(']');
-    if needs_quoting {
-        format!("'{}'", name.replace('\'', "''"))
-    } else {
-        name.to_string()
-    }
-}
-
 fn format_print_area_formula(sheet_name: &str, range: &duke_sheets_core::CellRange) -> String {
-    let quoted = quote_sheet_name(sheet_name);
+    let quoted = duke_sheets_formula::print::quoted(sheet_name);
     let start_col = CellAddress::column_to_letters(range.start.col);
     let end_col = CellAddress::column_to_letters(range.end.col);
     format!(
@@ -338,7 +325,7 @@ fn format_print_titles_formula(
     repeat_rows: Option<(u32, u32)>,
     repeat_cols: Option<(u16, u16)>,
 ) -> Option<String> {
-    let quoted = quote_sheet_name(sheet_name);
+    let quoted = duke_sheets_formula::print::quoted(sheet_name);
     let mut parts = Vec::new();
 
     if let Some((r1, r2)) = repeat_rows {

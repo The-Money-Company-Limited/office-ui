@@ -1025,6 +1025,31 @@ impl Worksheet {
         ws.set_cell_formula(address, formula).map_err(to_js_error)
     }
 
+    /// Puts back a Ctrl+Shift+Enter array formula from `address`, as undo does: `values` are the
+    /// ones `arrayFormulaValuesAt` gave, which its cells show until it is calculated.
+    #[wasm_bindgen(js_name = setArrayFormula)]
+    pub fn set_array_formula(
+        &self,
+        address: &str,
+        formula: &str,
+        values: JsValue,
+    ) -> Result<(), JsError> {
+        let addr = CellAddress::parse(address)
+            .map_err(|e| JsError::new(&format!("Invalid cell address: {}", e)))?;
+        let values: Vec<Vec<crate::types::WasmBlockValue>> =
+            serde_wasm_bindgen::from_value(values).map_err(to_js_error)?;
+        let values = values
+            .into_iter()
+            .map(|line| line.into_iter().map(|v| v.into_cell_value()).collect())
+            .collect();
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        ws.set_array_formula_at(addr.row, addr.col, formula, values)
+            .map_err(to_js_error)
+    }
+
     #[wasm_bindgen(js_name = setCellStyle)]
     pub fn set_cell_style(&self, address: &str, style: JsValue) -> Result<(), JsError> {
         let patch: WasmStylePatch = serde_wasm_bindgen::from_value(style).map_err(to_js_error)?;

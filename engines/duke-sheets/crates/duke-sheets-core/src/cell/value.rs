@@ -18,6 +18,25 @@ pub struct FormulaData {
     /// If this formula produces a dynamic array, the full result lives here.
     /// The outer Vec is rows, inner Vec is columns.
     pub array_result: Option<Vec<Vec<CellValue>>>,
+    /// Whether the formula spills, or fills a fixed block as a Ctrl+Shift+Enter array formula.
+    pub kind: FormulaKind,
+}
+
+/// How a formula's array result is shown. A formula from before dynamic arrays reads one value
+/// where the old rules did because its text says so (`=SUM(@A1:A3*@B1:B3)`, crate::legacy in the
+/// formula crate), so it needs no kind of its own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FormulaKind {
+    /// An array result spills, or is #SPILL! when cells are in the way.
+    #[default]
+    Dynamic,
+    /// A Ctrl+Shift+Enter array formula (`{=…}`) over `rows` x `cols` cells, held by its top-left
+    /// cell. Each cell of the block shows the result's element at its place, a single row or
+    /// column repeating and #N/A past the result's end; it never spills further.
+    Cse { rows: u32, cols: u16 },
+    /// A cell of a what-if data table: its formula is `=TABLE(row input, column input)`, which
+    /// Excel fills in and the file saves as the table's.
+    DataTable,
 }
 
 impl FormulaData {
@@ -26,6 +45,7 @@ impl FormulaData {
         Self {
             text: text.into(),
             array_result: None,
+            kind: FormulaKind::Dynamic,
         }
     }
 

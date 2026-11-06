@@ -42,9 +42,26 @@ pub fn parse_formula(formula: &str) -> FormulaResult<FormulaExpr> {
     Ok(expr)
 }
 
+/// The tokens of a formula with their byte ranges in `formula` (which starts with `=`), as the
+/// parser reads them. `None` when it doesn't start with `=`.
+pub(crate) fn tokens(formula: &str) -> Option<Vec<(std::ops::Range<usize>, Token)>> {
+    let body = formula.trim_start().strip_prefix('=')?;
+    let offset = formula.len() - body.len();
+    let mut parser = FormulaParser::new(body);
+    let mut out = Vec::new();
+    while *parser.current_token() != Token::Eof {
+        out.push((
+            offset + parser.token_start..offset + parser.pos,
+            parser.current_token().clone(),
+        ));
+        parser.consume();
+    }
+    Some(out)
+}
+
 /// Token types
 #[derive(Debug, Clone, PartialEq)]
-enum Token {
+pub(crate) enum Token {
     // Literals
     Number(f64),
     String(String),
@@ -111,6 +128,8 @@ fn is_known_function(name: &str) -> bool {
 struct FormulaParser<'a> {
     input: &'a str,
     pos: usize,
+    /// Where the current token starts.
+    token_start: usize,
     current_token: Option<Token>,
     depth: usize,
 }
@@ -120,6 +139,7 @@ impl<'a> FormulaParser<'a> {
         let mut parser = Self {
             input,
             pos: 0,
+            token_start: 0,
             current_token: None,
             depth: 0,
         };
@@ -150,6 +170,7 @@ impl<'a> FormulaParser<'a> {
             .peek_char()
             .is_some_and(|c| c.is_whitespace() && c != '\n');
         if prev_value_producing && had_whitespace {
+            let whitespace = self.pos;
             self.skip_whitespace();
             if let Some(next) = self.peek_char() {
                 // Excel swallows whitespace between a function name and
@@ -167,6 +188,7 @@ impl<'a> FormulaParser<'a> {
                         'A'..='Z' | 'a'..='z' | '_' | '\'' | '$' | '(' | '0'..='9'
                     )
                 {
+                    self.token_start = whitespace;
                     self.current_token = Some(Token::Space);
                     return;
                 }
@@ -183,6 +205,7 @@ impl<'a> FormulaParser<'a> {
 
     fn scan_token(&mut self) -> Token {
         self.skip_whitespace();
+        self.token_start = self.pos;
 
         if self.is_at_end() {
             return Token::Eof;
@@ -779,20 +802,35 @@ impl<'a> FormulaParser<'a> {
             });
         }
 
-        // Prefix implicit intersection (@)
-        if matches!(self.current_token(), Token::At) {
+        // Prefix implicit intersection (@). It binds tighter than a postfix `%` and looser than
+        // `#`: `@A1:A3%` is (@A1:A3)%, `@A1#` is @(A1#).
+        let at = matches!(self.current_token(), Token::At);
+        if at {
             self.consume();
-            let operand = self.parse_unary()?;
-            return Ok(FormulaExpr::UnaryOp {
-                op: UnaryOperator::ImplicitIntersection,
-                operand: Box::new(operand),
-            });
         }
 
         // Parse primary (via intersection layer, which folds Space
         // tokens into BinaryOp(Intersect)), then check for postfix
         // operators (%, #).
-        let mut expr = self.parse_intersect()?;
+        let mut expr =
+            if at && matches!(self.current_token(), Token::At | Token::Minus | Token::Plus) {
+                self.parse_unary()?
+            } else {
+                self.parse_intersect()?
+            };
+        if at {
+            while matches!(self.current_token(), Token::Hash) {
+                self.consume();
+                expr = FormulaExpr::UnaryOp {
+                    op: UnaryOperator::SpillRange,
+                    operand: Box::new(expr),
+                };
+            }
+            expr = FormulaExpr::UnaryOp {
+                op: UnaryOperator::ImplicitIntersection,
+                operand: Box::new(expr),
+            };
+        }
 
         loop {
             match self.current_token() {
@@ -1028,6 +1066,16 @@ impl<'a> FormulaParser<'a> {
         let name = name.to_uppercase();
         // A LAMBDA called where it is written: =LAMBDA(x,x+1)(2)
         let lambda = crate::evaluator::function_name(&name) == "LAMBDA";
+        // A file writes `@x` as _xlfn.SINGLE(x) and `A1#` as _xlfn.ANCHORARRAY(A1).
+        let op = match name.as_str() {
+            "_XLFN.SINGLE" => Some(UnaryOperator::ImplicitIntersection),
+            "_XLFN.ANCHORARRAY" => Some(UnaryOperator::SpillRange),
+            _ => None,
+        };
+        if let (Some(op), [_]) = (op, args.as_slice()) {
+            let operand = Box::new(args.into_iter().next().unwrap());
+            return Ok(FormulaExpr::UnaryOp { op, operand });
+        }
         let call = FormulaExpr::Function { name, args };
         if lambda && matches!(self.current_token(), Token::LeftParen) {
             let mut args = vec![call];

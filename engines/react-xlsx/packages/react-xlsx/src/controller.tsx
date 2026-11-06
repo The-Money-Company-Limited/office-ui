@@ -1,5 +1,5 @@
 import { editWorkbookStructure, mapStructuralSheetIndex, type XlsxStructuralEdit } from "./structural-edits";
-import { Workbook, type CellStyle, type ColorInput, type NumberFormatInput, type StyleInput } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
+import { Workbook, type ColorInput, type NumberFormatInput, type StyleInput } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import * as React from "react";
 import { cellInputText, enterUserText } from "./user-entry";
 import type {
@@ -62,6 +62,13 @@ import {
   type XlsxCommentThread
 } from "./comments";
 import { applyXlsxCut, captureXlsxCut, getXlsxInitialActiveCell } from "./selection-tools";
+import {
+  applyCellMutationState,
+  applyCellMutationStates,
+  captureCellMutationState as captureWorksheetCellState,
+  type ArrayFormulaBlocks,
+  type CellMutationState
+} from "./cell-history";
 import { safeCalculate, tryRecalculate } from "./safe-calculate";
 import { cellAddressToA1, parseXlsxRange } from "./range-reference";
 import { canUseConfiguredWasmSourceInWorker, getSheetsWasmModule } from "./wasm";
@@ -155,12 +162,6 @@ type SnapshotHistoryEntry = {
   bytes: Uint8Array;
   selection: XlsxCellRange | null;
   tabs: XlsxWorkbookTab[];
-};
-
-type CellMutationState = {
-  formula: string | null;
-  style: CellStyle | null;
-  value: unknown;
 };
 
 type CellEditHistoryEntry = {
@@ -1387,25 +1388,6 @@ function cloneCellStyle(style: unknown): unknown {
     return JSON.parse(JSON.stringify(style));
   } catch {
     return style;
-  }
-}
-
-function applyCellMutationState(
-  worksheet: ReturnType<Workbook["getSheet"]>,
-  cell: XlsxCellAddress,
-  state: CellMutationState
-) {
-  if (state.formula) {
-    worksheet.setFormula(cellAddressToA1(cell), state.formula);
-  } else {
-    worksheet.setCell(cellAddressToA1(cell), normalizeCellValue(state.value));
-  }
-
-  // A cell that had no style gets the default one back, dropping a format typing gave it.
-  if (state.style) {
-    worksheet.setCellStyleAt(cell.row, cell.col, state.style);
-  } else {
-    worksheet.clearCellStyleAt(cell.row, cell.col);
   }
 }
 
@@ -3540,17 +3522,16 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     };
   }, [activeCell, activeSheetIndex, createSavedWorkbookBytes, selection, tabs, workbook]);
 
-  const captureCellMutationState = React.useCallback((cell: XlsxCellAddress): CellMutationState | null => {
+  const captureCellMutationState = React.useCallback((
+    cell: XlsxCellAddress,
+    blocks?: ArrayFormulaBlocks
+  ): CellMutationState | null => {
     const worksheet = getActiveWorksheet();
     if (!worksheet) {
       return null;
     }
 
-    return {
-      formula: worksheet.getFormulaAt(cell.row, cell.col) ?? null,
-      style: worksheet.getCellStyleAt(cell.row, cell.col),
-      value: worksheet.getCellAt(cell.row, cell.col).toJs()
-    };
+    return captureWorksheetCellState(worksheet, cell, blocks);
   }, [getActiveWorksheet]);
 
   const installWorkbookSnapshot = React.useCallback((
@@ -3653,9 +3634,14 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     const visibleSheetIndex = sheets.findIndex((sheet) => sheet.workbookSheetIndex === entry.sheetIndex);
 
     isApplyingHistoryRef.current = true;
-    for (const mutation of entry.mutations) {
-      applyCellMutationState(worksheet, mutation.cell, direction === "undo" ? mutation.before : mutation.after);
-    }
+    applyCellMutationStates(
+      worksheet,
+      entry.mutations.map((mutation) => ({
+        cell: mutation.cell,
+        state: direction === "undo" ? mutation.before : mutation.after
+      })),
+      direction
+    );
     maybeRecalculateWorkbook(workbook);
     refreshWorkbookState(workbook);
 
@@ -4619,6 +4605,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     }
 
     const normalized = normalizeRange(targetRange);
+    const blocks: ArrayFormulaBlocks = new Map();
     const mutations: RangeCellMutation[] = [];
     for (let row = normalized.start.row; row <= normalized.end.row; row += 1) {
       for (let col = normalized.start.col; col <= normalized.end.col; col += 1) {
@@ -4627,13 +4614,13 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         }
 
         const cell = { row, col };
-        const before = captureCellMutationState(cell);
+        const before = captureCellMutationState(cell, blocks);
         if (!before) {
           continue;
         }
 
         worksheet.setCell(cellAddressToA1({ row, col }), "");
-        const after = captureCellMutationState(cell);
+        const after = captureCellMutationState(cell, blocks);
         if (!after) {
           continue;
         }
@@ -4772,11 +4759,12 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     }
 
     const normalized = normalizeRange(range);
+    const blocks: ArrayFormulaBlocks = new Map();
     const beforeStates: Array<{ before: CellMutationState; cell: XlsxCellAddress }> = [];
     for (let row = normalized.start.row; row <= normalized.end.row; row += 1) {
       for (let col = normalized.start.col; col <= normalized.end.col; col += 1) {
         const cell = { row, col };
-        const before = captureCellMutationState(cell);
+        const before = captureCellMutationState(cell, blocks);
         if (!before) {
           continue;
         }
@@ -4794,7 +4782,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     worksheet.setRangeStyle(rangeToA1(normalized), style);
     const mutations: RangeCellMutation[] = [];
     for (const mutation of beforeStates) {
-      const after = captureCellMutationState(mutation.cell);
+      const after = captureCellMutationState(mutation.cell, blocks);
       if (!after) {
         continue;
       }
@@ -4824,6 +4812,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       return;
     }
 
+    const blocks: ArrayFormulaBlocks = new Map();
     const mutations: RangeCellMutation[] = [];
     for (let row = nextRange.start.row; row <= nextRange.end.row; row += 1) {
       for (let col = nextRange.start.col; col <= nextRange.end.col; col += 1) {
@@ -4832,7 +4821,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         }
 
         const targetCell = { row, col };
-        const before = captureCellMutationState(targetCell);
+        const before = captureCellMutationState(targetCell, blocks);
         if (!before) {
           continue;
         }
@@ -4853,7 +4842,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
           worksheet.setCellStyleAt(targetCell.row, targetCell.col, sourceStyle);
         }
 
-        const after = captureCellMutationState(targetCell);
+        const after = captureCellMutationState(targetCell, blocks);
         if (!after) {
           continue;
         }
@@ -5025,6 +5014,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       return false;
     }
 
+    const blocks: ArrayFormulaBlocks = new Map();
     const mutations: RangeCellMutation[] = [];
     for (let rowIndex = 0; rowIndex < grid.length; rowIndex += 1) {
       const row = grid[rowIndex] ?? [];
@@ -5034,12 +5024,12 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
           col: targetCell.col + colIndex,
           row: targetCell.row + rowIndex
         };
-        const before = captureCellMutationState(nextCell);
+        const before = captureCellMutationState(nextCell, blocks);
         if (!before) {
           continue;
         }
         enterUserText(worksheet, nextCell, rawValue, inheritedStyleInput(worksheet, activeSheet, nextCell));
-        const after = captureCellMutationState(nextCell);
+        const after = captureCellMutationState(nextCell, blocks);
         if (!after) {
           continue;
         }
@@ -5090,6 +5080,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
 
     const hasMergeOperations = Array.isArray(payload.merges) && payload.merges.some((merge) => (merge.rowSpan ?? 1) > 1 || (merge.colSpan ?? 1) > 1);
     const targetDate1904 = Boolean(workbook.settings?.date1904);
+    const blocks: ArrayFormulaBlocks = new Map();
     const mutations: RangeCellMutation[] = [];
     if (hasMergeOperations) {
       recordHistoryBeforeMutation();
@@ -5099,7 +5090,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         col: targetCell.col + cell.colOffset,
         row: targetCell.row + cell.rowOffset
       };
-      const before = hasMergeOperations ? null : captureCellMutationState(nextCell);
+      const before = hasMergeOperations ? null : captureCellMutationState(nextCell, blocks);
 
       if (cell.formula) {
         worksheet.setFormula(cellAddressToA1(nextCell), cell.formula);
@@ -5116,7 +5107,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         worksheet.setCellStyle(cellAddressToA1(nextCell), style);
       }
       if (before) {
-        const after = captureCellMutationState(nextCell);
+        const after = captureCellMutationState(nextCell, blocks);
         if (!after) {
           continue;
         }

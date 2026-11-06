@@ -674,6 +674,35 @@ export class Worksheet {
         return ret[0] >>> 0;
     }
     /**
+     * The Ctrl+Shift+Enter array formula whose block holds the cell, as
+     * `{ row, col, rows, cols, formula }` for its top-left cell, or `null`.
+     * @param {number} row
+     * @param {number} col
+     * @returns {any}
+     */
+    arrayFormulaAt(row, col) {
+        const ret = wasm.worksheet_arrayFormulaAt(this.__wbg_ptr, row, col);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * The values the cells of the Ctrl+Shift+Enter array formula whose block holds the cell show,
+     * row by row, as `setArrayFormula` takes them back: `null` when blank, an error as
+     * `{ error: "#N/A" }`. `null` when the cell isn't in a block.
+     * @param {number} row
+     * @param {number} col
+     * @returns {any}
+     */
+    arrayFormulaValuesAt(row, col) {
+        const ret = wasm.worksheet_arrayFormulaValuesAt(this.__wbg_ptr, row, col);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
      * @returns {any}
      */
     get autoFilter() {
@@ -1627,6 +1656,23 @@ export class Worksheet {
             throw takeFromExternrefTable0(ret[1]);
         }
         return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * Puts back a Ctrl+Shift+Enter array formula from `address`, as undo does: `values` are the
+     * ones `arrayFormulaValuesAt` gave, which its cells show until it is calculated.
+     * @param {string} address
+     * @param {string} formula
+     * @param {any} values
+     */
+    setArrayFormula(address, formula, values) {
+        const ptr0 = passStringToWasm0(address, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(formula, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.worksheet_setArrayFormula(this.__wbg_ptr, ptr0, len0, ptr1, len1, values);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
     }
     /**
      * @param {string} address

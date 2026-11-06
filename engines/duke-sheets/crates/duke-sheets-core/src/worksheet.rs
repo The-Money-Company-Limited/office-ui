@@ -643,6 +643,7 @@ impl Worksheet {
         value: V,
     ) -> Result<()> {
         self.validate_cell_position(row, col)?;
+        self.release_array_block(row, col);
         let removed_formula = self.remove_formula_state(row, col);
         self.cells.set_value(row, col, value.into());
         self.mutation_count += 1;
@@ -682,6 +683,9 @@ impl Worksheet {
 
         let formula = Self::normalize_formula_text(formula);
 
+        self.release_array_block(row, col);
+        // A new formula in a Ctrl+Shift+Enter block's top-left cell replaces the block: its other
+        // cells are cleared, keeping their styles, and the new formula spills over them.
         self.clear_spill(row, col);
         let style_index = self
             .cells
@@ -730,6 +734,7 @@ impl Worksheet {
 
     /// Clear a cell by indices
     pub fn clear_cell_at(&mut self, row: u32, col: u16) {
+        self.release_array_block(row, col);
         let removed_formula = self.remove_formula_state(row, col);
         self.cells.remove(row, col);
         self.mutation_count += 1;
@@ -796,6 +801,7 @@ impl Worksheet {
     pub fn clear_range(&mut self, range: &CellRange) {
         let mut removed_formula = false;
         for addr in range.cells() {
+            self.release_array_block(addr.row, addr.col);
             removed_formula |= self.remove_formula_state(addr.row, addr.col);
             self.cells.remove(addr.row, addr.col);
         }
@@ -821,6 +827,7 @@ impl Worksheet {
         let mut removed_formula = false;
         for addr in range.cells() {
             self.validate_cell_position(addr.row, addr.col)?;
+            self.release_array_block(addr.row, addr.col);
             removed_formula |= self.remove_formula_state(addr.row, addr.col);
             self.cells.set_value(addr.row, addr.col, value.clone());
         }
@@ -2008,6 +2015,110 @@ impl Worksheet {
         Ok(())
     }
 
+    /// The cells of the Ctrl+Shift+Enter array formula whose block holds (row, col); the formula
+    /// is in the top-left one.
+    pub fn array_formula_block(&self, row: u32, col: u16) -> Option<CellRange> {
+        let (anchor_row, anchor_col) = match self.cells.get(row, col).map(|c| &c.value) {
+            Some(CellValue::SpillTarget {
+                source_row,
+                source_col,
+                ..
+            }) => (*source_row, *source_col),
+            _ => (row, col),
+        };
+        match self.cells.get_formula(anchor_row, anchor_col)?.kind {
+            crate::cell::FormulaKind::Cse { rows, cols } => Some(CellRange::new(
+                CellAddress::new(anchor_row, anchor_col),
+                CellAddress::new(anchor_row + rows - 1, anchor_col + cols - 1),
+            )),
+            _ => None,
+        }
+    }
+
+    /// Puts back a Ctrl+Shift+Enter array formula from (row, col) over as many cells as `values`
+    /// has, showing those values until it is calculated, as undo does. The block's other cells
+    /// become its cells and keep their styles.
+    pub fn set_array_formula_at(
+        &mut self,
+        row: u32,
+        col: u16,
+        formula: &str,
+        values: Vec<Vec<CellValue>>,
+    ) -> Result<()> {
+        let rows = u32::try_from(values.len()).unwrap_or(u32::MAX);
+        let cols = values.first().map_or(0, Vec::len);
+        if rows == 0 || cols == 0 || values.iter().any(|line| line.len() != cols) {
+            return Err(Error::Other(
+                "An array formula's values are a rectangle of at least one cell".into(),
+            ));
+        }
+        let cols =
+            u16::try_from(cols).map_err(|_| Error::ColumnOutOfBounds(u16::MAX, MAX_COLS - 1))?;
+        let (Some(last_row), Some(last_col)) =
+            (row.checked_add(rows - 1), col.checked_add(cols - 1))
+        else {
+            return Err(Error::Other(
+                "An array formula ends past the sheet's last cell".into(),
+            ));
+        };
+        self.validate_cell_position(row, col)?;
+        self.validate_cell_position(last_row, last_col)?;
+        for r in row..=last_row {
+            for c in col..=last_col {
+                if (r, c) != (row, col) {
+                    let style = self.cells.get(r, c).map_or(0, |cell| cell.style_index);
+                    self.clear_cell_at(r, c);
+                    if style != 0 {
+                        self.cells.set_style(r, c, style);
+                    }
+                }
+            }
+        }
+        self.set_formula_with_cached_value_at(row, col, formula, values[0][0].clone())?;
+        if let Some(data) = self.cells.get_formula_mut(row, col) {
+            data.kind = crate::cell::FormulaKind::Cse { rows, cols };
+        }
+        let _ = self.set_array_formula_result(row, col, values);
+        Ok(())
+    }
+
+    /// Excel refuses to change part of a Ctrl+Shift+Enter array, and the editor has no way to say
+    /// so, so changing a cell of a block other than its top-left one turns the block into its
+    /// values first. Clearing the top-left cell clears the whole block.
+    fn release_array_block(&mut self, row: u32, col: u16) {
+        let Some(CellValue::SpillTarget {
+            source_row,
+            source_col,
+            ..
+        }) = self.cells.get(row, col).map(|c| c.value.clone())
+        else {
+            return;
+        };
+        let Some(crate::cell::FormulaKind::Cse { rows, cols }) = self
+            .cells
+            .get_formula(source_row, source_col)
+            .map(|f| f.kind)
+        else {
+            return;
+        };
+        let values: Vec<(u32, u16, CellValue)> = (0..rows)
+            .flat_map(|r| (0..cols).map(move |c| (source_row + r, source_col + c)))
+            .map(|(r, c)| (r, c, self.get_value_at(r, c)))
+            .collect();
+        self.remove_formula_state(source_row, source_col);
+        for (r, c, value) in values {
+            self.cells.set_value(r, c, value);
+        }
+        self.mutation_count += 1;
+        self.topology_generation += 1;
+        self.dirty_value_ranges.push((
+            source_row,
+            source_col,
+            source_row + rows - 1,
+            source_col + cols - 1,
+        ));
+    }
+
     fn remove_formula_state(&mut self, row: u32, col: u16) -> bool {
         if self.cells.has_formula(row, col) {
             self.clear_spill(row, col);
@@ -2259,11 +2370,7 @@ impl Worksheet {
                     offset_row: row_offset,
                     offset_col: col_offset as u16,
                 };
-                self.cells.set(
-                    target_row,
-                    target_col,
-                    crate::cell::CellData::new(spill_target),
-                );
+                self.cells.set_value(target_row, target_col, spill_target);
             }
         }
 
@@ -2275,6 +2382,42 @@ impl Worksheet {
     /// Call this before recalculating a formula or when deleting a formula cell.
     pub fn clear_spill(&mut self, row: u32, col: u16) {
         self.cells.clear_spill_targets(row, col);
+    }
+
+    /// The `rows` x `cols` cells from the formula at (row, col) become its array, with the values a
+    /// file saved them with, as a file read holds a spilled or Ctrl+Shift+Enter array. Their own
+    /// formulas, as a .xls file repeats the array's in each cell, go; their styles stay.
+    pub fn hold_saved_array(&mut self, row: u32, col: u16, rows: u32, cols: u16) {
+        if !self.cells.has_formula(row, col) {
+            return;
+        }
+        let array: Vec<Vec<CellValue>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| self.get_value_at(row + r, col + c))
+                    .collect()
+            })
+            .collect();
+        if let Some(formula) = self.cells.get_formula_mut(row, col) {
+            formula.array_result = Some(array);
+        }
+        if rows * cols as u32 > 1 {
+            self.register_spill(row, col, rows, cols);
+        }
+        for r in 0..rows {
+            for c in 0..cols {
+                if (r, c) != (0, 0) {
+                    self.cells.remove_formula(row + r, col + c);
+                    let target = CellValue::SpillTarget {
+                        source_row: row,
+                        source_col: col,
+                        offset_row: r,
+                        offset_col: c,
+                    };
+                    self.cells.set_value(row + r, col + c, target);
+                }
+            }
+        }
     }
 
     /// Record that the formula at (row, col) spills over `rows` x `cols` cells, as a file read

@@ -1008,8 +1008,9 @@ impl SstTable {
             total_refs: 0,
         };
         for sheet in workbook.worksheets() {
-            for (_row, _col, cell) in sheet.iter_cells() {
-                match &cell.value {
+            for (row, col, _) in sheet.iter_cells() {
+                // A spilled or Ctrl+Shift+Enter array's cells are saved as their values.
+                match sheet.get_value_at_ref(row, col) {
                     CellValue::String(s) => {
                         t.add_plain(s.as_ref());
                     }
@@ -3225,8 +3226,8 @@ fn push_url_moniker_payload(buf: &mut Vec<u8>, url: &str) {
 
 /// Emit cell records (BLANK, NUMBER, BOOLERR, LABELSST, FORMULA) for
 /// every non-empty cell in `sheet`, sorted in row-major order.
-/// Spill-target cells are silently skipped (dynamic-array machinery;
-/// deferred). Formula cells with an unsupported AST shape (named
+/// A spilled or Ctrl+Shift+Enter array's cells are written as the values
+/// they show. Formula cells with an unsupported AST shape (named
 /// ranges, structured refs, function calls, etc.) fall back to
 /// emitting their cached value as a static cell.
 ///
@@ -3269,8 +3270,9 @@ fn write_cell_records(
             }
         }
 
-        match &data.value {
-            CellValue::Empty => {
+        // A spilled or Ctrl+Shift+Enter array's cells are saved as their values.
+        match sheet.get_value_at_ref(row, col) {
+            CellValue::Empty | CellValue::SpillTarget { .. } => {
                 if ixfe != 0 {
                     write_blank(stream, row16, col, ixfe);
                 }
@@ -3299,10 +3301,6 @@ fn write_cell_records(
                 if let Some(idx) = sst.lookup_rich(&text, &formatting) {
                     write_labelsst(stream, row16, col, ixfe, idx);
                 }
-            }
-            CellValue::SpillTarget { .. } => {
-                // Dynamic-array formula spill targets need formula
-                // emission infrastructure; deferred.
             }
         }
     }
@@ -3517,6 +3515,7 @@ fn compile_ptgs_with_context(
                 // (0x5C is tRefErr3D - decompiles to "#REF!".)
                 let opcode = match operand_class {
                     OperandClass::R => 0x3A,
+                    OperandClass::A => 0x7A,
                     OperandClass::V => 0x5A,
                 };
                 out.push(opcode);
@@ -3527,6 +3526,7 @@ fn compile_ptgs_with_context(
             // PTG_REF base = 0x04; R-class = 0x24, V-class = 0x44.
             let opcode = match operand_class {
                 OperandClass::R => 0x24,
+                OperandClass::A => 0x64,
                 OperandClass::V => 0x44,
             };
             out.push(opcode);
@@ -3547,6 +3547,7 @@ fn compile_ptgs_with_context(
             // PTG_AREA base = 0x05; R-class = 0x25, V-class = 0x45.
             let opcode = match operand_class {
                 OperandClass::R => 0x25,
+                OperandClass::A => 0x65,
                 OperandClass::V => 0x45,
             };
             out.push(opcode);
@@ -3563,6 +3564,7 @@ fn compile_ptgs_with_context(
                 if let Some(area) = full_column_or_row_range(left, right) {
                     let opcode = match operand_class {
                         OperandClass::R => 0x25,
+                        OperandClass::A => 0x65,
                         OperandClass::V => 0x45,
                     };
                     out.push(opcode);
@@ -3580,7 +3582,7 @@ fn compile_ptgs_with_context(
                 BinaryOperator::Intersect | BinaryOperator::Union | BinaryOperator::Range => {
                     OperandClass::R
                 }
-                _ => OperandClass::V,
+                _ => operand_class.of_value_in(),
             };
             compile_ptgs_with_context(left, out, extra, externsheet, names, addins, child_class)?;
             compile_ptgs_with_context(right, out, extra, externsheet, names, addins, child_class)?;
@@ -3606,6 +3608,22 @@ fn compile_ptgs_with_context(
                 BinaryOperator::Range => 0x11,
             });
         }
+        // `@x` is how a formula from before dynamic arrays reads x where one value is expected:
+        // a .xls file says the same with a value-class token.
+        FormulaExpr::UnaryOp {
+            op: UnaryOperator::ImplicitIntersection,
+            operand,
+        } => {
+            compile_ptgs_with_context(
+                operand,
+                out,
+                extra,
+                externsheet,
+                names,
+                addins,
+                OperandClass::V,
+            )?;
+        }
         FormulaExpr::UnaryOp { op, operand } => {
             // Unary value operators force their operand to V-class even
             // inside R-forced argument positions: Excel emits tRefV for
@@ -3613,7 +3631,7 @@ fn compile_ptgs_with_context(
             // Excel-authored output). Paren is class-transparent.
             let inner_class = match op {
                 UnaryOperator::Paren => operand_class,
-                _ => OperandClass::V,
+                _ => operand_class.of_value_in(),
             };
             compile_ptgs_with_context(
                 operand,
@@ -3719,7 +3737,10 @@ fn compile_ptgs_with_context(
                 if matches!(arg, FormulaExpr::Empty) {
                     out.push(0x16); // PTG_MISS_ARG
                 } else {
-                    let arg_class = function_arg_class(idx, arg_idx);
+                    let arg_class = match function_arg_class(idx, arg_idx) {
+                        OperandClass::V => operand_class.of_value_in(),
+                        class => class,
+                    };
                     compile_ptgs_with_context(
                         arg,
                         out,
@@ -3778,12 +3799,13 @@ fn compile_ptgs_with_context(
         FormulaExpr::NameRef(name) => {
             let idx = names.idx_for_name(name).ok_or(UnsupportedToken)?;
             let name_class = match operand_class {
-                OperandClass::R => OperandClass::R,
                 OperandClass::V => names.body_class_for_name(name).unwrap_or(OperandClass::V),
+                class => class,
             };
             let opcode = match name_class {
                 OperandClass::R => 0x23,
                 OperandClass::V => 0x43,
+                OperandClass::A => 0x63,
             };
             out.push(opcode);
             out.extend_from_slice(&idx.to_le_bytes());
@@ -3951,18 +3973,20 @@ fn func_token_class(iftab: u16, context: OperandClass) -> OperandClass {
     }
 }
 
-/// PtgFunc opcode for the given class: R=0x21, V=0x41 (A=0x61 unused here).
+/// PtgFunc opcode for the given class: R=0x21, V=0x41, A=0x61.
 fn ptg_func_opcode(class: OperandClass) -> u8 {
     match class {
         OperandClass::R => 0x21,
+        OperandClass::A => 0x61,
         OperandClass::V => 0x41,
     }
 }
 
-/// PtgFuncVar opcode for the given class: R=0x22, V=0x42 (A=0x62 unused here).
+/// PtgFuncVar opcode for the given class: R=0x22, V=0x42, A=0x62.
 fn ptg_func_var_opcode(class: OperandClass) -> u8 {
     match class {
         OperandClass::R => 0x22,
+        OperandClass::A => 0x62,
         OperandClass::V => 0x42,
     }
 }
