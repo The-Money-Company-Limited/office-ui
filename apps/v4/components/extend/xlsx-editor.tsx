@@ -423,7 +423,7 @@ const NUMBER_FORMAT_KINDS: Record<
 /** Built-in number formats the engine counts as numbers that the picker names more closely. */
 function getBuiltinNumberLabel(id: number | undefined) {
   if (id === undefined) return undefined
-  if ((id >= 5 && id <= 8) || (id >= 37 && id <= 44))
+  if ((id >= 5 && id <= 8) || id === 42 || id === 44)
     return { icon: DollarCircleGlyph, label: "Currency" }
   if (id === 11 || id === 48)
     return { icon: TextNumberSignGlyph, label: "Scientific" }
@@ -614,6 +614,9 @@ function getNumberFormatValue(style: XlsxResolvedCellStyle | null) {
       ? numberFormat.formatString.trim()
       : ""
   const id = getNumericValue(numberFormat.id)
+
+  // Built-in 0 is General.
+  if (formatType === "builtin" && id === 0) return GENERAL_NUMBER_FORMAT_VALUE
 
   // A built-in format also carries its code (14 is m/d/yyyy): match its id, then its code.
   const builtin = formatType === "builtin" && id !== undefined

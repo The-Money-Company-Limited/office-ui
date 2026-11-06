@@ -76,6 +76,9 @@ describe("typed entries", () => {
     assert.equal(sheet.getCellAt(0, 0).asText(), "TRUE");
     type(sheet, "=A2");
     assert.ok(!sheet.getFormulaAt(0, 0));
+    // A leading apostrophe isn't kept, as in Excel.
+    type(sheet, "'007");
+    assert.equal(sheet.getCellAt(0, 0).asText(), "007");
   });
 
   it("numbers are read with the regional separators", () => {
@@ -154,5 +157,22 @@ describe("typed entries", () => {
     sheet.clearCellStyleAt(0, 0);
     type(sheet, "1:30 PM");
     assert.equal(cellInputText(sheet, A1), "1:30:00 PM");
+  });
+
+  it("a cell a dynamic array spills into edits as the value it shows", () => {
+    const workbook = new Workbook();
+    const sheet = workbook.getSheet(0);
+    sheet.setFormula("A1", "=SEQUENCE(3)");
+    workbook.calculate();
+    assert.equal(cellInputText(sheet, { row: 1, col: 0 }), "2");
+  });
+
+  it("fractional seconds stay through an edit", () => {
+    const sheet = sheetIn("en-US");
+    sheet.setCell("A1", 90.5 / 86400);
+    sheet.setCellStyle("A1", { numberFormat: { formatType: "builtin", id: 47 } });
+    assert.equal(cellInputText(sheet, A1), "0:01:30.5");
+    type(sheet, cellInputText(sheet, A1));
+    assert.equal(sheet.getFormattedValueAt(0, 0), "01:30.5");
   });
 });

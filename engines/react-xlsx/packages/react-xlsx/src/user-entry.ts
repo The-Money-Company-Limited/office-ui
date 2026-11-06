@@ -1,4 +1,4 @@
-import type { CellStyle, NumberFormatInput, Worksheet } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
+import type { CellStyle, NumberFormatInput, StyleInput, Worksheet } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import { cellAddressToA1 } from "./range-reference.ts";
 import type { XlsxCellAddress } from "./types";
 
@@ -24,21 +24,23 @@ export function readUserEntry(text: string, worksheet: Worksheet, cell: XlsxCell
 
 /**
  * Stores text typed or pasted into a cell, as Excel does. A cell with a text format keeps the
- * text as it is (`=A1` and TRUE included); otherwise an entry starting with `=` is a formula, and
- * anything else is read by readUserEntry.
+ * text as it is (`=A1` and TRUE included, a leading apostrophe dropped); otherwise an entry
+ * starting with `=` is a formula, and anything else is read by readUserEntry. A format the
+ * entry gives the cell goes on top of `baseStyle`, the row or column style a cell without a
+ * style of its own shows.
  */
-export function enterUserText(worksheet: Worksheet, cell: XlsxCellAddress, text: string): void {
+export function enterUserText(worksheet: Worksheet, cell: XlsxCellAddress, text: string, baseStyle: StyleInput = {}): void {
   const address = cellAddressToA1(cell);
   const entry = text.trim();
   if (hasTextFormat(worksheet.getCellStyleAt(cell.row, cell.col))) {
-    worksheet.setCell(address, text);
+    worksheet.setCell(address, text.startsWith("'") ? text.slice(1) : text);
   } else if (entry.length > 1 && entry.startsWith("=")) {
     worksheet.setFormula(address, entry);
   } else {
     const { value, numberFormat } = readUserEntry(text, worksheet, cell);
     worksheet.setCell(address, value);
     if (numberFormat) {
-      worksheet.setCellStyle(address, { numberFormat });
+      worksheet.setCellStyle(address, { ...baseStyle, numberFormat });
     }
   }
 }
