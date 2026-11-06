@@ -688,10 +688,18 @@ export interface FormControlInteractionResult {
   linkedCellsChanged: number;
 }
 
-/** A number read from typed text, with the built-in format Excel gives a typed date or time. */
+/** A cell's number format, as getCellStyleAt gives it. */
+export interface CellNumberFormat {
+  formatType: "general" | "builtin" | "custom";
+  id: number | null;
+  formatString: string;
+  isDateFormat: boolean;
+}
+
+/** A number read from typed text, with the format Excel gives the cell (a date, time or percent format). */
 export interface TypedNumber {
   value: number;
-  dateFormat?: number;
+  numberFormat?: CellNumberFormat;
 }
 
 export interface Worksheet {
@@ -949,9 +957,9 @@ impl Worksheet {
             .map_err(to_js_error)
     }
 
-    /// The number text typed into a cell stands for, read in the workbook's regional settings as
-    /// Excel reads it (`5/11/2026` is 5 November in en-GB, `1,5` is 1.5 in de-DE), with the
-    /// built-in format Excel gives a typed date or time; `undefined` when it isn't a number.
+    /// The number text typed into a cell stands for, read in the workbook's settings as Excel
+    /// reads it (`5/11/2026` is 5 November in en-GB, `1,5` is 1.5 in de-DE), with the format Excel
+    /// gives the cell; `undefined` when the text stays text (duke_sheets_formula::coerce::typed_number).
     #[wasm_bindgen(skip_typescript, js_name = readTypedNumber)]
     pub fn read_typed_number(&self, text: &str) -> Result<JsValue, JsError> {
         #[derive(Serialize)]
@@ -959,18 +967,24 @@ impl Worksheet {
         struct TypedNumber {
             value: f64,
             #[serde(skip_serializing_if = "Option::is_none")]
-            date_format: Option<u32>,
+            number_format: Option<WasmNumberFormat>,
         }
         let wb = self.workbook.borrow();
-        let settings = wb.settings();
-        let Some((mut value, date_format)) = duke_sheets_formula::coerce::typed_number(text, settings.regional) else {
-            return Ok(JsValue::UNDEFINED);
-        };
-        // The text reads as a 1900-system serial; a 1904-system workbook counts from 1904.
-        if settings.date_1904 && value >= 1.0 && date_format.is_some_and(|id| id == 14 || id == 22) {
-            value -= 1462.0;
+        match duke_sheets_formula::coerce::typed_number(text, wb.settings()) {
+            Some((value, format)) => to_js_value(&TypedNumber { value, number_format: format.as_ref().map(WasmNumberFormat::from) }),
+            None => Ok(JsValue::UNDEFINED),
         }
-        to_js_value(&TypedNumber { value, date_format })
+    }
+
+    /// Gives the cell the default style, as a cell that was never styled has.
+    #[wasm_bindgen(js_name = clearCellStyleAt)]
+    pub fn clear_cell_style_at(&self, row: u32, col: u32) -> Result<(), JsError> {
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        ws.set_cell_style_at(row, col as u16, &duke_sheets_core::Style::default())
+            .map_err(to_js_error)
     }
 
     #[wasm_bindgen(js_name = setFormula)]

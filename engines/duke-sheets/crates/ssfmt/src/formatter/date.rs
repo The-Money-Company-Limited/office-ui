@@ -111,8 +111,15 @@ pub fn format_date(
     // Build the formatted string
     let mut result = String::new();
 
-    for part in &section.parts {
+    for (i, part) in section.parts.iter().enumerate() {
         match part {
+            // The decimal point of fractional seconds (ss.0) is the regional one.
+            FormatPart::Literal(s)
+                if s == "."
+                    && matches!(section.parts.get(i + 1), Some(FormatPart::DatePart(DatePart::SubSecond(_)))) =>
+            {
+                result.push(opts.locale.decimal_separator);
+            }
             FormatPart::DatePart(date_part) => {
                 let formatted = format_date_part(
                     *date_part,
@@ -149,14 +156,10 @@ pub fn format_date(
                 // Fill characters are handled at a higher level
                 // For now, just skip
             }
-            FormatPart::ThousandsSeparator => {
-                // In date formats, the thousands separator (,) is just a literal comma
-                result.push(opts.locale.thousands_separator);
-            }
-            FormatPart::DecimalPoint => {
-                // In date formats, the decimal point is just a literal
-                result.push(opts.locale.decimal_separator);
-            }
+            // In a date format a comma or period is the character itself, whatever the regional
+            // separators (dd.mm.yyyy, mmm d, yyyy).
+            FormatPart::ThousandsSeparator => result.push(','),
+            FormatPart::DecimalPoint => result.push('.'),
             _ => {
                 // Other parts (e.g., numeric) are not expected in date formats
                 // but we'll ignore them silently

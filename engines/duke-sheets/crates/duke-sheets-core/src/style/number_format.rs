@@ -69,6 +69,8 @@ impl NumberFormat {
     pub const ID_ACCOUNTING_DEC2: u32 = 39;
     /// 40 - #,##0.00;[Red](#,##0.00)
     pub const ID_ACCOUNTING_DEC2_RED: u32 = 40;
+    /// 46 - [h]:mm:ss
+    pub const ID_ELAPSED_HOURS: u32 = 46;
     /// 49 - @
     pub const ID_TEXT: u32 = 49;
 

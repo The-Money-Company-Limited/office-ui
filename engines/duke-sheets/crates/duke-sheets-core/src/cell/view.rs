@@ -3,7 +3,7 @@
 
 use crate::cell::value::CellValue;
 use crate::style::{NumberFormat, Style};
-use crate::RegionalSettings;
+use crate::{RegionalSettings, WorkbookSettings};
 
 /// A read-only view of a cell, providing access to its value, style,
 /// and formatted display string.
@@ -36,10 +36,10 @@ impl<'a> CellView<'a> {
         }
     }
 
-    /// The view formatting in these regional settings (the workbook's, `settings().regional`):
-    /// their separators, month and day names, and short date.
-    pub fn with_regional(self, regional: RegionalSettings) -> Self {
-        Self { regional, ..self }
+    /// The view formatting in the workbook's settings: its regional settings (separators, month
+    /// and day names, the short date) and its date system.
+    pub fn with_settings(self, settings: &WorkbookSettings) -> Self {
+        Self { regional: settings.regional, date_1904: settings.date_1904, ..self }
     }
 
     /// The cell's value.
@@ -71,24 +71,35 @@ impl<'a> CellView<'a> {
         format_cell_value(self.value, self.number_format(), self.date_1904, &self.regional)
     }
 
-    /// The value as text to edit, which typed back unchanged gives the same value: a number with
-    /// the regional decimal separator, and in a date or time format the short date and the time
-    /// (`05/11/2026 13:30:00`), as Excel's formula bar shows it. Other values show as they are.
+    /// The value as text to edit, as Excel's formula bar shows it, which typed back unchanged
+    /// gives the same value (to the 15 digits Excel keeps): a number with the regional decimal
+    /// separator, in a percent format with `%` (`12.5%`), and in a date or time format as the
+    /// short date and the time (`05/11/2026 13:30:00`, `1:30:00 PM` where the format has AM/PM,
+    /// `25:30:00` in an elapsed-hours format). Other values show as they are.
     pub fn input_text(&self) -> String {
         let CellValue::Number(n) = *self.value.effective_value() else {
             return format_cell_value(self.value, &NumberFormat::General, self.date_1904, &self.regional);
         };
-        if !self.number_format().is_date_format() || n < 0.0 {
-            return n.to_string().replace('.', &self.regional.decimal_separator.to_string());
+        let format = self.number_format();
+        let code = format.display_code(&self.regional);
+        let separator = self.regional.decimal_separator;
+        if !format.is_date_format() || n < 0.0 {
+            return match has_code(&code, "%") {
+                true => format!("{}%", number_text(n * 100.0, separator)),
+                false => number_text(n, separator),
+            };
         }
-        let code = if n < 1.0 {
-            "h:mm:ss".to_string()
+        let time = if has_code(&code, "am/pm") || has_code(&code, "a/p") { "h:mm:ss AM/PM" } else { "h:mm:ss" };
+        let input_code = if has_code(&code, "[h") {
+            "[h]:mm:ss".to_string()
+        } else if n < 1.0 {
+            time.to_string()
         } else if n.fract() == 0.0 {
             self.regional.short_date_code()
         } else {
-            format!("{} h:mm:ss", self.regional.short_date_code())
+            format!("{} {time}", self.regional.short_date_code())
         };
-        format_number(n, &NumberFormat::Custom(code), self.date_1904, &self.regional)
+        format_number(n, &NumberFormat::Custom(input_code), self.date_1904, &self.regional)
     }
 }
 
@@ -138,28 +149,21 @@ fn format_number(
     date_1904: bool,
     regional: &RegionalSettings,
 ) -> String {
-    let mut locale = regional.format_locale();
-    if format.is_date_format() {
-        // A period or comma in a date format (`dd.mm.yyyy`, `mmm d, yyyy`) is the character
-        // itself, not a regional separator.
-        (locale.decimal_separator, locale.thousands_separator) = ('.', ',');
-    }
     let opts = ssfmt::FormatOptions {
         date_system: if date_1904 {
             ssfmt::DateSystem::Date1904
         } else {
             ssfmt::DateSystem::Date1900
         },
-        locale,
+        locale: regional.format_locale(),
     };
 
     match format {
         NumberFormat::General => format_general(value, regional.decimal_separator),
         NumberFormat::BuiltIn(_) | NumberFormat::Custom(_) => {
-            // Always go through display_code() so our builtin_format_string()
-            // table is the single source of truth for built-in IDs.
-            // (ssfmt::format_with_id uses SheetJS's table which diverges
-            // from ECMA-376 on locale-dependent IDs like 14.)
+            // Built-in IDs come from our builtin_format_string() table, and the short date (14) and
+            // date with time (22) from the regional settings (display_code). ssfmt::format_with_id
+            // uses SheetJS's table, which diverges from ECMA-376 on locale-dependent IDs like 14.
             let code = format.display_code(regional);
             match ssfmt::format(value, &code, &opts) {
                 Ok(s) => s,
@@ -172,25 +176,15 @@ fn format_number(
 /// General format: display numbers without trailing zeros, integers
 /// without decimal point, with the regional decimal separator.
 fn format_general(value: f64, decimal_separator: char) -> String {
-    let text = format_general_with_point(value);
-    match decimal_separator {
-        '.' => text,
-        separator => text.replace('.', &separator.to_string()),
-    }
-}
-
-fn format_general_with_point(value: f64) -> String {
     if value.is_nan() || value.is_infinite() {
         return value.to_string();
-    }
-    if value == 0.0 {
-        return "0".to_string();
     }
     // Match Excel's General format: up to 11 significant digits,
     // no trailing zeros, scientific notation for very large/small values.
     let abs = value.abs();
-    if abs >= 1e11 || (abs > 0.0 && abs < 1e-4) {
-        // Scientific notation
+    let text = if value == 0.0 {
+        "0".to_string()
+    } else if abs >= 1e11 || abs < 1e-4 {
         match ssfmt::format_default(value, "0.#####E+00") {
             Ok(s) => s,
             Err(_) => format!("{:E}", value),
@@ -198,12 +192,69 @@ fn format_general_with_point(value: f64) -> String {
     } else if value.fract() == 0.0 && abs < 1e15 {
         format!("{}", value as i64)
     } else {
-        // Remove trailing zeros from decimal representation
-        let s = format!("{:.10}", value);
-        let s = s.trim_end_matches('0');
-        let s = s.trim_end_matches('.');
-        s.to_string()
+        format!("{:.10}", value).trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    with_decimal_separator(text, decimal_separator)
+}
+
+/// A number rounded to 15 significant digits, the precision Excel shows, compares and rounds at:
+/// `=0.1+0.2=0.3` is TRUE and ROUND(1.005,2) is 1.01.
+pub fn round_15(n: f64) -> f64 {
+    if n == 0.0 || !n.is_finite() {
+        return n;
     }
+    format!("{:.14e}", n).parse().unwrap_or(n)
+}
+
+/// A number as Excel writes it as text (`&`, CONCATENATE, the formula bar): at most 15
+/// significant digits, so `1/3` is "0.333333333333333" and `0.1+0.2` is "0.3", in scientific
+/// notation from 1E+15 up and below 1E-09, with `decimal_separator`.
+pub fn number_text(n: f64, decimal_separator: char) -> String {
+    if n == 0.0 || !n.is_finite() {
+        return "0".to_string();
+    }
+    let rounded = round_15(n);
+    let exponent = rounded.abs().log10().floor() as i32;
+    let trim = |text: String| -> String {
+        if text.contains('.') {
+            text.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            text
+        }
+    };
+    let text = if !(-9..15).contains(&exponent) {
+        let scientific = format!("{:.14e}", rounded);
+        let (mantissa, power) = scientific.split_once('e').unwrap_or((&scientific, "0"));
+        let power: i32 = power.parse().unwrap_or(0);
+        let sign = if power < 0 { '-' } else { '+' };
+        format!("{}E{}{:02}", trim(mantissa.to_string()), sign, power.abs())
+    } else {
+        trim(format!("{:.*}", (14 - exponent).max(0) as usize, rounded))
+    };
+    with_decimal_separator(text, decimal_separator)
+}
+
+fn with_decimal_separator(text: String, separator: char) -> String {
+    match separator {
+        '.' => text,
+        separator => text.replace('.', &separator.to_string()),
+    }
+}
+
+/// Whether a format code has `wanted` (in lower case) outside quoted text and escaped characters.
+fn has_code(code: &str, wanted: &str) -> bool {
+    let (mut bare, mut quoted, mut chars) = (String::with_capacity(code.len()), false, code.chars());
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => quoted = !quoted,
+            '\\' if !quoted => {
+                chars.next();
+            }
+            c if !quoted => bare.extend(c.to_lowercase()),
+            _ => {}
+        }
+    }
+    bare.contains(wanted)
 }
 
 #[cfg(test)]
@@ -731,6 +782,8 @@ mod tests {
         assert_eq!(fmt_in("de-DE", 1234.5, NumberFormat::Custom("#,##0.00".into())), "1.234,50");
         assert_eq!(fmt_in("de-DE", 0.125, NumberFormat::BuiltIn(10)), "12,50%");
         assert_eq!(fmt_in("en-US", 1234.5, NumberFormat::Custom("#,##0.00".into())), "1,234.50");
+        // Fractional seconds take the regional decimal separator (90.5 seconds).
+        assert_eq!(fmt_in("de-DE", 90.5 / 86400.0, NumberFormat::BuiltIn(47)), "01:30,5");
         // In a date format a period or comma is the character itself.
         assert_eq!(fmt_in("de-DE", 46331.0, NumberFormat::Custom("dd.mm.yyyy".into())), "05.11.2026");
         assert_eq!(fmt_in("de-DE", 46331.0, NumberFormat::Custom("d. mmmm yyyy".into())), "5. November 2026");
@@ -742,11 +795,20 @@ mod tests {
         let input = |tag: &str, value: f64, format: NumberFormat| {
             let style = Style { number_format: format, ..Default::default() };
             let value = CellValue::Number(value);
-            CellView::new(&value, Some(&style), false).with_regional(RegionalSettings::from_tag(tag)).input_text()
+            let settings = WorkbookSettings { regional: RegionalSettings::from_tag(tag), ..Default::default() };
+            CellView::new(&value, Some(&style), false).with_settings(&settings).input_text()
         };
         assert_eq!(input("en-US", 1.5, NumberFormat::General), "1.5");
         assert_eq!(input("de-DE", 1234.5, NumberFormat::Custom("#,##0.00".into())), "1234,5");
-        assert_eq!(input("en-US", 0.1 + 0.2, NumberFormat::General), "0.30000000000000004");
+        assert_eq!(input("en-US", 0.1 + 0.2, NumberFormat::General), "0.3");
+        assert_eq!(input("en-US", 1e300, NumberFormat::General), "1E+300");
+        assert_eq!(input("en-US", 1.5e-12, NumberFormat::General), "1.5E-12");
+        assert_eq!(input("en-US", 0.125, NumberFormat::Custom("0.##########%".into())), "12.5%");
+        assert_eq!(input("de-DE", 0.125, NumberFormat::BuiltIn(10)), "12,5%");
+        assert_eq!(input("en-US", 0.5625, NumberFormat::BuiltIn(18)), "1:30:00 PM");
+        assert_eq!(input("en-US", 46331.5625, NumberFormat::Custom("m/d/yyyy h:mm AM/PM".into())), "11/5/2026 1:30:00 PM");
+        assert_eq!(input("en-US", 25.5 / 24.0, NumberFormat::BuiltIn(46)), "25:30:00");
+        assert_eq!(input("en-US", 60.0, NumberFormat::BuiltIn(14)), "2/29/1900");
         assert_eq!(input("en-US", 46331.0, NumberFormat::BuiltIn(14)), "11/5/2026");
         assert_eq!(input("en-GB", 46331.0, NumberFormat::Custom("d mmm yyyy".into())), "05/11/2026");
         assert_eq!(input("en-GB", 46331.5625, NumberFormat::BuiltIn(22)), "05/11/2026 13:30:00");

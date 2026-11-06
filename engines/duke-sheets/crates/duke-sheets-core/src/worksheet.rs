@@ -593,9 +593,8 @@ impl Worksheet {
     ///
     /// The view provides access to the cell's value, style, and a
     /// [`formatted()`](CellView::formatted) method that applies the cell's
-    /// number format to produce a display string. It formats in en-US;
-    /// [`with_regional`](CellView::with_regional) formats in other regional settings, such as the
-    /// workbook's (`settings().regional`).
+    /// number format to produce a display string. It formats in en-US with this sheet's date
+    /// system; [`with_settings`](CellView::with_settings) formats in the workbook's settings.
     ///
     /// Returns a view with `CellValue::Empty` for cells that don't exist.
     pub fn cell_view_at(&self, row: u32, col: u16) -> CellView<'_> {

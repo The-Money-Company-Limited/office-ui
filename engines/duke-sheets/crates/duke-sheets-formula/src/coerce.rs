@@ -7,51 +7,83 @@
 use std::borrow::Cow;
 
 use chrono::{Datelike, NaiveDate};
-use duke_sheets_core::{DateOrder, NumberFormat, RegionalSettings};
+use duke_sheets_core::{DateOrder, NumberFormat, WorkbookSettings};
 
 use crate::regional::month_named;
 
+/// The percent format a typed percent gets: as many decimals as were typed.
+pub const TYPED_PERCENT_FORMAT: &str = "0.##########%";
+
+/// How text that reads as a number was written, which decides the format a typed entry gets.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Written {
+    Number { percent: bool, currency: bool },
+    Date(DateWritten),
+    Time { seconds: bool, twelve_hour: bool },
+    DateTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DateWritten {
+    /// `3/15/2024`, `2024-03-15`
+    Numbers,
+    /// `15-Mar-2024`, `Mar 15, 2024`
+    NamedMonth,
+    /// `Mar-2024`, `May 2026`
+    MonthAndYear,
+}
+
 /// The number `text` stands for, or `None` when Excel would give #VALUE!.
 pub fn text_to_number(text: &str) -> Option<f64> {
+    read(text).map(|(number, _)| number)
+}
+
+fn read(text: &str) -> Option<(f64, Written)> {
     let text = text.trim();
     if text.is_empty() {
         return None;
     }
-    plain_number(text)
-        .or_else(|| date_time(text))
-        .filter(|n| n.is_finite())
+    plain_number(text).or_else(|| date_time(text)).filter(|(n, _)| n.is_finite())
 }
 
-/// What text typed into a cell stands for, read in `settings` as Excel reads it: the number, and
-/// the built-in format Excel gives a typed date or time. A date gets the short date (14), a time
-/// h:mm or h:mm:ss (20, 21; 18, 19 with AM/PM) as typed, and a date with a time 22. `None` when
-/// the text isn't a number, date or time. Dates are 1900-system serials.
-pub fn typed_number(text: &str, settings: RegionalSettings) -> Option<(f64, Option<u32>)> {
-    let _restore = crate::regional::make_current(settings);
-    let text = text.trim();
-    if let Some(number) = plain_number(text).filter(|n| n.is_finite()) {
-        return Some((number, None));
-    }
-    if let Some(day) = date(text) {
-        return Some((day, Some(NumberFormat::ID_DATE_SHORT)));
-    }
-    if let Some(time) = time_of_day(text) {
-        let seconds = text.matches(':').count() == 2;
-        let twelve_hour = text.to_ascii_lowercase().ends_with(['a', 'm', 'p']);
-        let format = match (twelve_hour, seconds) {
+/// What text typed into a cell stands for, as Excel reads it in the workbook's settings: the
+/// number, and the format Excel gives the cell. A percent gets a percent format; a date the short
+/// date (14), or d-mmm-yy (15) or mmm-yy (17) when it names the month; a time h:mm or h:mm:ss
+/// (20, 21; 18, 19 with AM/PM), or [h]:mm:ss (46) from 24 hours up; a date with a time 22. `None`
+/// when the text stays text: it isn't a number, it has a currency sign (there is no currency
+/// format to give it), or it is a date before the workbook's first day.
+pub fn typed_number(text: &str, settings: &WorkbookSettings) -> Option<(f64, Option<NumberFormat>)> {
+    let (value, written) = {
+        let _restore = crate::regional::make_current(settings.regional);
+        read(text)?
+    };
+    let builtin = |id| Some(NumberFormat::BuiltIn(id));
+    let format = match written {
+        Written::Number { currency: true, .. } => return None,
+        Written::Number { percent: true, .. } => Some(NumberFormat::Custom(TYPED_PERCENT_FORMAT.into())),
+        Written::Number { .. } => None,
+        Written::Date(DateWritten::Numbers) => builtin(NumberFormat::ID_DATE_SHORT),
+        Written::Date(DateWritten::NamedMonth) => builtin(NumberFormat::ID_DATE_MEDIUM),
+        Written::Date(DateWritten::MonthAndYear) => builtin(NumberFormat::ID_DATE_MONTH_YEAR),
+        Written::Time { .. } if value >= 1.0 => builtin(NumberFormat::ID_ELAPSED_HOURS),
+        Written::Time { seconds, twelve_hour } => builtin(match (twelve_hour, seconds) {
             (true, false) => NumberFormat::ID_TIME_AMPM,
             (true, true) => NumberFormat::ID_TIME_AMPM_SEC,
             (false, false) => NumberFormat::ID_TIME_24H,
             (false, true) => NumberFormat::ID_TIME_24H_SEC,
-        };
-        return Some((time, Some(format)));
+        }),
+        Written::DateTime => builtin(NumberFormat::ID_DATETIME),
+    };
+    if !matches!(written, Written::Date(_) | Written::DateTime) {
+        return Some((value, format));
     }
-    let (day, time) = split_date_time(text)?;
-    Some((day + time, Some(NumberFormat::ID_DATETIME)))
+    // The text reads as a 1900-system serial; a 1904-system workbook counts days from 1904.
+    let value = if settings.date_1904 { value - 1462.0 } else { value };
+    (value >= 0.0).then_some((value, format))
 }
 
 /// `1234`, `-1,234.5`, `1.2E+3`, `$1,234`, `(5)`, `12%`, `+3`.
-fn plain_number(text: &str) -> Option<f64> {
+fn plain_number(text: &str) -> Option<(f64, Written)> {
     let (negated, text) = match text.strip_prefix('(').and_then(|t| t.strip_suffix(')')) {
         Some(inner) => (true, inner.trim()),
         None => (false, text),
@@ -65,7 +97,10 @@ fn plain_number(text: &str) -> Option<f64> {
         Some(b'+') => (1.0, text[1..].trim_start()),
         _ => (1.0, text),
     };
-    let text = text.strip_prefix('$').map(str::trim_start).unwrap_or(text);
+    let (currency, text) = match text.strip_prefix('$') {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, text),
+    };
     // Text written with the regional separators (1.234,5 or 1'234.5), read as 1,234.5. The other
     // separator in it, where it isn't one of the regional ones, makes it not a number.
     let settings = crate::regional::current();
@@ -121,40 +156,40 @@ fn plain_number(text: &str) -> Option<f64> {
     if percent {
         number /= 100.0;
     }
-    Some(if negated { -number } else { sign * number })
+    Some((if negated { -number } else { sign * number }, Written::Number { percent, currency }))
 }
 
 /// The date in text that is a date, or a date followed by a time (DATEVALUE).
 pub fn date_text(text: &str) -> Option<f64> {
     let text = text.trim();
-    date(text).or_else(|| split_date_time(text).map(|(day, _)| day))
+    date(text).map(|(day, _)| day).or_else(|| split_date_time(text).map(|(day, _)| day))
 }
 
 /// The time in text that is a time, or a date followed by a time (TIMEVALUE).
 pub fn time_text(text: &str) -> Option<f64> {
     let text = text.trim();
-    time_of_day(text).or_else(|| split_date_time(text).map(|(_, time)| time))
+    time_of_day(text).map(|(time, _)| time).or_else(|| split_date_time(text).map(|(_, time)| time))
 }
 
 /// "2024-03-15 18:00", "3/15/2024 6:30 PM": the time starts at the first space that leaves a
 /// valid date before it.
 fn split_date_time(text: &str) -> Option<(f64, f64)> {
-    text.match_indices(' ').find_map(|(i, _)| Some((date(text[..i].trim())?, time_of_day(text[i..].trim())?)))
+    text.match_indices(' ').find_map(|(i, _)| Some((date(text[..i].trim())?.0, time_of_day(text[i..].trim())?.0)))
 }
 
 /// A date, a time, or a date followed by a time.
-fn date_time(text: &str) -> Option<f64> {
-    if let Some(time) = time_of_day(text) {
-        return Some(time);
+fn date_time(text: &str) -> Option<(f64, Written)> {
+    if let Some((time, written)) = time_of_day(text) {
+        return Some((time, written));
     }
-    if let Some(date) = date(text) {
-        return Some(date);
+    if let Some((day, written)) = date(text) {
+        return Some((day, Written::Date(written)));
     }
-    split_date_time(text).map(|(day, time)| day + time)
+    split_date_time(text).map(|(day, time)| (day + time, Written::DateTime))
 }
 
-/// `18:30`, `18:30:15`, `6:30 PM`, `6 PM`, `1:05:00.5 am`: a fraction of a day.
-fn time_of_day(text: &str) -> Option<f64> {
+/// `18:30`, `18:30:15`, `6:30 PM`, `6 PM`, `1:05:00.5 am`: a fraction of a day (or more, `25:30`).
+fn time_of_day(text: &str) -> Option<(f64, Written)> {
     let lower = text.to_ascii_lowercase();
     // "8 a" is 8 AM, but "8A" (a room, a grade) is text.
     let letter = |suffix: char| lower.strip_suffix(suffix).filter(|rest| rest.ends_with(char::is_whitespace));
@@ -191,15 +226,16 @@ fn time_of_day(text: &str) -> Option<f64> {
         }
         hours = hours % 12 + if pm { 12 } else { 0 };
     }
-    Some((hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds) / 86400.0)
+    let written = Written::Time { seconds: parts.len() == 3, twelve_hour: meridiem.is_some() };
+    Some(((hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds) / 86400.0, written))
 }
 
 /// `2024-03-15`, `2024/3/15`, `3/15/2024`, `3-15-24`, `15-Mar-2024`, `15 March 2024`,
 /// `Mar 15, 2024`, `March 15 2024`, `Mar-2024` (the 1st), `1Jan2016` (a month name needs no separators).
 /// Three numbers are month first, day first or year first, as the regional settings order them,
-/// and may also be separated by the regional date separator (`15.3.2024`); a four-digit first
-/// number is always the year.
-fn date(text: &str) -> Option<f64> {
+/// separated throughout by one of `/`, `-` or the regional date separator (`15.3.2024`), so that
+/// `3 1/4` and `1,2,3` aren't dates; a four-digit first number is always the year.
+fn date(text: &str) -> Option<(f64, DateWritten)> {
     let settings = crate::regional::current();
     let boundary = |a: u8, b: u8| a.is_ascii_alphanumeric() && b.is_ascii_alphanumeric() && a.is_ascii_digit() != b.is_ascii_digit();
     let spaced: std::borrow::Cow<str> = if text.as_bytes().windows(2).any(|w| boundary(w[0], w[1])) {
@@ -221,25 +257,30 @@ fn date(text: &str) -> Option<f64> {
         .filter(|p| !p.is_empty())
         .collect();
     let numeric = |s: &str| (s.chars().all(|c| c.is_ascii_digit()) && !s.is_empty()).then(|| s.parse::<i32>().ok()).flatten();
-    let (year, month, day) = match parts.as_slice() {
+    let one_separator = || {
+        let separators: Vec<char> = text.chars().filter(|c| !c.is_ascii_digit()).collect();
+        matches!(separators.as_slice(), [a, b] if a == b && (matches!(a, '/' | '-') || *a == settings.date_separator))
+    };
+    let (year, month, day, written) = match parts.as_slice() {
         [a, b, c] => match (numeric(a), numeric(b), numeric(c)) {
-            (Some(y), Some(m), Some(d)) if a.len() == 4 => (y, m as u32, d),
+            (Some(_), Some(_), Some(_)) if !one_separator() => return None,
+            (Some(y), Some(m), Some(d)) if a.len() == 4 => (y, m as u32, d, DateWritten::Numbers),
             (Some(x), Some(y), Some(z)) => match settings.date_order {
-                DateOrder::MonthFirst => (full_year(z, c.len())?, x as u32, y),
-                DateOrder::DayFirst => (full_year(z, c.len())?, y as u32, x),
-                DateOrder::YearFirst => (full_year(x, a.len())?, y as u32, z),
+                DateOrder::MonthFirst => (full_year(z, c.len())?, x as u32, y, DateWritten::Numbers),
+                DateOrder::DayFirst => (full_year(z, c.len())?, y as u32, x, DateWritten::Numbers),
+                DateOrder::YearFirst => (full_year(x, a.len())?, y as u32, z, DateWritten::Numbers),
             },
-            (Some(d), None, Some(y)) => (full_year(y, c.len())?, month_named(b)?, d),
-            (None, Some(d), Some(y)) => (full_year(y, c.len())?, month_named(a)?, d),
+            (Some(d), None, Some(y)) => (full_year(y, c.len())?, month_named(b)?, d, DateWritten::NamedMonth),
+            (None, Some(d), Some(y)) => (full_year(y, c.len())?, month_named(a)?, d, DateWritten::NamedMonth),
             _ => return None,
         },
         [a, b] => match (numeric(a), numeric(b)) {
-            (None, Some(y)) if b.len() == 4 => (y, month_named(a)?, 1),
+            (None, Some(y)) if b.len() == 4 => (y, month_named(a)?, 1, DateWritten::MonthAndYear),
             _ => return None,
         },
         _ => return None,
     };
-    serial(year, month, day)
+    Some((serial(year, month, day)?, written))
 }
 
 fn full_year(year: i32, digits: usize) -> Option<i32> {
@@ -252,51 +293,20 @@ fn full_year(year: i32, digits: usize) -> Option<i32> {
 }
 
 fn serial(year: i32, month: u32, day: i32) -> Option<f64> {
+    // Excel counts 29 February 1900, which never was (Lotus 1-2-3 thought 1900 a leap year).
+    if (year, month, day) == (1900, 2, 29) {
+        return Some(60.0);
+    }
     let date = NaiveDate::from_ymd_opt(year, month, u32::try_from(day).ok()?)?;
     (date.year() >= 1900).then(|| crate::functions::date::excel1900_serial_from_ymd(year, month, day) as f64)
 }
 
-/// A number rounded to 15 significant digits, the precision Excel shows, compares and rounds at:
-/// `=0.1+0.2=0.3` is TRUE and ROUND(1.005,2) is 1.01.
-pub fn round_15(n: f64) -> f64 {
-    if n == 0.0 || !n.is_finite() {
-        return n;
-    }
-    format!("{:.14e}", n).parse().unwrap_or(n)
-}
+pub use duke_sheets_core::round_15;
 
-/// A number as Excel writes it as text (`&`, CONCATENATE, a text argument): at most 15
-/// significant digits, so `=1/3&""` is "0.333333333333333" and `=0.1+0.2&""` is "0.3", in
-/// scientific notation from 1E+15 up and below 1E-09. The decimal separator is the regional one.
+/// A number as Excel writes it as text (`&`, CONCATENATE, a text argument), with the regional
+/// decimal separator (duke_sheets_core::number_text).
 pub fn number_text(n: f64) -> String {
-    let text = number_text_with_point(n);
-    match crate::regional::current().decimal_separator {
-        '.' => text,
-        separator => text.replace('.', &separator.to_string()),
-    }
-}
-
-fn number_text_with_point(n: f64) -> String {
-    if n == 0.0 || !n.is_finite() {
-        return "0".to_string();
-    }
-    let rounded = round_15(n);
-    let exponent = rounded.abs().log10().floor() as i32;
-    let trim = |text: String| -> String {
-        if text.contains('.') {
-            text.trim_end_matches('0').trim_end_matches('.').to_string()
-        } else {
-            text
-        }
-    };
-    if !(-9..15).contains(&exponent) {
-        let scientific = format!("{:.14e}", rounded);
-        let (mantissa, power) = scientific.split_once('e').unwrap_or((&scientific, "0"));
-        let power: i32 = power.parse().unwrap_or(0);
-        let sign = if power < 0 { '-' } else { '+' };
-        return format!("{}E{}{:02}", trim(mantissa.to_string()), sign, power.abs());
-    }
-    trim(format!("{:.*}", (14 - exponent).max(0) as usize, rounded))
+    duke_sheets_core::number_text(n, crate::regional::current().decimal_separator)
 }
 
 #[cfg(test)]
@@ -378,25 +388,50 @@ mod tests {
     #[test]
     fn reads_typed_entries_in_the_regional_settings() {
         use super::typed_number;
-        use duke_sheets_core::RegionalSettings;
-        let typed = |tag: &str, text: &str| typed_number(text, RegionalSettings::from_tag(tag));
+        use duke_sheets_core::{NumberFormat, RegionalSettings, WorkbookSettings};
+        let typed = |tag: &str, text: &str| {
+            let settings = WorkbookSettings { regional: RegionalSettings::from_tag(tag), ..Default::default() };
+            typed_number(text, &settings).map(|(value, format)| (value, format.map(|f| f.format_string().to_string())))
+        };
+        let with = |value: f64, id: u32| Some((value, Some(NumberFormat::BuiltIn(id).format_string().to_string())));
         // 46331 is 5 November 2026, 46153 is 11 May 2026.
-        assert_eq!(typed("en-GB", "5/11/2026"), Some((46331.0, Some(14))));
-        assert_eq!(typed("en-US", "5/11/2026"), Some((46153.0, Some(14))));
-        assert_eq!(typed("de-DE", "5.11.2026"), Some((46331.0, Some(14))));
-        assert_eq!(typed("en-GB", "5/11/2026 13:30"), Some((46331.5625, Some(22))));
-        assert_eq!(typed("en-US", "13:30"), Some((0.5625, Some(20))));
-        assert_eq!(typed("en-US", "13:30:00"), Some((0.5625, Some(21))));
-        assert_eq!(typed("en-US", "1:30 PM"), Some((0.5625, Some(18))));
-        assert_eq!(typed("en-US", "1:30:00 pm"), Some((0.5625, Some(19))));
+        assert_eq!(typed("en-GB", "5/11/2026"), with(46331.0, 14));
+        assert_eq!(typed("en-US", "5/11/2026"), with(46153.0, 14));
+        assert_eq!(typed("de-DE", "5.11.2026"), with(46331.0, 14));
+        assert_eq!(typed("en-GB", "5/11/2026 13:30"), with(46331.5625, 22));
+        assert_eq!(typed("en-US", "15-Mar-2024"), with(45366.0, 15));
+        assert_eq!(typed("en-US", "15 March 2024"), with(45366.0, 15));
+        assert_eq!(typed("en-US", "Mar-2024"), with(45352.0, 17));
+        assert_eq!(typed("en-US", "13:30"), with(0.5625, 20));
+        assert_eq!(typed("en-US", "13:30:00"), with(0.5625, 21));
+        assert_eq!(typed("en-US", "1:30 PM"), with(0.5625, 18));
+        assert_eq!(typed("en-US", "1:30:00 pm"), with(0.5625, 19));
+        assert_eq!(typed("en-US", "25:30"), with(25.5 / 24.0, 46));
+        assert_eq!(typed("en-US", "2/29/1900"), with(60.0, 14));
+        let percent = Some("0.##########%".to_string());
+        assert_eq!(typed("en-US", "12%"), Some((0.12, percent.clone())));
+        assert_eq!(typed("en-US", "(12%)"), Some((-0.12, percent.clone())));
+        assert_eq!(typed("de-DE", "12,5%"), Some((0.125, percent)));
         assert_eq!(typed("de-DE", "1,5"), Some((1.5, None)));
         assert_eq!(typed("de-DE", "1.234,5"), Some((1234.5, None)));
-        assert_eq!(typed("en-US", "1,5"), None);
         assert_eq!(typed("en-US", " 1,234.5 "), Some((1234.5, None)));
-        assert_eq!(typed("en-US", "12%"), Some((0.12, None)));
         assert_eq!(typed("en-US", "-2e3"), Some((-2000.0, None)));
-        assert_eq!(typed("en-US", "text"), None);
+        assert_eq!(typed("en-US", "(5)"), Some((-5.0, None)));
+        // Text: lists and fractions aren't dates, and there's no currency format to give $.
+        for text in ["1,5", "text", "$1,234", "3 1/4", "5 3/8", "1,2,3", "10, 20, 30", "5 10 15", "5/11-2026"] {
+            assert_eq!(typed("en-US", text), None, "{text}");
+        }
         // The settings are current only while the text is read.
         assert_eq!(text_to_number("1,5"), None);
+    }
+
+    #[test]
+    fn typed_dates_count_from_the_workbooks_first_day() {
+        use super::typed_number;
+        use duke_sheets_core::WorkbookSettings;
+        let settings = WorkbookSettings { date_1904: true, ..Default::default() };
+        assert_eq!(typed_number("11/5/2026", &settings).map(|(value, _)| value), Some(46331.0 - 1462.0));
+        assert_eq!(typed_number("13:30", &settings).map(|(value, _)| value), Some(0.5625));
+        assert_eq!(typed_number("1/1/1902", &settings), None);
     }
 }

@@ -15,4 +15,4 @@ pub(crate) mod view;
 pub use address::{CellAddress, CellRange};
 pub use storage::{CellData, CellStorage, SpillInfo, StorageMode};
 pub use value::{CellError, CellValue, FormulaData, SharedString, StringPool};
-pub use view::{format_cell_value, CellView};
+pub use view::{format_cell_value, number_text, round_15, CellView};

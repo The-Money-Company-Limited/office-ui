@@ -198,19 +198,12 @@ fn translate(section: &str, settings: RegionalSettings) -> String {
             Piece::Ready(text) => out.push_str(&text),
             Piece::Code(text) if us_separators(settings) => out.push_str(&text),
             Piece::Code(text) if is_date => {
-                // The number-format engine would write a period or comma as a regional separator,
-                // so they become literal, except the decimal point of fractional seconds (ss,000).
+                // A period or comma in a date format is the character itself, except the regional
+                // decimal point of fractional seconds (ss,000), which the engine reads as `.`.
                 let chars: Vec<char> = text.chars().collect();
                 for (i, &c) in chars.iter().enumerate() {
                     let fraction = i > 0 && matches!(chars[i - 1], 's' | 'S') && chars.get(i + 1) == Some(&'0');
-                    if fraction && (c == settings.decimal_separator || c == '.') {
-                        out.push('.');
-                        continue;
-                    }
-                    if matches!(c, '.' | ',') {
-                        out.push('\\');
-                    }
-                    out.push(c);
+                    out.push(if fraction && c == settings.decimal_separator { '.' } else { c });
                 }
             }
             Piece::Code(text) => {
@@ -249,12 +242,12 @@ mod tests {
     #[test]
     fn translates_text_format_codes() {
         with_settings("sv-SE", || assert_eq!(format_code("ÅÅÅÅ-MM-DD tt:mm"), "yyyy-MM-DD hh:mm"));
-        with_settings("de-DE", || assert_eq!(format_code("TT.MM.JJJJ"), r"dd\.MM\.yyyy"));
+        with_settings("de-DE", || assert_eq!(format_code("TT.MM.JJJJ"), "dd.MM.yyyy"));
         with_settings("de-DE", || assert_eq!(format_code("#.##0,00"), "#,##0.00"));
-        with_settings("de-DE", || assert_eq!(format_code("#.##0,00;TT.MM.JJJJ"), r"#,##0.00;dd\.MM\.yyyy"));
+        with_settings("de-DE", || assert_eq!(format_code("#.##0,00;TT.MM.JJJJ"), "#,##0.00;dd.MM.yyyy"));
         with_settings("de-DE", || assert_eq!(format_code(r#""a;b" 0,0"#), r#""a;b" 0.0"#));
         with_settings("es-ES", || assert_eq!(format_code("dd/mm/aaaa hh:mm AM/PM"), "dd/mm/yyyy hh:mm AM/PM"));
-        with_settings("es-ES", || assert_eq!(format_code("d mmm, aaaa"), r"d mmm\, yyyy"));
+        with_settings("es-ES", || assert_eq!(format_code("d mmm, aaaa"), "d mmm, yyyy"));
         with_settings("es-ES", || assert_eq!(format_code("\"año\" aa"), "\"año\" yy"));
         with_settings("it-IT", || assert_eq!(format_code("General"), "General"));
         with_settings("fr-FR", || assert_eq!(format_code("jj mmmm aaaa"), "dd mmmm yyyy"));
@@ -263,7 +256,7 @@ mod tests {
         with_settings("de-DE", || assert_eq!(format_code("hh:mm:ss,000"), "hh:mm:ss.000"));
         with_settings("sv-SE", || assert_eq!(format_code("[tt]:mm"), "[hh]:mm"));
         with_settings("sv-SE", || assert_eq!(format_code("[Röd]0"), "[Röd]0"));
-        with_settings("de-CH", || assert_eq!(format_code("TTTT, TT.MM.JJJJ"), r"dddd\, dd\.MM\.yyyy"));
+        with_settings("de-CH", || assert_eq!(format_code("TTTT, TT.MM.JJJJ"), "dddd, dd.MM.yyyy"));
         with_settings("de-CH", || assert_eq!(format_code("#'##0.00"), "#,##0.00"));
         with_settings("de-DE", || assert_eq!(format_code("Standard"), "General"));
         with_settings("de-DE", || assert_eq!(format_code("[>=1,5]0,00;0"), "[>=1.5]0.00;0"));

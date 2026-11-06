@@ -53,7 +53,7 @@ pub use auto_filter::{
     Top10Filter, ValueFilter,
 };
 pub use cell::{
-    format_cell_value, CellAddress, CellData, CellError, CellRange, CellValue, CellView,
+    format_cell_value, number_text, round_15, CellAddress, CellData, CellError, CellRange, CellValue, CellView,
     FormulaData,
 };
 pub use column::{Column, ColumnData};

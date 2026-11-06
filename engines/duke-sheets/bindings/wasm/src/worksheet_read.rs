@@ -15,6 +15,16 @@ use crate::{
     Worksheet,
 };
 
+/// The cell as the workbook's settings show it: its regional settings and date system.
+fn cell_view<'a>(
+    wb: &'a duke_sheets_core::Workbook,
+    ws: &'a duke_sheets_core::Worksheet,
+    row: u32,
+    col: u16,
+) -> duke_sheets_core::CellView<'a> {
+    ws.cell_view_at(row, col).with_settings(wb.settings())
+}
+
 #[wasm_bindgen]
 impl Worksheet {
     #[wasm_bindgen(getter)]
@@ -128,7 +138,7 @@ impl Worksheet {
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        Ok(ws.cell_view_at(row, col as u16).with_regional(wb.settings().regional).formatted())
+        Ok(cell_view(&wb, ws, row, col as u16).formatted())
     }
 
     /// The cell's value as text to edit, in the workbook's regional settings: typed back
@@ -139,7 +149,7 @@ impl Worksheet {
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        Ok(ws.cell_view_at(row, col as u16).with_regional(wb.settings().regional).input_text())
+        Ok(cell_view(&wb, ws, row, col as u16).input_text())
     }
 
     #[wasm_bindgen(skip_typescript, js_name = getRowsBatch)]
@@ -274,7 +284,7 @@ impl Worksheet {
             }
 
             let value = if use_formatted {
-                ws.cell_view_at(row, col).with_regional(wb.settings().regional).formatted()
+                cell_view(&wb, ws, row, col).formatted()
             } else if use_calculated {
                 ws.get_calculated_value_at(row, col)
                     .map(|v| v.to_string())

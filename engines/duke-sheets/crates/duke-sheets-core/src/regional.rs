@@ -83,7 +83,7 @@ impl RegionalSettings {
         };
         let date_order = match (language_code.as_str(), region.as_str()) {
             ("", _) | ("en", "" | "US" | "PH") | ("es", "US") => DateOrder::MonthFirst,
-            ("sv" | "ja" | "zh" | "ko" | "hu" | "lt" | "mn", _) => DateOrder::YearFirst,
+            ("sv" | "ja" | "zh" | "ko" | "hu" | "lt" | "mn", _) | ("en" | "fr", "CA") | ("en", "ZA") => DateOrder::YearFirst,
             _ => DateOrder::DayFirst,
         };
         let (decimal_separator, thousands_separator) = match (language_code.as_str(), region.as_str()) {
@@ -100,7 +100,7 @@ impl RegionalSettings {
         let date_separator = match (language_code.as_str(), region.as_str()) {
             ("de" | "fi" | "nb" | "no" | "da" | "pl" | "ru" | "tr" | "cs" | "sk" | "uk" | "ro" | "hr" | "sl" | "lv" | "et" | "bg" | "hu", _) => '.',
             ("fr", "CH") | ("it", "CH") => '.',
-            ("nl" | "sv", _) => '-',
+            ("nl" | "sv", _) | ("en" | "fr", "CA") | ("en", "ZA") => '-',
             _ => '/',
         };
         Self { language, date_order, date_separator, decimal_separator, thousands_separator }
@@ -168,10 +168,7 @@ impl RegionalSettings {
     /// The computer's short date, which Excel shows its built-in short date format (14) with:
     /// `11/5/2026` in en-US, `05/11/2026` in en-GB, `05.11.2026` in de-DE, `2026-11-05` in sv-SE.
     pub fn short_date_code(&self) -> String {
-        let s = match self.date_separator {
-            c @ ('/' | '-') => c.to_string(),
-            c => format!("\\{c}"),
-        };
+        let s = self.date_separator;
         match self.date_order {
             DateOrder::MonthFirst => format!("m{s}d{s}yyyy"),
             DateOrder::DayFirst => format!("dd{s}mm{s}yyyy"),
@@ -220,7 +217,10 @@ mod tests {
         let code = |tag: &str| (RegionalSettings::from_tag(tag).short_date_code(), RegionalSettings::from_tag(tag).date_time_code());
         assert_eq!(code("en-US"), ("m/d/yyyy".into(), "m/d/yyyy h:mm".into()));
         assert_eq!(code("en-GB"), ("dd/mm/yyyy".into(), "dd/mm/yyyy hh:mm".into()));
-        assert_eq!(code("de-DE"), (r"dd\.mm\.yyyy".into(), r"dd\.mm\.yyyy hh:mm".into()));
+        assert_eq!(code("de-DE"), ("dd.mm.yyyy".into(), "dd.mm.yyyy hh:mm".into()));
         assert_eq!(code("sv-SE").0, "yyyy-mm-dd");
+        for tag in ["en-CA", "fr-CA", "en-ZA"] {
+            assert_eq!(code(tag).0, "yyyy-mm-dd", "{tag}");
+        }
     }
 }
