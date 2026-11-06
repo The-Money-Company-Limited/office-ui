@@ -83,17 +83,17 @@ impl<'a> CellView<'a> {
             return format_cell_value(self.value, &NumberFormat::General, self.date_1904, &self.regional);
         };
         let format = self.number_format();
+        let parsed = format.parsed();
         let separator = self.regional.decimal_separator;
-        // The last day a date format shows, 31 December 9999.
-        let last_day = if self.date_1904 { 2_957_003.0 } else { 2_958_465.0 };
-        let kind = format.kind();
+        let system = if self.date_1904 { ssfmt::DateSystem::Date1904 } else { ssfmt::DateSystem::Date1900 };
+        let kind = format.kind_of(parsed.as_ref());
         match kind {
             FormatKind::Percent => return format!("{}%", number_text(n * 100.0, separator)),
             FormatKind::Date | FormatKind::Time | FormatKind::DateTime | FormatKind::Duration
-                if (0.0..=last_day).contains(&n) => {}
+                if (0.0..=system.last_serial()).contains(&n) => {}
             _ => return number_text(n, separator),
         }
-        let twelve_hour = ssfmt::NumberFormat::parse(format.format_string()).is_ok_and(|f| f.has_am_pm());
+        let twelve_hour = parsed.is_some_and(|f| f.has_am_pm());
         let time = if twelve_hour { "h:mm:ss AM/PM" } else { "h:mm:ss" };
         // Day 0 is a date in the 1904 system (1 January 1904) but not in the 1900 one.
         let with_date = n >= 1.0 || (self.date_1904 && kind != FormatKind::Time);

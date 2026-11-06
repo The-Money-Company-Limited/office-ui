@@ -323,7 +323,7 @@ pub fn fn_date(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<
         // 1900 system with bug calendar: compute directly in the buggy serial system.
         // Excel's dates run from 0 (1900-01-00) to 9999-12-31 (2958465); outside is #NUM!
         let serial = excel1900_serial_from_ymd(norm_year, norm_month, day);
-        if !(0..=2_958_465).contains(&serial) {
+        if !(0..=ssfmt::DateSystem::Date1900.last_serial() as i64).contains(&serial) {
             return Ok(FormulaValue::Error(CellError::Num));
         }
         Ok(FormulaValue::Number(serial as f64))

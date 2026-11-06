@@ -12,9 +12,9 @@ pub fn format_date(
     section: &Section,
     opts: &FormatOptions,
 ) -> Result<String, FormatError> {
-    // SSF returns empty string for out-of-range dates (< 0 or > 2958465)
+    // SSF returns empty string for out-of-range dates (< 0 or after 31 December 9999)
     // This matches Excel's behavior - see bits/35_datecode.js line 2
-    if !(0.0..=2958465.0).contains(&value) {
+    if !(0.0..=opts.date_system.last_serial()).contains(&value) {
         return Ok(String::new());
     }
 

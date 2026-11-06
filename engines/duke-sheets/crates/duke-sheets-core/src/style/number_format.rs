@@ -176,12 +176,20 @@ impl NumberFormat {
 
     /// What this format shows a number as.
     pub fn kind(&self) -> FormatKind {
+        self.kind_of(self.parsed().as_ref())
+    }
+
+    /// The format's code, parsed; `None` for General or a code that doesn't parse.
+    pub(crate) fn parsed(&self) -> Option<ssfmt::NumberFormat> {
         let code = self.format_string();
-        if code.eq_ignore_ascii_case("general") {
-            return FormatKind::General;
-        }
-        let Ok(parsed) = ssfmt::NumberFormat::parse(code) else {
-            return FormatKind::Number;
+        (!code.eq_ignore_ascii_case("general")).then(|| ssfmt::NumberFormat::parse(code).ok()).flatten()
+    }
+
+    /// The kind of this format, given its parsed code.
+    pub(crate) fn kind_of(&self, parsed: Option<&ssfmt::NumberFormat>) -> FormatKind {
+        let Some(parsed) = parsed else {
+            let general = self.format_string().eq_ignore_ascii_case("general");
+            return if general { FormatKind::General } else { FormatKind::Number };
         };
         if parsed.is_text_format() {
             FormatKind::Text
@@ -242,85 +250,8 @@ impl NumberFormat {
         }
     }
 
-    /// Check if this is a date/time format
-    ///
-    /// For built-in formats, checks the known ID ranges.
-    /// For custom formats, uses token-aware parsing that skips quoted
-    /// literal text and escaped characters to avoid false positives.
+    /// Whether this format shows a number as a date, a time or a duration.
     pub fn is_date_format(&self) -> bool {
-        match self {
-            NumberFormat::BuiltIn(id) => matches!(id, 14..=22 | 45..=47),
-            NumberFormat::Custom(s) => Self::custom_is_date_format(s),
-            NumberFormat::General => false,
-        }
-    }
-
-    /// Token-aware check for date/time format codes in a custom format string.
-    /// Skips quoted literals ("..."), escaped characters (\x), and bracketed
-    /// sections ([...]) to avoid false positives on strings like `0 "items"`.
-    fn custom_is_date_format(s: &str) -> bool {
-        let bytes = s.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            match bytes[i] {
-                // Skip quoted literal text
-                b'"' => {
-                    i += 1;
-                    while i < bytes.len() && bytes[i] != b'"' {
-                        i += 1;
-                    }
-                    i += 1; // skip closing quote
-                }
-                // Skip escaped character
-                b'\\' => {
-                    i += 2;
-                }
-                // Skip bracketed sections (colors, conditions, locale, elapsed time)
-                // but check for [h], [m], [s] which ARE date/time tokens
-                b'[' => {
-                    let start = i + 1;
-                    i += 1;
-                    while i < bytes.len() && bytes[i] != b']' {
-                        i += 1;
-                    }
-                    let bracket_len = i - start;
-                    if bracket_len == 1 {
-                        let ch = bytes[start];
-                        if ch == b'h' || ch == b'm' || ch == b's' {
-                            return true;
-                        }
-                    }
-                    i += 1; // skip closing bracket
-                }
-                // Skip underscore + next char (alignment spacer)
-                b'_' => {
-                    i += 2;
-                }
-                // Skip asterisk + next char (fill repeat)
-                b'*' => {
-                    i += 2;
-                }
-                // Date/time tokens
-                b'y' | b'Y' | b'd' | b'D' => return true,
-                // m/M is date (month) - could be minutes after h, but either way it's date/time
-                b'm' | b'M' => return true,
-                // h/H and s/S are time tokens
-                b'h' | b'H' | b's' | b'S' => return true,
-                // AM/PM indicator
-                b'A' | b'a' => {
-                    // Check for AM/PM or A/P
-                    let remaining = &s[i..];
-                    let lower = remaining.to_ascii_lowercase();
-                    if lower.starts_with("am/pm") || lower.starts_with("a/p") {
-                        return true;
-                    }
-                    i += 1;
-                }
-                _ => {
-                    i += 1;
-                }
-            }
-        }
-        false
+        matches!(self.kind(), FormatKind::Date | FormatKind::Time | FormatKind::DateTime | FormatKind::Duration)
     }
 }

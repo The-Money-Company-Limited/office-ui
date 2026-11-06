@@ -48,9 +48,10 @@ fn read(text: &str) -> Option<(f64, Written)> {
 /// entry has a kind and a format Excel gives it: a percent `0%` or `0.00%` (9, 10) as decimals
 /// were typed; a date the short date (14), or d-mmm-yy (15) or mmm-yy (17) when it names the
 /// month; a time h:mm or h:mm:ss (20, 21; 18, 19 with AM/PM); a duration of 24 hours or more
-/// [h]:mm:ss (46); a date with a time 22. The cell keeps its format for an entry of the same kind
-/// (a time in a duration format too) and for a plain number, which in a percent format is a
-/// percent from 1 up (`15` is 15%). `None` when the text stays text: the cell's format is Text,
+/// [h]:mm:ss (46); a date with a time 22. The cell keeps its format for an entry of the same kind,
+/// counting dates, times and dates with times as one kind (as LibreOffice does) and a time in a
+/// duration format as a duration, and for a plain number, which in a percent format is a percent
+/// from 1 up (`15` is 15%). A duration typed into a date or time cell gets 46, which doesn't wrap. `None` when the text stays text: the cell's format is Text,
 /// the text isn't a number, it has a currency sign (no currency format yet), or it is a date
 /// before the workbook's first day.
 pub fn typed_number(text: &str, settings: &WorkbookSettings, current: &NumberFormat) -> Option<(f64, Option<u32>)> {
@@ -90,7 +91,10 @@ pub fn typed_number(text: &str, settings: &WorkbookSettings, current: &NumberFor
             return None;
         }
     }
-    let keeps = current == kind || (current == FormatKind::Duration && kind == FormatKind::Time);
+    let date_or_time = |kind| matches!(kind, FormatKind::Date | FormatKind::Time | FormatKind::DateTime);
+    let keeps = current == kind
+        || (current == FormatKind::Duration && kind == FormatKind::Time)
+        || (date_or_time(current) && date_or_time(kind));
     Some((value, (!keeps).then_some(format)))
 }
 
@@ -461,10 +465,18 @@ mod tests {
         assert_eq!(format("9:30", NumberFormat::BuiltIn(46)), Some(None));
         assert_eq!(format("12.5%", NumberFormat::BuiltIn(9)), Some(None));
         assert_eq!(format("42", NumberFormat::BuiltIn(14)), Some(None));
-        // Another kind: the entry's format.
-        assert_eq!(format("13:30", custom("dd mmm yyyy")), Some(Some(20)));
-        assert_eq!(format("5/11/2026 9:00", NumberFormat::BuiltIn(14)), Some(Some(22)));
+        // Dates, times and dates with times are one kind, as edit text needs: an h:mm cell
+        // holding a date edits as one.
+        assert_eq!(format("13:30", custom("dd mmm yyyy")), Some(None));
+        assert_eq!(format("5/11/2026 9:00", NumberFormat::BuiltIn(14)), Some(None));
+        assert_eq!(format("11/5/2026 2:30:00 PM", NumberFormat::BuiltIn(20)), Some(None));
+        assert_eq!(format("2026-11-05", custom("yyyy-mm-dd hh:mm")), Some(None));
+        // A date cell below day 1 edits as a time, and keeps its format typed back.
+        assert_eq!(format("12:00:00", NumberFormat::BuiltIn(14)), Some(None));
+        // Another kind: the entry's format. A duration doesn't fit a time format, which wraps.
         assert_eq!(format("5/11/2026", custom("0.00")), Some(Some(14)));
+        assert_eq!(format("25:30", NumberFormat::BuiltIn(20)), Some(Some(46)));
+        assert_eq!(format("5/11/2026", NumberFormat::BuiltIn(46)), Some(Some(14)));
         // Text stays text; in a percent format a number from 1 up is a percent.
         assert_eq!(typed_number("5/11/2026", &settings, &NumberFormat::BuiltIn(49)), None);
         assert_eq!(typed_number("15", &settings, &NumberFormat::BuiltIn(9)), Some((0.15, None)));

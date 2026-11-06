@@ -6,7 +6,7 @@ use duke_sheets_core::{
     style::{
         Alignment as CoreAlignment, BorderEdge as CoreBorderEdge,
         BorderLineStyle as CoreBorderLineStyle, BorderStyle as CoreBorderStyle, Color as CoreColor,
-        DiagonalDirection, FillStyle as CoreFillStyle, FontStyle as CoreFontStyle,
+        DiagonalDirection, FillStyle as CoreFillStyle, FontStyle as CoreFontStyle, FormatKind,
         FontVerticalAlign, GradientType, HorizontalAlignment, NumberFormat as CoreNumberFormat,
         PatternType, ReadingOrder, Style as CoreStyle, Underline, VerticalAlignment,
     },
@@ -456,10 +456,13 @@ pub struct WasmNumberFormat {
     pub id: Option<u32>,
     pub format_string: String,
     pub is_date_format: bool,
+    /// What the format shows a number as (duke_sheets_core::FormatKind), in lower case.
+    pub kind: &'static str,
 }
 
 impl From<&CoreNumberFormat> for WasmNumberFormat {
     fn from(n: &CoreNumberFormat) -> Self {
+        let kind = n.kind();
         Self {
             format_type: match n {
                 CoreNumberFormat::General => "general",
@@ -472,7 +475,17 @@ impl From<&CoreNumberFormat> for WasmNumberFormat {
                 _ => None,
             },
             format_string: n.format_string().to_string(),
-            is_date_format: n.is_date_format(),
+            is_date_format: matches!(kind, FormatKind::Date | FormatKind::Time | FormatKind::DateTime | FormatKind::Duration),
+            kind: match kind {
+                FormatKind::General => "general",
+                FormatKind::Number => "number",
+                FormatKind::Percent => "percent",
+                FormatKind::Date => "date",
+                FormatKind::Time => "time",
+                FormatKind::DateTime => "datetime",
+                FormatKind::Duration => "duration",
+                FormatKind::Text => "text",
+            },
         }
     }
 }

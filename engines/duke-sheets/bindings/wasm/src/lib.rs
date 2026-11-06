@@ -694,6 +694,8 @@ export interface CellNumberFormat {
   id: number | null;
   formatString: string;
   isDateFormat: boolean;
+  /** What the format shows a number as; a cell with a "text" format keeps what is typed as text. */
+  kind: "general" | "number" | "percent" | "date" | "time" | "datetime" | "duration" | "text";
 }
 
 /** A cell's style, as getCellStyle gives it. */
