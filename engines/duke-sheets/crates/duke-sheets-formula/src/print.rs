@@ -86,11 +86,11 @@ fn write(expr: &FormulaExpr, file: bool, out: &mut String) {
             UnaryOperator::ImplicitIntersection if file => call("_xlfn.SINGLE", std::slice::from_ref(&**operand), file, out),
             UnaryOperator::ImplicitIntersection => {
                 out.push('@');
-                write(operand, file, out);
+                operand_of_mark(operand, file, out);
             }
             UnaryOperator::SpillRange if file => call("_xlfn.ANCHORARRAY", std::slice::from_ref(&**operand), file, out),
             UnaryOperator::SpillRange => {
-                write(operand, file, out);
+                operand_of_mark(operand, file, out);
                 out.push('#');
             }
         },
@@ -100,7 +100,7 @@ fn write(expr: &FormulaExpr, file: bool, out: &mut String) {
                 call("", values, file, out);
             }
         }
-        FormulaExpr::Function { name, args } => call(&function_name(name), args, file, out),
+        FormulaExpr::Function { name, args } => call(&file_prefixes(name), args, file, out),
         FormulaExpr::ExternalFunction { book, name, args } => {
             out.push('[');
             out.push_str(book);
@@ -126,6 +126,35 @@ fn write(expr: &FormulaExpr, file: bool, out: &mut String) {
     }
 }
 
+/// The operand of `@` or `#`: in parentheses unless it is a reference or a single term, so
+/// `_xlfn.SINGLE(A1:A3*2)` is `@(A1:A3*2)`.
+fn operand_of_mark(operand: &FormulaExpr, file: bool, out: &mut String) {
+    let bare = matches!(
+        operand,
+        FormulaExpr::CellRef(_)
+            | FormulaExpr::RangeRef(_)
+            | FormulaExpr::NameRef(_)
+            | FormulaExpr::StructuredRef(_)
+            | FormulaExpr::ExternalRef(_)
+            | FormulaExpr::Function { .. }
+            | FormulaExpr::ExternalFunction { .. }
+            | FormulaExpr::Array(_)
+            | FormulaExpr::Number(_)
+            | FormulaExpr::String(_)
+            | FormulaExpr::Boolean(_)
+            | FormulaExpr::Error(_)
+            | FormulaExpr::UnaryOp { op: UnaryOperator::Paren | UnaryOperator::SpillRange, .. }
+            | FormulaExpr::BinaryOp { op: BinaryOperator::Range | BinaryOperator::Intersect, .. }
+    );
+    if bare {
+        write(operand, file, out);
+    } else {
+        out.push('(');
+        write(operand, file, out);
+        out.push(')');
+    }
+}
+
 fn call(name: &str, args: &[FormulaExpr], file: bool, out: &mut String) {
     out.push_str(name);
     out.push('(');
@@ -140,7 +169,7 @@ fn call(name: &str, args: &[FormulaExpr], file: bool, out: &mut String) {
 
 /// The parser keeps names in capitals; the prefixes Excel writes in a file are lower case
 /// (`_xlfn._xlws.FILTER`).
-fn function_name(name: &str) -> String {
+fn file_prefixes(name: &str) -> String {
     let mut rest = name;
     let mut out = String::new();
     for prefix in ["_XLFN.", "_XLWS."] {
@@ -275,6 +304,12 @@ mod tests {
             assert_eq!(parse_formula(&formula_text(&expr)).unwrap(), expr, "{text} -> {}", formula_text(&expr));
             assert_eq!(parse_formula(&file_formula_text(&expr)).unwrap(), expr, "{text}");
         }
+    }
+
+    #[test]
+    fn at_on_a_calculation_keeps_its_parentheses() {
+        let expr = parse_formula("=_xlfn.SINGLE(A1:A3*2)+_xlfn.ANCHORARRAY(B1)").unwrap();
+        assert_eq!(formula_text(&expr), "=@(A1:A3*2)+B1#");
     }
 
     #[test]

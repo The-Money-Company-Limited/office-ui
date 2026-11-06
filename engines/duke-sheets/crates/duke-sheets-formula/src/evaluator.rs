@@ -739,7 +739,7 @@ fn evaluate_binary_op(
 }
 
 /// Compare two values for ordering (Excel-style comparison)
-fn compare_values(left: &FormulaValue, right: &FormulaValue) -> i32 {
+pub(crate) fn compare_values(left: &FormulaValue, right: &FormulaValue) -> i32 {
     // Coerce Empty depending on what it's being compared against:
     // Empty vs number → 0.0, Empty vs string → "", Empty vs bool → FALSE
     let empty_num = FormulaValue::Number(0.0);
@@ -884,19 +884,14 @@ fn evaluate_unary_op(
 /// The @ operator reads one value: a reference's cell in the formula's own row or column (#VALUE!
 /// when there is none), or an array's first element.
 fn evaluate_implicit_intersection(operand: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    if let Some(target) = reference::reference_of(operand, ctx)? {
-        return Ok(match target {
-            Ok(target) => reference::intersect_cell(&target, ctx),
-            Err(e) => FormulaValue::Error(e),
-        });
-    }
-    Ok(match evaluate(operand, ctx)? {
-        FormulaValue::Array { data, .. } => data
+    Ok(match reference::resolve_value(operand, ctx)? {
+        reference::Resolved::Reference(target) => reference::intersect_cell(&target, ctx),
+        reference::Resolved::Value(FormulaValue::Array { data, .. }) => data
             .first()
             .and_then(|row| row.first())
             .cloned()
             .unwrap_or(FormulaValue::Error(CellError::Value)),
-        value => value,
+        reference::Resolved::Value(value) => value,
     })
 }
 
@@ -1898,12 +1893,26 @@ pub(crate) fn evaluate_function(
     if let Some(result) = evaluate_with_expressions(lookup_name, func, args, ctx) {
         return result;
     }
+    call_with(func, args, vec![None; args.len()], ctx)
+}
 
+/// Calls a registry function on its arguments' values: `given` holds those already read (the
+/// others are evaluated here), and arrays at arguments that take one value are lifted over.
+pub(crate) fn call_with(
+    func: &crate::functions::FunctionDef,
+    args: &[FormulaExpr],
+    given: Vec<Option<FormulaValue>>,
+    ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
     // Evaluate arguments. A failure inside an argument is that argument's error value, so
     // IFERROR, ISERROR and AGGREGATE see it: `IFERROR(A1-B1,0)` with text in B1 is 0. A value
     // that must come from the file (another workbook's cells) passes through.
     let mut evaluated_args = Vec::with_capacity(args.len());
-    for arg in args {
+    for (arg, given) in args.iter().zip(given) {
+        if let Some(value) = given {
+            evaluated_args.push(value);
+            continue;
+        }
         evaluated_args.push(match evaluate(arg, ctx) {
             Ok(value) => value,
             Err(error @ (FormulaError::ExternalFunctionUnresolved(_) | FormulaError::ExternalReference(_))) => {
@@ -1916,7 +1925,7 @@ pub(crate) fn evaluate_function(
 
     // TEXTJOIN(",",,A1:A3) skips empty text: Excel reads that left-out flag as TRUE, though a
     // blank cell there is FALSE.
-    if lookup_name.eq_ignore_ascii_case("TEXTJOIN") && matches!(args.get(1), Some(FormulaExpr::Empty)) {
+    if func.name == "TEXTJOIN" && matches!(args.get(1), Some(FormulaExpr::Empty)) {
         evaluated_args[1] = FormulaValue::Boolean(true);
     }
 
@@ -1959,7 +1968,7 @@ fn evaluate_with_expressions(
         "INDEX" | "MATCH" | "XMATCH" | "XLOOKUP" | "VLOOKUP" if args.iter().any(reference::is_external) => None,
         "INDEX" => match args.first() {
             Some(FormulaExpr::RangeRef(_)) if args.len() < 4 => evaluate_index_fast(args, ctx),
-            _ => reference::index_of_reference(args, ctx),
+            _ => Some(reference::evaluate_index(args, ctx)),
         },
         "MATCH" => evaluate_match_fast(args, ctx),
         "XMATCH" => evaluate_xmatch_fast(args, ctx),
@@ -1984,10 +1993,14 @@ fn evaluate_position(name: &str, args: &[FormulaExpr], ctx: &EvaluationContext) 
         let here = if rows { ctx.current_row + 1 } else { ctx.current_col as u32 + 1 };
         return Ok(matches!(name, "ROW" | "COLUMN").then_some(FormulaValue::Number(here as f64)));
     };
-    let range = match reference::reference_of(arg, ctx)? {
-        Some(Ok((_, range))) => range,
-        Some(Err(e)) => return Ok(Some(FormulaValue::Error(e))),
-        None => return Ok(None),
+    // A value read once goes to the registry function: ROW(IF(…)) of an array.
+    let range = match reference::resolve_value(arg, ctx)? {
+        reference::Resolved::Reference((_, range)) => range,
+        reference::Resolved::Value(FormulaValue::Error(e)) => return Ok(Some(FormulaValue::Error(e))),
+        reference::Resolved::Value(value) => {
+            let func = get_function_registry().get(name).expect("ROW, COLUMN, ROWS and COLUMNS are registered");
+            return (func.implementation)(&[value], ctx).map(Some);
+        }
     };
     let (first, last) = if rows {
         (range.start.row, range.end.row)

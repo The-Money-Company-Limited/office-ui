@@ -194,6 +194,8 @@ impl XlsbReader {
         if wb.sheet_count() == 0 {
             wb.add_worksheet_with_name_unchecked("Sheet1");
         }
+        // `_xlfn.SINGLE(x)` and `_xlfn.ANCHORARRAY(x)` read as `@x` and `x#`.
+        duke_sheets_formula::legacy::read_all_formulas(&mut wb, true);
 
         Ok(wb)
     }

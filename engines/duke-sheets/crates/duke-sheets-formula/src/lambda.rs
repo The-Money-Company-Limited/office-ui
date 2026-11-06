@@ -98,9 +98,9 @@ pub(crate) fn evaluate_let(args: &[FormulaExpr], ctx: &EvaluationContext) -> For
     };
     let binding = match lambda_of(&args[1], ctx) {
         Some(lambda) => Binding::Lambda(lambda),
-        None => match crate::reference::reference_of(&args[1], ctx)? {
-            Some(Ok(target)) => Binding::Reference(target),
-            _ => Binding::Value(evaluate(&args[1], ctx)?),
+        None => match crate::reference::resolve_value(&args[1], ctx)? {
+            crate::reference::Resolved::Reference(target) => Binding::Reference(target),
+            crate::reference::Resolved::Value(value) => Binding::Value(value),
         },
     };
     let local = Local { name: local_name(name), binding, outer: ctx.locals };

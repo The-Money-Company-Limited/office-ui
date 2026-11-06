@@ -1008,17 +1008,9 @@ impl SstTable {
             total_refs: 0,
         };
         for sheet in workbook.worksheets() {
-            for (row, col, cell) in sheet.iter_cells() {
+            for (row, col, _) in sheet.iter_cells() {
                 // A spilled or Ctrl+Shift+Enter array's cells are saved as their values.
-                let resolved;
-                let value = match &cell.value {
-                    CellValue::SpillTarget { .. } => {
-                        resolved = sheet.get_value_at(row, col);
-                        &resolved
-                    }
-                    value => value,
-                };
-                match value {
+                match sheet.get_value_at_ref(row, col) {
                     CellValue::String(s) => {
                         t.add_plain(s.as_ref());
                     }
@@ -3279,16 +3271,8 @@ fn write_cell_records(
         }
 
         // A spilled or Ctrl+Shift+Enter array's cells are saved as their values.
-        let resolved;
-        let value = match &data.value {
-            CellValue::SpillTarget { .. } => {
-                resolved = sheet.get_value_at(row, col);
-                &resolved
-            }
-            value => value,
-        };
-        match value {
-            CellValue::Empty => {
+        match sheet.get_value_at_ref(row, col) {
+            CellValue::Empty | CellValue::SpillTarget { .. } => {
                 if ixfe != 0 {
                     write_blank(stream, row16, col, ixfe);
                 }
@@ -3318,7 +3302,6 @@ fn write_cell_records(
                     write_labelsst(stream, row16, col, ixfe, idx);
                 }
             }
-            CellValue::SpillTarget { .. } => {}
         }
     }
 }

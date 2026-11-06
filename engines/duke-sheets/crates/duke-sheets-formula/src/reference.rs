@@ -6,7 +6,7 @@
 use crate::ast::{BinaryOperator, FormulaExpr, RangeReference, UnaryOperator};
 use crate::error::{FormulaError, FormulaResult};
 use crate::evaluator::{evaluate, EvaluationContext, FormulaValue};
-use crate::functions::ScalarArgs;
+use crate::functions::ArgPositions;
 use crate::lambda::Binding;
 use duke_sheets_core::{CellError, CellRange, MAX_COLS, MAX_ROWS};
 
@@ -50,60 +50,100 @@ pub(crate) fn external(book: &str) -> FormulaError {
     FormulaError::ExternalReference(book.to_string())
 }
 
+/// What an expression gives, read once: the cells it refers to, or its value.
+pub(crate) enum Resolved {
+    Reference(Target),
+    Value(FormulaValue),
+}
+
 /// The cells `expr` refers to: `None` when it isn't a reference (a number, an array, …), or the
 /// Excel error a computed reference gives (`INDEX(A1:A3,9)` is #REF!). Besides cells, ranges and
 /// tables, a reference can be a name for one, a LET name bound to one, `(A1:B2)`, `A1#`, the
 /// cells two ranges share (`A1:B3 B2:C4`), `A1:INDEX(…)`, what INDEX, OFFSET and INDIRECT work
-/// out, or what IF, CHOOSE and XLOOKUP hand back.
+/// out, or what IF, CHOOSE, IFS, SWITCH and XLOOKUP hand back. What isn't a reference is left
+/// unevaluated, or evaluated only as far as deciding needs.
 pub(crate) fn reference_of(
     expr: &FormulaExpr,
     ctx: &EvaluationContext,
 ) -> FormulaResult<Option<Result<Target, CellError>>> {
-    Ok(Some(match expr {
+    Ok(match resolve(expr, ctx, false)? {
+        Some(Resolved::Reference(target)) => Some(Ok(target)),
+        Some(Resolved::Value(FormulaValue::Error(e))) => Some(Err(e)),
+        _ => None,
+    })
+}
+
+/// `expr` read once: the cells it refers to, else its value. `@IF(RAND()>0.5,A1:A3*2,0)` decides
+/// once.
+pub(crate) fn resolve_value(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Resolved> {
+    match resolve(expr, ctx, true)? {
+        Some(resolved) => Ok(resolved),
+        None => Ok(Resolved::Value(evaluate(expr, ctx)?)),
+    }
+}
+
+/// The cells, or the error, of a reference worked out.
+fn worked_out(target: Result<Target, CellError>) -> Option<Resolved> {
+    Some(match target {
+        Ok(target) => Resolved::Reference(target),
+        Err(e) => Resolved::Value(FormulaValue::Error(e)),
+    })
+}
+
+/// `reference_of` (`value` false) or `resolve_value` (`value` true): what isn't a reference is
+/// `None`, or its value.
+fn resolve(expr: &FormulaExpr, ctx: &EvaluationContext, value: bool) -> FormulaResult<Option<Resolved>> {
+    let otherwise = || -> FormulaResult<Option<Resolved>> {
+        Ok(if value { Some(Resolved::Value(evaluate(expr, ctx)?)) } else { None })
+    };
+    Ok(match expr {
         FormulaExpr::ExternalRef(r) => return Err(external(&r.book)),
         FormulaExpr::CellRef(c) => match Sheet::of(c.sheet.as_deref()) {
             Sheet::External(book) => return Err(external(book)),
-            _ => Ok((c.sheet.clone(), CellRange::new(c.address, c.address))),
+            _ => Some(Resolved::Reference((c.sheet.clone(), CellRange::new(c.address, c.address)))),
         },
         FormulaExpr::RangeRef(r) => match Sheet::of(r.sheet.as_deref()) {
             Sheet::External(book) => return Err(external(book)),
-            _ => Ok((r.sheet.clone(), r.range)),
+            _ => Some(Resolved::Reference((r.sheet.clone(), r.range))),
         },
-        FormulaExpr::StructuredRef(sr) => ctx.structured_target(sr)?,
-        FormulaExpr::UnaryOp { op: UnaryOperator::Paren, operand } => return reference_of(operand, ctx),
+        FormulaExpr::StructuredRef(sr) => worked_out(ctx.structured_target(sr)?),
+        FormulaExpr::UnaryOp { op: UnaryOperator::Paren, operand } => return resolve(operand, ctx, value),
         FormulaExpr::UnaryOp { op: UnaryOperator::SpillRange, operand } => match operand.as_ref() {
-            FormulaExpr::CellRef(c) => spill_target(c.sheet.as_deref(), c.address.row, c.address.col, ctx),
-            _ => return Ok(None),
+            FormulaExpr::CellRef(c) => worked_out(spill_target(c.sheet.as_deref(), c.address.row, c.address.col, ctx)),
+            _ => return otherwise(),
         },
-        FormulaExpr::BinaryOp { op: BinaryOperator::Range, left, right } => range_between(left, right, ctx)?,
-        FormulaExpr::BinaryOp { op: BinaryOperator::Intersect, left, right } => shared_cells(left, right, ctx)?,
+        FormulaExpr::BinaryOp { op: BinaryOperator::Range, left, right } => worked_out(range_between(left, right, ctx)?),
+        FormulaExpr::BinaryOp { op: BinaryOperator::Intersect, left, right } => worked_out(shared_cells(left, right, ctx)?),
         FormulaExpr::NameRef(name) => match ctx.local(name) {
-            Some(Binding::Reference(target)) => Ok(target.clone()),
-            Some(_) => return Ok(None),
-            None => return named_reference(name, ctx),
+            Some(Binding::Reference(target)) => Some(Resolved::Reference(target.clone())),
+            Some(Binding::Value(v)) if value => Some(Resolved::Value(v.clone())),
+            Some(_) => return otherwise(),
+            None => match name_formula(name, ctx) {
+                Some(formula) => match nested(|| resolve(&formula, ctx, value)) {
+                    Some(resolved) => resolved?,
+                    None => worked_out(Err(CellError::Ref)),
+                },
+                None => return otherwise(),
+            },
         },
-        FormulaExpr::Function { name, args } => match crate::evaluator::function_name(name) {
-            "INDEX" => index_target(args, ctx)?,
-            "OFFSET" => offset_target(args, ctx)?,
-            "INDIRECT" => indirect_target(args, ctx)?,
-            "XLOOKUP" => return xlookup_target(args, ctx),
-            _ if crate::functions::registry().get(crate::evaluator::function_name(name)).is_some_and(|def| def.result_args != ScalarArgs::None) => {
-                match chosen(name, args, ctx)? {
-                    Some(arg) => return reference_of(arg, ctx),
-                    None => return Ok(None),
-                }
+        FormulaExpr::Function { name, args } => {
+            let lookup = crate::evaluator::function_name(name);
+            match lookup {
+                "INDEX" => return index(args, ctx, value),
+                "OFFSET" => worked_out(offset_target(args, ctx)?),
+                "INDIRECT" => worked_out(indirect_target(args, ctx)?),
+                "XLOOKUP" => match xlookup_target(args, ctx)? {
+                    Some(target) => worked_out(target),
+                    None => return otherwise(),
+                },
+                _ => match crate::functions::registry().get(lookup) {
+                    Some(def) if def.result_args != ArgPositions::None => return chosen(lookup, def, args, ctx, value),
+                    _ => return otherwise(),
+                },
             }
-            _ => return Ok(None),
-        },
-        _ => return Ok(None),
-    }))
-}
-
-/// The reference a defined name's formula makes, if it makes one. Names that refer to each other
-/// without end make none.
-fn named_reference(name: &str, ctx: &EvaluationContext) -> FormulaResult<Option<Result<Target, CellError>>> {
-    let Some(formula) = name_formula(name, ctx) else { return Ok(None) };
-    nested(|| reference_of(&formula, ctx)).unwrap_or(Ok(None))
+        }
+        _ => return otherwise(),
+    })
 }
 
 /// Runs `f` one level deeper into names that refer to names, or gives `None` past 64 levels.
@@ -121,46 +161,81 @@ pub(crate) fn nested<T>(f: impl FnOnce() -> T) -> Option<T> {
     Some(result)
 }
 
-/// The argument IF, IFS, IFERROR, IFNA or CHOOSE hands back, when what decides it (a condition,
-/// an index, an error) is one value.
-fn chosen<'e>(name: &str, args: &'e [FormulaExpr], ctx: &EvaluationContext) -> FormulaResult<Option<&'e FormulaExpr>> {
-    let one = |expr: &FormulaExpr| -> FormulaResult<Option<FormulaValue>> {
-        Ok(match evaluate(expr, ctx)? {
-            FormulaValue::Array { .. } => None,
-            value => Some(value),
+/// What IF, CHOOSE, IFS or SWITCH hands back: the result argument its condition, index or value
+/// picks, read as a reference when it is one. What decides is evaluated once; when it doesn't
+/// pick one argument (an array, an error), the function runs on the values already read.
+fn chosen(
+    name: &str,
+    def: &crate::functions::FunctionDef,
+    args: &[FormulaExpr],
+    ctx: &EvaluationContext,
+    value: bool,
+) -> FormulaResult<Option<Resolved>> {
+    let mut given: Vec<Option<FormulaValue>> = vec![None; args.len()];
+    let read = |i: usize, given: &mut Vec<Option<FormulaValue>>| -> FormulaResult<Option<FormulaValue>> {
+        let Some(arg) = args.get(i) else { return Ok(None) };
+        let v = evaluate(arg, ctx)?;
+        given[i] = Some(v.clone());
+        Ok(match v {
+            FormulaValue::Array { .. } | FormulaValue::Error(_) => None,
+            v => Some(v),
         })
     };
-    let picked = match crate::evaluator::function_name(name) {
-        "IF" => match args.first().map(one).transpose()?.flatten() {
-            Some(FormulaValue::Error(_)) | None => None,
-            Some(value) => value.as_bool().map(|yes| if yes { 1 } else { 2 }),
-        },
-        "CHOOSE" => match args.first().map(one).transpose()?.flatten() {
-            Some(FormulaValue::Error(_)) | None => None,
-            Some(value) => value.as_number().map(|n| n.trunc()).filter(|n| *n >= 1.0).map(|n| n as usize),
-        },
+    let picked = match name {
+        "IF" => read(0, &mut given)?.and_then(|v| v.as_bool()).map(|yes| if yes { 1 } else { 2 }),
+        "CHOOSE" => read(0, &mut given)?
+            .and_then(|v| v.as_number())
+            .map(f64::trunc)
+            .filter(|n| *n >= 1.0)
+            .map(|n| n as usize),
         "IFS" => {
             let mut picked = None;
-            for (i, condition) in args.iter().enumerate().step_by(2) {
-                match one(condition)? {
-                    Some(FormulaValue::Error(_)) | None => break,
-                    Some(value) if value.as_bool() == Some(true) => {
+            for i in (0..args.len()).step_by(2) {
+                match read(i, &mut given)? {
+                    Some(v) if v.as_bool() == Some(true) => {
                         picked = Some(i + 1);
                         break;
                     }
                     Some(_) => {}
+                    None => break,
                 }
             }
             picked
         }
-        // The value_if_error when the value is that error; the value itself is one value.
-        "IFERROR" | "IFNA" => match args.first().map(one).transpose()?.flatten() {
-            Some(FormulaValue::Error(e)) if name.ends_with("IFERROR") || e == CellError::Na => Some(1),
-            _ => None,
+        "SWITCH" => match read(0, &mut given)? {
+            Some(target) => {
+                let mut picked = None;
+                let mut i = 1;
+                while i + 1 < args.len() {
+                    match read(i, &mut given)? {
+                        Some(v) if crate::evaluator::compare_values(&target, &v) == 0
+                            && std::mem::discriminant(&target) == std::mem::discriminant(&v) =>
+                        {
+                            picked = Some(i + 1);
+                            break;
+                        }
+                        Some(_) => {}
+                        None => {
+                            picked = None;
+                            i = args.len();
+                            break;
+                        }
+                    }
+                    i += 2;
+                }
+                // No match: the default, a last argument left over.
+                picked.or_else(|| (i + 1 == args.len()).then_some(i))
+            }
+            None => None,
         },
         _ => None,
     };
-    Ok(picked.and_then(|i| args.get(i)).filter(|arg| **arg != FormulaExpr::Empty))
+    let picked = picked.filter(|&i| def.result_args.includes_in(i, args.len()) && args.get(i).is_some_and(|a| *a != FormulaExpr::Empty));
+    match picked {
+        Some(i) => resolve(&args[i], ctx, value),
+        None if value => Ok(Some(Resolved::Value(crate::evaluator::call_with(def, args, given, ctx)?))),
+        None => Ok(None),
+    }
 }
 
 /// The cell or row XLOOKUP hands back from a return range, or its if_not_found reference.
@@ -243,8 +318,19 @@ pub(crate) fn intersect_cell((sheet, range): &Target, ctx: &EvaluationContext) -
 /// The formula a defined name holds, parsed. Excel stores it without the '=': a reference
 /// (`Sheet1!$A$1:$D$10`), a calculation (`SUM(Sheet1!$A$1:$A$3)`) or a constant.
 pub(crate) fn name_formula(name: &str, ctx: &EvaluationContext) -> Option<FormulaExpr> {
-    let named = ctx.workbook?.get_named_range(name, ctx.current_sheet)?;
-    crate::parser::parse_formula(&format!("={}", named.refers_to.trim_start_matches('='))).ok()
+    let workbook = ctx.workbook?;
+    match workbook.get_named_range(name, ctx.current_sheet) {
+        Some(named) => crate::parser::parse_formula(&format!("={}", named.refers_to.trim_start_matches('='))).ok(),
+        // A table's name alone is its data rows, as `Table1[#Data]`.
+        None => workbook.worksheets().any(|ws| ws.table_by_name(name).is_some()).then(|| {
+            FormulaExpr::StructuredRef(crate::ast::StructuredReference {
+                table: Some(name.to_string()),
+                column: None,
+                last_column: None,
+                specifiers: Vec::new(),
+            })
+        }),
+    }
 }
 
 /// A reference's values: one cell's value, or the range's values read as far as the used cells
@@ -324,20 +410,19 @@ fn whole(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Result<i6
     Ok(whole_of(&evaluate(expr, ctx)?))
 }
 
-/// The base reference of INDEX or OFFSET; a value that isn't a reference is #REF! (an error
-/// passes through).
+/// The base reference of OFFSET and of a shared cell range; a value that isn't a reference is
+/// #REF! (an error passes through).
 fn base(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Result<Target, CellError>> {
-    Ok(match reference_of(expr, ctx)? {
-        Some(target) => target,
-        None => match evaluate(expr, ctx)? {
-            FormulaValue::Error(e) => Err(e),
-            _ => Err(CellError::Ref),
-        },
+    Ok(match resolve_value(expr, ctx)? {
+        Resolved::Reference(target) => Ok(target),
+        Resolved::Value(FormulaValue::Error(e)) => Err(e),
+        Resolved::Value(_) => Err(CellError::Ref),
     })
 }
 
-/// The areas of INDEX's reference: one range, or each range of a union, `(A1:B2,C1:D2)`.
-fn areas(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Result<Vec<Target>, CellError>> {
+/// The areas of INDEX's reference: one range, or each range of a union, `(A1:B2,C1:D2)`. `None`
+/// when a part isn't a reference: INDEX then picks from its value.
+fn areas(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Option<Result<Vec<Target>, CellError>>> {
     fn union_parts<'e>(expr: &'e FormulaExpr, parts: &mut Vec<&'e FormulaExpr>) {
         match expr {
             FormulaExpr::UnaryOp { op: UnaryOperator::Paren, operand } => union_parts(operand, parts),
@@ -352,50 +437,108 @@ fn areas(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Result<Ve
     union_parts(expr, &mut parts);
     let mut areas = Vec::with_capacity(parts.len());
     for part in parts {
-        match base(part, ctx)? {
-            Ok(target) => areas.push(target),
-            Err(e) => return Ok(Err(e)),
+        match reference_of(part, ctx)? {
+            Some(Ok(target)) => areas.push(target),
+            Some(Err(e)) => return Ok(Some(Err(e))),
+            None => return Ok(None),
         }
     }
-    Ok(Ok(areas))
+    Ok(Some(Ok(areas)))
 }
 
 /// INDEX(reference, row, [col], [area]) as a reference: one cell, or a whole row or column of the
-/// area for 0. A reference written as one range has only area 1.
-pub(crate) fn index_target(args: &[FormulaExpr], ctx: &EvaluationContext) -> FormulaResult<Result<Target, CellError>> {
-    let [reference, rest @ ..] = args else { return Ok(Err(CellError::Value)) };
+/// area for 0. A reference written as one range has only area 1. Given arrays of rows or
+/// columns, it is the array of the cells they pick (`INDEX(Table1[Amount],{1;2;3})`). Given an
+/// array rather than a reference, INDEX picks from its value.
+fn index(args: &[FormulaExpr], ctx: &EvaluationContext, value: bool) -> FormulaResult<Option<Resolved>> {
+    use crate::array_lift::{broadcast_at, dims};
+    let general = || -> FormulaResult<Option<Resolved>> {
+        Ok(if value {
+            let def = crate::functions::registry().get("INDEX").expect("INDEX is registered");
+            Some(Resolved::Value(crate::evaluator::call_with(def, args, vec![None; args.len()], ctx)?))
+        } else {
+            None
+        })
+    };
+    let [reference, rest @ ..] = args else { return Ok(worked_out(Err(CellError::Value))) };
     let areas = match areas(reference, ctx)? {
-        Ok(areas) => areas,
-        Err(e) => return Ok(Err(e)),
+        Some(Ok(areas)) => areas,
+        Some(Err(e)) => return Ok(worked_out(Err(e))),
+        None => return general(),
     };
-    let area = match rest.get(2) {
-        None | Some(FormulaExpr::Empty) => 1,
-        Some(expr) => match whole(expr, ctx)? {
-            Ok(n) if n >= 1 => n as usize,
-            Ok(_) => return Ok(Err(CellError::Value)),
-            Err(e) => return Ok(Err(e)),
-        },
+    let mut numbers = Vec::with_capacity(rest.len());
+    for expr in rest {
+        numbers.push(match expr {
+            FormulaExpr::Empty => None,
+            expr => Some(evaluate(expr, ctx)?),
+        });
+    }
+    let shape = numbers.iter().flatten().fold((1, 1), |(rows, cols), number| match number {
+        FormulaValue::Array { data, .. } => (rows.max(dims(data).0), cols.max(dims(data).1)),
+        _ => (rows, cols),
+    });
+    let pick = |i: usize, j: usize| -> Result<Target, CellError> {
+        let at = |k: usize| -> Result<Option<i64>, CellError> {
+            match numbers.get(k) {
+                None | Some(None) => Ok(None),
+                Some(Some(FormulaValue::Array { data, .. })) => match broadcast_at(data, dims(data), i, j) {
+                    Some(element) => whole_of(element).map(Some),
+                    None => Err(CellError::Na),
+                },
+                Some(Some(number)) => whole_of(number).map(Some),
+            }
+        };
+        index_range(&areas, rest.len(), at(0)?, at(1)?, at(2)?)
     };
-    let Some((sheet, range)) = areas.into_iter().nth(area - 1) else { return Ok(Err(CellError::Ref)) };
+    if shape == (1, 1) {
+        return Ok(worked_out(pick(0, 0)));
+    }
+    if !value {
+        return Ok(None);
+    }
+    let data = (0..shape.0)
+        .map(|i| {
+            (0..shape.1)
+                .map(|j| match pick(i, j) {
+                    Ok(target) => match read(ctx, &target) {
+                        FormulaValue::Array { data, .. } => {
+                            data.into_iter().next().and_then(|r| r.into_iter().next()).unwrap_or(FormulaValue::Empty)
+                        }
+                        value => value,
+                    },
+                    Err(e) => FormulaValue::Error(e),
+                })
+                .collect()
+        })
+        .collect();
+    Ok(Some(Resolved::Value(FormulaValue::Array { data, source: None })))
+}
+
+/// The cells INDEX picks from `areas` given its numbers (`count` of them after the reference):
+/// with one, it counts along a single row or column, else down the rows; 0 or a left-out column
+/// is the whole row or column.
+fn index_range(areas: &[Target], count: usize, row: Option<i64>, col: Option<i64>, area: Option<i64>) -> Result<Target, CellError> {
+    let area = match area {
+        None => 1,
+        Some(n) if n >= 1 => n as usize,
+        Some(_) => return Err(CellError::Value),
+    };
+    let (sheet, range) = areas.get(area - 1).cloned().ok_or(CellError::Ref)?;
     let rows = (range.end.row - range.start.row + 1) as i64;
     let cols = (range.end.col - range.start.col + 1) as i64;
-    // With one position, it counts along a single row or column, else down the rows.
-    let (row, col) = match rest {
-        [r] if cols == 1 => (whole(r, ctx)?, Ok(1)),
-        [r] if rows == 1 => (Ok(1), whole(r, ctx)?),
-        [r] => (whole(r, ctx)?, Ok(0)),
-        [r, c, ..] => (whole(r, ctx)?, if *c == FormulaExpr::Empty { Ok(0) } else { whole(c, ctx)? }),
-        [] => return Ok(Err(CellError::Value)),
-    };
-    let (row, col) = match (row, col) {
-        (Ok(row), Ok(col)) => (row, col),
-        (Err(e), _) | (_, Err(e)) => return Ok(Err(e)),
+    let first = row.unwrap_or(0);
+    let (row, col) = match count {
+        0 => return Err(CellError::Value),
+        1 if cols == 1 => (first, 1),
+        1 if rows == 1 => (1, first),
+        1 => (first, 0),
+        _ => (first, col.unwrap_or(0)),
     };
     if row < 0 || col < 0 {
-        return Ok(Err(CellError::Value));
+        return Err(CellError::Value);
     }
     if row > rows || col > cols {
-        return Ok(Err(CellError::Ref));
+        return Err(CellError::Ref);
     }
     let (r0, r1) = match row {
         0 => (range.start.row, range.end.row),
@@ -405,7 +548,7 @@ pub(crate) fn index_target(args: &[FormulaExpr], ctx: &EvaluationContext) -> For
         0 => (range.start.col, range.end.col),
         _ => (range.start.col + col as u16 - 1, range.start.col + col as u16 - 1),
     };
-    Ok(Ok((sheet, CellRange::from_indices(r0, c0, r1, c1))))
+    Ok((sheet, CellRange::from_indices(r0, c0, r1, c1)))
 }
 
 /// OFFSET's numbers (rows, cols, height, width): each a whole number, `None` when left out.
@@ -532,26 +675,14 @@ fn over_offsets(name: &str, args: &[FormulaExpr], ctx: &EvaluationContext) -> Fo
     }))
 }
 
-/// INDEX given a reference, a union of them included (`INDEX((A1:B2,C1:D2),1,1,2)`): the cell
-/// or range it picks, read. `None` when its first argument isn't a reference.
-pub(crate) fn index_of_reference(args: &[FormulaExpr], ctx: &EvaluationContext) -> Option<FormulaResult<FormulaValue>> {
-    let first = args.first()?;
-    let mut inner = first;
-    while let FormulaExpr::UnaryOp { op: UnaryOperator::Paren, operand } = inner {
-        inner = operand;
-    }
-    let reference = matches!(inner, FormulaExpr::BinaryOp { op: BinaryOperator::Union, .. })
-        || match reference_of(first, ctx) {
-            Ok(target) => target.is_some(),
-            Err(e) => return Some(Err(e)),
-        };
-    if !reference {
-        return None;
-    }
-    Some(index_target(args, ctx).map(|target| match target {
-        Ok(target) => read(ctx, &target),
-        Err(e) => FormulaValue::Error(e),
-    }))
+/// INDEX given a reference, a union of them included (`INDEX((A1:B2,C1:D2),1,1,2)`), read; or
+/// given an array, the element or row or column it picks.
+pub(crate) fn evaluate_index(args: &[FormulaExpr], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    Ok(match index(args, ctx, true)? {
+        Some(Resolved::Reference(target)) => read(ctx, &target),
+        Some(Resolved::Value(value)) => value,
+        None => FormulaValue::Error(CellError::Value),
+    })
 }
 
 /// SUMIF and AVERAGEIF read as many cells of sum_range as range has, in the same shape, from

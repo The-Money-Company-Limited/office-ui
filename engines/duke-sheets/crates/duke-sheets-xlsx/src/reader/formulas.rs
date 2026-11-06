@@ -633,6 +633,7 @@ mod tests {
         assert_eq!(formula_text_at(sheet, "C2"), Some("=TABLE(A1,A2)"));
         assert_eq!(formula_text_at(sheet, "B3"), Some("=TABLE(A1,A2)"));
         assert_eq!(formula_text_at(sheet, "C3"), Some("=TABLE(A1,A2)"));
+        assert_eq!(kind_at(sheet, "C3"), Some(duke_sheets_core::FormulaKind::DataTable));
 
         assert_eq!(sheet.get_value("B2").unwrap().as_number(), Some(10.0));
         assert_eq!(sheet.get_value("C2").unwrap().as_number(), Some(20.0));

@@ -602,6 +602,10 @@ impl CellStorage {
                     continue;
                 }
 
+                // A formula blocks, even one not calculated yet.
+                if self.formulas.contains_key(&(row, col)) {
+                    return false;
+                }
                 // Check if cell exists and would block
                 if let Some(cell) = self.get(row, col) {
                     match &cell.value {
@@ -670,10 +674,10 @@ impl CellStorage {
                         continue;
                     }
 
-                    // Remove the spill target cell
+                    // Clear the spill target cell's value; its style stays.
                     if let Some(cell) = self.get(row, col) {
                         if matches!(cell.value, CellValue::SpillTarget { .. }) {
-                            self.remove(row, col);
+                            self.set_value(row, col, CellValue::Empty);
                         }
                     }
                 }

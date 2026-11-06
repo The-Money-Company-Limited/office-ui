@@ -606,7 +606,7 @@ impl XlsReader {
             }));
         }
 
-        duke_sheets_formula::legacy::read_all_as_legacy(&mut workbook);
+        duke_sheets_formula::legacy::read_all_formulas(&mut workbook, false);
         Ok(workbook)
     }
 
@@ -693,6 +693,8 @@ impl XlsReader {
         let mut pending_shared: Option<(u32, u16, u16, u16)> = None;
         // Cells with PTG_TBL whose TABLE record hasn't been seen yet.
         let mut pending_table_cells: Vec<(u32, u16, u16, u16)> = Vec::new();
+        // Ctrl+Shift+Enter arrays: (first row, first col, rows, cols).
+        let mut array_blocks: Vec<(u32, u16, u32, u16)> = Vec::new();
 
         // Comment support: OBJ → TXO → NOTE correlation
         let mut last_obj_id: Option<u16> = None;
@@ -819,9 +821,10 @@ impl XlsReader {
                 records::ARRAY => {
                     // Parse array formula and store for tExp resolution.
                     // ARRAY record: Ref8U(6) + options(2) + reserved(4) + cce(2) + rgce + rgcb
-                    if let Some((master_row, master_col, token_data, extra_data)) =
+                    if let Some((master_row, master_col, rows, cols, token_data, extra_data)) =
                         Self::parse_array_record(&rec.data)
                     {
+                        array_blocks.push((master_row as u32, master_col, rows, cols));
                         let key = (master_row, master_col);
                         array_formulas.insert(key, (token_data.clone(), extra_data.clone()));
 
@@ -1068,6 +1071,15 @@ impl XlsReader {
                 _ => {
                     // Skip unknown/unhandled records
                 }
+            }
+        }
+
+        // An array's top-left cell holds its formula, and each of its cells, which repeats it in the
+        // file, shows its element.
+        for (row, col, rows, cols) in array_blocks {
+            if let Some(formula) = ws.formula_data_at_mut(row, col) {
+                formula.kind = duke_sheets_core::FormulaKind::Cse { rows, cols };
+                ws.hold_saved_array(row, col, rows, cols);
             }
         }
 
@@ -1423,6 +1435,7 @@ impl XlsReader {
         let f_shared = (options & 0x0008) != 0;
 
         // Parse the token bytes to check for tExp (shared/array formula indicator)
+        let mut data_table = false;
         let formula_text = if off + 2 <= data.len() {
             let cce = read_u16(data, &mut off)? as usize;
             if cce > 0 && off + cce <= data.len() {
@@ -1506,7 +1519,7 @@ impl XlsReader {
                         if text.is_empty() {
                             String::new()
                         } else {
-                            format!("{{={}}}", text)
+                            format!("={}", text)
                         }
                     } else {
                         // ARRAY record not seen yet - write cell with empty
@@ -1536,6 +1549,7 @@ impl XlsReader {
                     if let Some((input1, input2)) =
                         data_tables.get(&(*master_row as u16, *master_col))
                     {
+                        data_table = true;
                         format!("=TABLE({},{})", input1, input2)
                     } else {
                         // TABLE record not seen yet - write cell with empty text
@@ -1572,6 +1586,11 @@ impl XlsReader {
         };
 
         Self::write_formula_cell(ws, row, col, xf_idx, result_bytes, formula_text, styles)?;
+        if data_table {
+            if let Some(formula) = ws.formula_data_at_mut(row, col) {
+                formula.kind = duke_sheets_core::FormulaKind::DataTable;
+            }
+        }
 
         // Check if cached result is a string (STRING record follows)
         let string_pending =
@@ -1751,11 +1770,13 @@ impl XlsReader {
         cell_col: u16,
         table_text: &str,
     ) -> XlsResult<()> {
-        if let Some(formula) = ws.formula_data_at_mut(cell_row, cell_col) {
-            formula.text = table_text.to_string();
-        } else {
+        if ws.formula_data_at(cell_row, cell_col).is_none() {
             let cached = ws.get_value_at(cell_row, cell_col);
             ws.set_formula_with_cached_value_at(cell_row, cell_col, table_text, cached)?;
+        }
+        if let Some(formula) = ws.formula_data_at_mut(cell_row, cell_col) {
+            formula.text = table_text.to_string();
+            formula.kind = duke_sheets_core::FormulaKind::DataTable;
         }
         Ok(())
     }
@@ -1764,16 +1785,16 @@ impl XlsReader {
     ///
     /// Format: Ref8U(6) + options(2) + reserved(4) + cce(2) + rgce(cce) + rgcb(rest)
     /// Ref8U: rwFirst(2) + rwLast(2) + colFirst(1) + colLast(1) = 6 bytes.
-    /// Returns (master_row, master_col, token_data, extra_data) or None.
-    fn parse_array_record(data: &[u8]) -> Option<(u16, u16, Vec<u8>, Vec<u8>)> {
+    /// Returns (master_row, master_col, rows, cols, token_data, extra_data) or None.
+    fn parse_array_record(data: &[u8]) -> Option<(u16, u16, u32, u16, Vec<u8>, Vec<u8>)> {
         // Minimum: 6 (Ref8U) + 2 (options) + 4 (reserved) + 2 (cce) = 14
         if data.len() < 14 {
             return None;
         }
         let first_row = u16::from_le_bytes([data[0], data[1]]);
-        let _last_row = u16::from_le_bytes([data[2], data[3]]);
+        let last_row = u16::from_le_bytes([data[2], data[3]]).max(first_row);
         let first_col = data[4] as u16;
-        let _last_col = data[5];
+        let last_col = (data[5] as u16).max(first_col);
         // data[6..8] = options (fAlwaysCalc, fCalcOnLoad)
         // data[8..12] = reserved
         let cce = u16::from_le_bytes([data[12], data[13]]) as usize;
@@ -1782,7 +1803,8 @@ impl XlsReader {
         }
         let token_data = data[14..14 + cce].to_vec();
         let extra_data = data[14 + cce..].to_vec();
-        Some((first_row, first_col, token_data, extra_data))
+        let (rows, cols) = ((last_row - first_row) as u32 + 1, last_col - first_col + 1);
+        Some((first_row, first_col, rows, cols, token_data, extra_data))
     }
 
     /// Backfill a cell's formula text after its ARRAY record is found.
@@ -1798,7 +1820,7 @@ impl XlsReader {
         let formula_text = if text.is_empty() {
             String::new()
         } else {
-            format!("{{={}}}", text)
+            format!("={}", text)
         };
 
         if let Some(formula) = ws.formula_data_at_mut(cell_row, cell_col) {

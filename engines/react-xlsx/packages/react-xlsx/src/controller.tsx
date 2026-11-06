@@ -1,5 +1,5 @@
 import { editWorkbookStructure, mapStructuralSheetIndex, type XlsxStructuralEdit } from "./structural-edits";
-import { Workbook, type CellStyle, type ColorInput, type NumberFormatInput, type StyleInput } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
+import { Workbook, type ColorInput, type NumberFormatInput, type StyleInput } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import * as React from "react";
 import { cellInputText, enterUserText } from "./user-entry";
 import type {
@@ -66,6 +66,7 @@ import {
   applyCellMutationState,
   applyCellMutationStates,
   captureCellMutationState as captureWorksheetCellState,
+  normalizeCellValue,
   type CellMutationState
 } from "./cell-history";
 import { safeCalculate, tryRecalculate } from "./safe-calculate";
@@ -1364,10 +1365,6 @@ function pushHistoryEntry(stack: HistoryEntry[], entry: HistoryEntry) {
   if (stack.length > HISTORY_LIMIT) {
     stack.shift();
   }
-}
-
-function normalizeCellValue(value: unknown) {
-  return value ?? "";
 }
 
 function cloneCellStyle(style: unknown): unknown {

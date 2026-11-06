@@ -803,12 +803,12 @@ impl Worksheet {
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
         match ws.array_formula_block(row, col as u16) {
-            Some((row, col, rows, cols)) => to_js_value(&WasmArrayFormula {
-                row,
-                col: col as u32,
-                rows,
-                cols: cols as u32,
-                formula: ws.get_formula_at(row, col).unwrap_or_default().to_string(),
+            Some(block) => to_js_value(&WasmArrayFormula {
+                row: block.start.row,
+                col: block.start.col as u32,
+                rows: block.row_count(),
+                cols: block.col_count() as u32,
+                formula: ws.get_formula_at(block.start.row, block.start.col).unwrap_or_default().to_string(),
             }),
             None => Ok(JsValue::NULL),
         }

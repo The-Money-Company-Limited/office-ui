@@ -451,7 +451,7 @@ mod tests {
         // Catches any by_name/by_iftab index inconsistency introduced by
         // the registration migration or future edits. (Name comparison is
         // case-insensitive because function_index uppercases.)
-        use crate::functions::{registry, ArgClass};
+        use crate::functions::registry;
 
         for def in registry().iter() {
             let Some(iftab) = def.iftab else { continue };

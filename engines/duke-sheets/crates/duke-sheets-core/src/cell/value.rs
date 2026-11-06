@@ -34,6 +34,9 @@ pub enum FormulaKind {
     /// cell. Each cell of the block shows the result's element at its place, a single row or
     /// column repeating and #N/A past the result's end; it never spills further.
     Cse { rows: u32, cols: u16 },
+    /// A cell of a what-if data table: its formula is `=TABLE(row input, column input)`, which
+    /// Excel fills in and the file saves as the table's.
+    DataTable,
 }
 
 impl FormulaData {

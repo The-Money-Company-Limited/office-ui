@@ -53,7 +53,7 @@ and a Ctrl+Shift+Enter array formula (`t="array"` without `cm`) fills its block 
 spilling.
 
 Baseline (2026-11-06, COD-1790 and COD-1795): 68,264 formulas compared, 42 mismatches in 5 of 800
-files, down from 7,245 in 191 before COD-1769; 398 edge cases. 38 are in 49196's init file, whose
+files, down from 7,245 in 191 before COD-1769; 411 edge cases. 38 are in 49196's init file, whose
 dates are built with `TODAY()`: Excel's saved week numbers are from the day it was saved. 51354's
 B6 (in both files) reads "Feb 22" as February 22 of the year it is computed in, so Excel's saved
 "Jan 24" is from 2024. 48982's B323 includes itself in `MAX(B$7:B377)`: Excel saved 0 for that

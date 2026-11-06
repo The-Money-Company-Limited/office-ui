@@ -64,4 +64,23 @@ describe("undo and redo of a Ctrl+Shift+Enter array formula", () => {
     assert.deepEqual([value(sheet, 0, 2), value(sheet, 1, 2), value(sheet, 2, 2)], [2, 4, 6]);
     assert.equal(sheet.arrayFormulaAt(1, 2)?.rows, 3);
   });
+
+  it("keeps the styles of the block's cells", () => {
+    const { workbook, sheet } = workbookWithBlock();
+    sheet.setCellStyle("C3", { numberFormat: { formatString: "0%" } });
+    const styled = sheet.getCellStyleAt(2, 2);
+    workbook.calculate();
+    assert.deepEqual(sheet.getCellStyleAt(2, 2), styled, "calculating fills the cell, not its style");
+
+    const cell = { row: 1, col: 2 };
+    const before = captureCellMutationState(sheet, cell);
+    sheet.setCell("C2", 9);
+    workbook.calculate();
+    assert.deepEqual(sheet.getCellStyleAt(2, 2), styled, "the block turned into values keeps it");
+
+    applyCellMutationState(sheet, cell, before);
+    workbook.calculate();
+    assert.deepEqual(sheet.getCellStyleAt(2, 2), styled, "undo keeps it");
+    assert.equal(value(sheet, 2, 2), 6);
+  });
 });

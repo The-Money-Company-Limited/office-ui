@@ -116,6 +116,11 @@ fn emit_expr(
             emit_expr(right, ctx, out, extra, child_class)?;
             emit_binary_op(*op, out)
         }
+        // `@x` is how a formula from before dynamic arrays reads x where one value is expected:
+        // the file says the same with a value-class token.
+        FormulaExpr::UnaryOp { op: UnaryOperator::ImplicitIntersection, operand } => {
+            emit_expr(operand, ctx, out, extra, OperandClass::V)
+        }
         FormulaExpr::UnaryOp { op, operand } => {
             // Unary value operators force their operand to V-class even
             // inside R-forced argument positions (Excel emits tRefV for
@@ -456,8 +461,7 @@ fn emit_unary_op(op: UnaryOperator, out: &mut Vec<u8>) -> Result<(), String> {
         UnaryOperator::Percent => ptg::PTG_PERCENT,
         UnaryOperator::Paren => ptg::PTG_PAREN,
         UnaryOperator::ImplicitIntersection | UnaryOperator::SpillRange => {
-            // These are dynamic array operators with no classical Ptg encoding.
-            // Skip silently - the formula still evaluates via the cached value.
+            // `#` has no token: the formula still evaluates via the cached value.
             return Ok(());
         }
     };
@@ -723,6 +727,13 @@ mod tests {
             external_names: HashMap::new(),
             external_ixti: None,
         }
+    }
+
+    #[test]
+    fn at_is_saved_as_a_value_class_token() {
+        // SUM takes a reference: `SUM(A1:A3)` is PtgAreaR, and `SUM(@A1:A3)` reads one cell, PtgAreaV.
+        assert_eq!(compile_formula("=SUM(A1:A3)", &ctx()).unwrap().rgce[0], 0x25);
+        assert_eq!(compile_formula("=SUM(@A1:A3)", &ctx()).unwrap().rgce[0], 0x45);
     }
 
     #[test]

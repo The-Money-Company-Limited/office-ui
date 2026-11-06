@@ -1,5 +1,5 @@
 //! How a function's arguments meet arrays: Excel applies a function element by element where an
-//! argument takes one value (`ScalarArgs`), broadcasting a single row or column across the other
+//! argument takes one value (`ArgPositions`), broadcasting a single row or column across the other
 //! arrays, and reads values typed into the formula differently from values in cells (`TypedArgs`).
 
 use crate::ast::FormulaExpr;
@@ -57,7 +57,7 @@ fn from_cells(expr: &FormulaExpr, ctx: &EvaluationContext) -> bool {
                 Some(def) => match def.returns {
                     crate::functions::Returns::Reference => true,
                     crate::functions::Returns::Last => args.last().is_some_and(|arg| from_cells(arg, ctx)),
-                    _ if def.result_args != crate::functions::ScalarArgs::None => args.iter().any(|arg| from_cells(arg, ctx)),
+                    _ if def.result_args != crate::functions::ArgPositions::None => args.iter().any(|arg| from_cells(arg, ctx)),
                     _ => false,
                 },
                 None => false,

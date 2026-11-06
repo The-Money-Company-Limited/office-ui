@@ -580,7 +580,7 @@ fn resolve_sheet_prefix(ctx: &FormulaContext, extern_sheet_idx: u16) -> String {
                     .get(entry.last_sheet as usize)
                     .cloned()
                     .unwrap_or_default();
-                if needs_quoting(&first_raw) || needs_quoting(&last_raw) {
+                if crate::print::sheet_needs_quotes(&first_raw) || crate::print::sheet_needs_quotes(&last_raw) {
                     format!(
                         "'{}'",
                         format!(
@@ -613,12 +613,7 @@ fn resolve_sheet_prefix(ctx: &FormulaContext, extern_sheet_idx: u16) -> String {
 fn direct_sheet_lookup(sheet_names: &[String], idx: u16) -> String {
     let i = idx as usize;
     if i < sheet_names.len() {
-        let name = &sheet_names[i];
-        if needs_quoting(name) {
-            format!("'{}'", name.replace('\'', "''"))
-        } else {
-            name.clone()
-        }
+        crate::print::quoted(&sheet_names[i])
     } else {
         format!("_sheet{}", idx)
     }
@@ -713,11 +708,6 @@ fn strip_xlfn_prefix(name: &str) -> &str {
     name.strip_prefix("_xlfn._xlws.")
         .or_else(|| name.strip_prefix("_xlfn."))
         .unwrap_or(name)
-}
-
-/// Check if a sheet name needs to be quoted in a formula.
-fn needs_quoting(name: &str) -> bool {
-    crate::print::sheet_needs_quotes(name)
 }
 
 #[cfg(test)]

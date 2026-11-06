@@ -428,10 +428,7 @@ fn collect_rows(
         }
         let style_ref = style_mapping.xf_index(sheet_index, cell.style_index);
         // A spilled or Ctrl+Shift+Enter array's cells are saved as their values.
-        let value = match cell.value {
-            CellValue::SpillTarget { .. } => ws.get_value_at(row, col),
-            ref value => value.clone(),
-        };
+        let value = ws.get_value_at_ref(row, col).clone();
         rows.entry(row).or_default().push(CellInfo {
             col,
             style_ref,

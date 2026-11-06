@@ -19,38 +19,10 @@ pub mod statistical_extra;
 pub mod text;
 pub mod text_extra;
 pub mod wildcard;
+mod classes;
 
-/// Excel's class for a function argument, from its function table ([MS-XLS] §2.5.198): what the
-/// argument takes, and so how a file writes a reference there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArgClass {
-    /// A reference, kept whole (SUM's, COUNTIF's range). Written reference-class.
-    R,
-    /// One value: in a formula from before dynamic arrays a range there reads one cell.
-    /// Written value-class.
-    V,
-    /// An array (SUMPRODUCT's, MMULT's). Written array-class.
-    A,
-    /// A reference read as an array (INDEX's first, LOOKUP's vectors). Written reference-class,
-    /// as Excel writes `=INDEX(A1:A3,1)`.
-    RA,
-}
+pub use classes::{ArgClass, ArgPositions, Returns, TypedArgs};
 
-/// What a function's result can be (see `FunctionDef::returns`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Returns {
-    /// One value, or an array only when an argument that takes one value is given one.
-    #[default]
-    Value,
-    /// An array whatever its arguments: FILTER, SEQUENCE, MMULT.
-    Array,
-    /// A reference it works out: INDEX, OFFSET, INDIRECT, XLOOKUP.
-    Reference,
-    /// A number per row or column of its reference: ROW, COLUMN.
-    PerCell,
-    /// Its last argument's result: LET.
-    Last,
-}
 use crate::error::{FormulaError, FormulaResult};
 use crate::evaluator::{EvaluationContext, FormulaValue};
 use duke_sheets_core::CellError;
@@ -128,15 +100,17 @@ pub struct FunctionDef {
     /// Runtime evaluator implementation. Defaults to a stub that returns
     /// an `Evaluation` error.
     pub implementation: FunctionImpl,
-    /// The arguments that take one value each (see `ScalarArgs`).
-    pub scalar_args: ScalarArgs,
+    /// The arguments that take one value each (see `ArgPositions`).
+    pub scalar_args: ArgPositions,
     /// How values typed into the formula are read (see `TypedArgs`).
     pub typed_args: TypedArgs,
     /// The arguments it hands back as its result, references included: IF's value_if_true and
     /// value_if_false, CHOOSE's choices. `SUM(IF(x,A1:A9))` sums the range. Its other arguments
     /// (IF's condition, CHOOSE's index) decide which.
-    pub result_args: ScalarArgs,
-    /// What the result can be: one value, an array, a reference.
+    pub result_args: ArgPositions,
+    /// What the result can be: one value, an array, a reference it works out. `returns_reference`
+    /// is the .xls token rule (IF and CHOOSE count, as they hand a reference through);
+    /// `Returns::Reference` is only for functions that work one out.
     pub returns: Returns,
     /// Given OFFSET over an array of offsets, it gives one result per range OFFSET gives:
     /// SUBTOTAL, SUMIF, COUNTIF and the like (crate::reference::evaluate_per_range).
@@ -150,7 +124,7 @@ impl FunctionDef {
     pub fn arg_class(&self, position: usize) -> ArgClass {
         match self.arg_classes.get(position) {
             Some(class) => *class,
-            None if matches!(self.scalar_args, ScalarArgs::EveryOtherFrom(_)) && self.scalar_args.includes(position) => {
+            None if matches!(self.scalar_args, ArgPositions::EveryOtherFrom(_)) && self.scalar_args.includes(position) => {
                 ArgClass::V
             }
             None => self.default_arg_class,
@@ -158,177 +132,6 @@ impl FunctionDef {
     }
 }
 
-/// The arguments where a function takes one value. Given an array there, Excel applies the
-/// function to each element and returns an array of the results: `LEN(A1:A3)`,
-/// `IF(A1:A3>1,A1:A3)`, `ISNUMBER(SEARCH(x,A1:A9))`, `COUNTIF(r,{"a","b"})`, `CHOOSE({1,2},a,b)`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum ScalarArgs {
-    /// Every argument takes arrays as they are.
-    #[default]
-    None,
-    All,
-    At(&'static [usize]),
-    /// This argument and every one after it.
-    From(usize),
-    /// The criteria of COUNTIFS (1, 3, 5, …) or of SUMIFS and the like (2, 4, 6, …).
-    EveryOtherFrom(usize),
-}
-
-impl ScalarArgs {
-    pub fn includes(self, position: usize) -> bool {
-        match self {
-            ScalarArgs::None => false,
-            ScalarArgs::All => true,
-            ScalarArgs::At(positions) => positions.contains(&position),
-            ScalarArgs::From(first) => position >= first,
-            ScalarArgs::EveryOtherFrom(first) => position >= first && (position - first) % 2 == 0,
-        }
-    }
-}
-
-/// How a value typed into the formula is read, as opposed to one from a cell or a function:
-/// `SUM("5",TRUE)` is 6 and `SUM("x")` is #VALUE!, while text and TRUE in cells are left out.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum TypedArgs {
-    #[default]
-    AsGiven,
-    /// SUM, AVERAGE, MIN, MAX and the like: typed text and TRUE/FALSE become numbers.
-    Numbers,
-    /// AND, OR, XOR: typed "TRUE"/"FALSE" become booleans, other typed text is #VALUE!.
-    Logicals,
-}
-
-const SCALAR_ARGS: &[(&[&str], ScalarArgs)] = &[
-    (
-        &[
-            "IF", "IFERROR", "IFNA", "IFS", "CHOOSE", "NOT", "ISNUMBER", "ISTEXT", "ISNONTEXT", "ISBLANK",
-            "ISERROR", "ISERR", "ISNA", "ISLOGICAL", "ISEVEN", "ISODD", "LEFT", "RIGHT", "MID", "LEN",
-            "LOWER", "UPPER", "PROPER", "TRIM", "CLEAN", "VALUE", "TEXT", "SUBSTITUTE", "REPLACE", "FIND",
-            "SEARCH", "EXACT", "REPT", "CHAR", "CODE", "UNICODE", "UNICHAR", "N", "T", "NUMBERVALUE",
-            "DATEVALUE", "TIMEVALUE", "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "WEEKDAY",
-            "WEEKNUM", "ISOWEEKNUM", "DATE", "TIME", "EDATE", "EOMONTH", "DATEDIF", "DAYS", "ABS", "INT",
-            "TRUNC", "ROUND", "ROUNDUP", "ROUNDDOWN", "MROUND", "MOD", "SIGN", "SQRT", "POWER", "EXP",
-            "LN", "LOG", "LOG10", "CEILING", "FLOOR", "EVEN", "ODD", "QUOTIENT", "FACT", "DOLLAR",
-            "FIXED", "ADDRESS", "ERROR.TYPE", "CONCATENATE", "PMT", "FV", "PV", "NPER", "RATE", "IPMT",
-            "PPMT",
-        ],
-        ScalarArgs::All,
-    ),
-    (&["SWITCH"], ScalarArgs::At(&[0])),
-    (&["COUNTIF", "SUMIF", "AVERAGEIF", "SMALL", "LARGE"], ScalarArgs::At(&[1])),
-    (&["MATCH", "XMATCH", "XLOOKUP", "LOOKUP"], ScalarArgs::At(&[0])),
-    (&["VLOOKUP", "HLOOKUP"], ScalarArgs::At(&[0, 2])),
-    (&["INDEX"], ScalarArgs::At(&[1, 2])),
-    (&["COUNTIFS"], ScalarArgs::EveryOtherFrom(1)),
-    (&["SUMIFS", "AVERAGEIFS", "MAXIFS", "MINIFS"], ScalarArgs::EveryOtherFrom(2)),
-];
-
-use ArgClass as Class;
-
-/// Excel's argument classes besides one value (V), the default: references (R), arrays (A) and
-/// references read as arrays (RA), then the class of the arguments past the list. This is the one
-/// place they are set; the .xls and .xlsb writers write a reference's token class from them, and
-/// in a formula from before dynamic arrays a range at a V argument reads one cell
-/// (crate::legacy). The functions that came with dynamic arrays take arrays everywhere but at
-/// their lookup values.
-const ARG_CLASSES: &[(&[&str], &[ArgClass], ArgClass)] = &[
-    (
-        &[
-            "SUM", "AVERAGE", "MIN", "MAX", "COUNT", "COUNTA", "PRODUCT", "STDEV", "VAR", "AND", "OR", "XOR",
-            "MEDIAN", "AVEDEV", "DEVSQ", "GEOMEAN", "HARMEAN", "SUMSQ", "KURT", "SKEW", "SKEW.P", "STDEVP",
-            "VARP", "STDEVA", "STDEVPA", "VARA", "VARPA", "AVERAGEA", "MAXA", "MINA", "STDEV.S", "STDEV.P",
-            "VAR.S", "VAR.P", "MODE.SNGL", "MODE.MULT", "DSUM", "DCOUNT", "DCOUNTA", "DAVERAGE", "DMAX", "DMIN",
-            "DGET", "DPRODUCT", "DSTDEV", "DSTDEVP", "DVAR", "DVARP", "COUNTIFS", "SUMIFS", "AVERAGEIFS",
-            "MAXIFS", "MINIFS", "ROW", "COLUMN", "ROWS", "COLUMNS", "AREAS", "ISREF", "T", "N", "COUNTBLANK",
-            "SHEET", "SHEETS", "FORMULATEXT", "ISFORMULA",
-        ],
-        &[],
-        Class::R,
-    ),
-    (&["IF"], &[Class::V, Class::R, Class::R], Class::V),
-    (&["NPV", "SUBTOTAL", "CHOOSE"], &[Class::V], Class::R),
-    (
-        &[
-            "LARGE", "SMALL", "QUARTILE", "QUARTILE.INC", "QUARTILE.EXC", "PERCENTILE", "PERCENTILE.INC",
-            "PERCENTILE.EXC", "PERCENTRANK", "PERCENTRANK.INC", "PERCENTRANK.EXC", "TRIMMEAN", "ZTEST",
-            "COUNTIF", "OFFSET",
-        ],
-        &[Class::R],
-        Class::V,
-    ),
-    (&["SUMIF", "AVERAGEIF"], &[Class::R, Class::V, Class::R], Class::V),
-    (&["RANK", "RANK.EQ", "RANK.AVG", "MATCH", "VLOOKUP", "HLOOKUP", "CELL"], &[Class::V, Class::R], Class::V),
-    (&["NETWORKDAYS", "WORKDAY"], &[Class::V, Class::V, Class::R], Class::V),
-    (&["NETWORKDAYS.INTL", "WORKDAY.INTL"], &[Class::V, Class::V, Class::V, Class::R], Class::V),
-    (
-        &[
-            "SUMPRODUCT", "MMULT", "MDETERM", "MINVERSE", "TRANSPOSE", "SUMX2MY2", "SUMX2PY2", "SUMXMY2",
-            "CORREL", "COVAR", "COVARIANCE.P", "COVARIANCE.S", "PEARSON", "RSQ", "SLOPE", "INTERCEPT", "STEYX",
-            "FTEST", "F.TEST", "CHITEST", "CHISQ.TEST", "MODE",
-        ],
-        &[],
-        Class::A,
-    ),
-    (&["FORECAST", "FORECAST.LINEAR"], &[Class::V], Class::A),
-    (&["TTEST", "T.TEST", "PROB"], &[Class::A, Class::A], Class::V),
-    (&["INDEX", "IRR", "MIRR"], &[Class::RA], Class::V),
-    (&["LOOKUP"], &[Class::V], Class::RA),
-    (&["FREQUENCY"], &[], Class::RA),
-    (&["LINEST", "LOGEST"], &[Class::RA, Class::RA], Class::V),
-    (&["TREND", "GROWTH"], &[Class::RA, Class::RA, Class::RA], Class::V),
-    // The array form of AGGREGATE (LARGE, SMALL, PERCENTILE, QUARTILE) needs no Ctrl+Shift+Enter.
-    (&["AGGREGATE"], &[Class::V, Class::V], Class::A),
-    (
-        &[
-            "LET", "LAMBDA", "MAP", "REDUCE", "SCAN", "BYROW", "BYCOL", "MAKEARRAY", "ISOMITTED", "FILTER",
-            "SORT", "SORTBY", "UNIQUE", "SEQUENCE", "RANDARRAY", "XLOOKUP", "XMATCH", "TEXTSPLIT",
-            "TEXTBEFORE", "TEXTAFTER", "VSTACK", "HSTACK", "TOCOL", "TOROW", "TAKE", "DROP", "CHOOSECOLS",
-            "CHOOSEROWS", "EXPAND", "WRAPROWS", "WRAPCOLS", "TEXTJOIN", "CONCAT", "PERCENTOF", "TRIMRANGE",
-            "IMAGE",
-        ],
-        &[],
-        Class::A,
-    ),
-];
-
-/// The arguments handed back as the result (see `FunctionDef::result_args`).
-const RESULT_ARGS: &[(&[&str], ScalarArgs)] = &[
-    (&["IF"], ScalarArgs::At(&[1, 2])),
-    (&["IFERROR", "IFNA"], ScalarArgs::At(&[1])),
-    (&["IFS"], ScalarArgs::EveryOtherFrom(1)),
-    (&["SWITCH"], ScalarArgs::EveryOtherFrom(2)),
-    (&["CHOOSE"], ScalarArgs::From(1)),
-];
-
-/// What the functions besides one-value ones return (see `Returns`).
-const RETURNS: &[(&[&str], Returns)] = &[
-    (
-        &[
-            "FILTER", "SORT", "SORTBY", "UNIQUE", "SEQUENCE", "RANDARRAY", "TRANSPOSE", "MMULT", "MINVERSE",
-            "MUNIT", "FREQUENCY", "LINEST", "LOGEST", "TREND", "GROWTH", "TEXTSPLIT", "VSTACK", "HSTACK",
-            "TOCOL", "TOROW", "TAKE", "DROP", "CHOOSECOLS", "CHOOSEROWS", "EXPAND", "WRAPROWS", "WRAPCOLS",
-            "MODE.MULT", "MAP", "SCAN", "BYROW", "BYCOL", "MAKEARRAY", "TRIMRANGE",
-        ],
-        Returns::Array,
-    ),
-    (&["INDEX", "OFFSET", "INDIRECT", "XLOOKUP"], Returns::Reference),
-    (&["ROW", "COLUMN"], Returns::PerCell),
-    (&["LET"], Returns::Last),
-];
-
-/// The functions that give one result per range of an array of references.
-const PER_RANGE: &[&str] = &["SUBTOTAL", "SUMIF", "SUMIFS", "COUNTIF", "COUNTIFS", "AVERAGEIF", "AVERAGEIFS", "MAXIFS", "MINIFS"];
-
-const TYPED_ARGS: &[(&[&str], TypedArgs)] = &[
-    (
-        &[
-            "SUM", "AVERAGE", "MIN", "MAX", "PRODUCT", "SUMSQ", "MEDIAN", "STDEV", "STDEV.S", "STDEV.P",
-            "STDEVP", "VAR", "VAR.S", "VAR.P", "VARP",
-        ],
-        TypedArgs::Numbers,
-    ),
-    (&["AND", "OR", "XOR"], TypedArgs::Logicals),
-];
 
 /// LET, LAMBDA and the LAMBDA helpers are evaluated from the formula itself (`crate::lambda`),
 /// and INDIRECT and OFFSET as references (`crate::reference`), before the registry function would
@@ -351,9 +154,9 @@ impl Default for FunctionDef {
             arg_classes: &[],
             returns_reference: false,
             implementation: fn_not_implemented,
-            scalar_args: ScalarArgs::None,
+            scalar_args: ArgPositions::None,
             typed_args: TypedArgs::AsGiven,
-            result_args: ScalarArgs::None,
+            result_args: ArgPositions::None,
             returns: Returns::Value,
             per_range: false,
         }
@@ -404,41 +207,12 @@ impl FunctionRegistry {
         registry.register_web_functions();
         registry.register_obsolete_biff_functions();
 
-        for (names, rule) in SCALAR_ARGS {
-            for name in *names {
-                registry.function_mut(name).scalar_args = *rule;
-            }
-        }
-        for (names, rule) in TYPED_ARGS {
-            for name in *names {
-                registry.function_mut(name).typed_args = *rule;
-            }
-        }
-        for (names, classes, default) in ARG_CLASSES {
-            for name in *names {
-                let def = registry.function_mut(name);
-                def.arg_classes = classes;
-                def.default_arg_class = *default;
-            }
-        }
-        for (names, rule) in RESULT_ARGS {
-            for name in *names {
-                registry.function_mut(name).result_args = *rule;
-            }
-        }
-        for (names, returns) in RETURNS {
-            for name in *names {
-                registry.function_mut(name).returns = *returns;
-            }
-        }
-        for name in PER_RANGE {
-            registry.function_mut(name).per_range = true;
-        }
+        classes::apply(&mut registry);
 
         registry
     }
 
-    fn function_mut(&mut self, name: &str) -> &mut FunctionDef {
+    pub(super) fn function_mut(&mut self, name: &str) -> &mut FunctionDef {
         let index = self.by_name[name];
         &mut self.functions[index]
     }
@@ -1367,11 +1141,6 @@ impl FunctionRegistry {
             max_args: Some(3),
             implementation: logical::fn_if,
             volatile: false,
-            // IF's Ftab grammar is `IF: (val, val_or_ref, [val_or_ref])`.
-            // Args 1 and 2 are `val_or_ref` so when the operand is a naked
-            // reference (PtgRef/PtgArea/PtgName) Excel emits R-class to
-            // preserve the reference; for value expressions the leaf
-            // class machinery degrades to V automatically.
             // IF can return a reference (e.g. SUM(IF(...)) iterates the picked
             // range), so its PtgFunc/PtgFuncVar token takes the class of the
             // position it fills. Verified: SUM(IF(...)) → IF R-class;
@@ -2696,11 +2465,6 @@ impl FunctionRegistry {
             max_args: Some(4),
             implementation: lookup::fn_vlookup,
             volatile: false,
-            // VLOOKUP(lookup_value, table_array, col_index, [range_lookup]).
-            // Arg 1 (table_array) is a reference → R-class; the rest are
-            // values. Verified against Excel XLSB authoring. (Without this,
-            // Excel reads our V-class area where it expects a reference and
-            // repairs it into a PtgName + PtgFuncVar(UDF) wrapper.)
             ..Default::default()
         });
 
@@ -2736,12 +2500,8 @@ impl FunctionRegistry {
             max_args: None, // Up to 254 values
             implementation: lookup::fn_choose,
             volatile: false,
-            // CHOOSE's Ftab grammar is `CHOOSE: (val, *val_or_ref)`. Arg 0
-            // (the selector) is always V; the rest are `val_or_ref` so naked
-            // references in a choice position emit R-class. Matches IF.
             // Like IF, CHOOSE can return a reference, so its function token
-            // takes the class of the position it fills. Verified:
-            // IF(...,CHOOSE(...),...) → CHOOSE R-class.
+            // takes the class of the position it fills.
             returns_reference: true,
             ..Default::default()
         });

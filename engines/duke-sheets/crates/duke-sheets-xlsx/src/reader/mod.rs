@@ -3400,6 +3400,9 @@ impl XlsxReader {
                         for c in range.start.col..=range.end.col {
                             let cached = worksheet.get_value_at(r, c);
                             let _ = worksheet.set_formula_with_cached_value_at(r, c, &table, cached);
+                            if let Some(formula) = worksheet.formula_data_at_mut(r, c) {
+                                formula.kind = FormulaKind::DataTable;
+                            }
                         }
                     }
                 }
@@ -3430,55 +3433,7 @@ impl XlsxReader {
                 }
             };
 
-            if !worksheet.has_formula_at(anchor_row, anchor_col) {
-                continue;
-            }
-
-            let anchor_cached = worksheet.get_value_at(anchor_row, anchor_col);
-
-            let mut array_result: Vec<Vec<CellValue>> = Vec::with_capacity(num_rows as usize);
-            for r in 0..num_rows {
-                let mut row_values: Vec<CellValue> = Vec::with_capacity(num_cols as usize);
-                for c in 0..num_cols {
-                    let cell_row = anchor_row + r;
-                    let cell_col = anchor_col + c;
-                    let val = if r == 0 && c == 0 {
-                        anchor_cached.clone()
-                    } else {
-                        worksheet.get_value_at(cell_row, cell_col)
-                    };
-                    row_values.push(val);
-                }
-                array_result.push(row_values);
-            }
-
-            if let Some(formula) = worksheet.formula_data_at_mut(anchor_row, anchor_col) {
-                formula.array_result = Some(array_result);
-            }
-            if num_rows > 1 || num_cols > 1 {
-                worksheet.register_spill(anchor_row, anchor_col, num_rows, num_cols);
-            }
-
-            // Replace ghost cells with SpillTarget values.
-            for r in 0..num_rows {
-                for c in 0..num_cols {
-                    if r == 0 && c == 0 {
-                        continue;
-                    }
-                    let cell_row = anchor_row + r;
-                    let cell_col = anchor_col + c;
-                    let _ = worksheet.set_cell_value_at(
-                        cell_row,
-                        cell_col,
-                        CellValue::SpillTarget {
-                            source_row: anchor_row,
-                            source_col: anchor_col,
-                            offset_row: r,
-                            offset_col: c,
-                        },
-                    );
-                }
-            }
+            worksheet.hold_saved_array(anchor_row, anchor_col, num_rows, num_cols);
         }
 
         Ok(pending_controls)

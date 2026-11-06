@@ -1,4 +1,5 @@
 import type { CellStyle, Worksheet } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
+import { cellAddressToA1 } from "./range-reference.ts";
 import type { XlsxCellAddress } from "./types";
 
 /** A Ctrl+Shift+Enter array formula: its top-left cell, extent and formula. */
@@ -21,12 +22,9 @@ export type CellMutationState = {
   value: unknown;
 };
 
-function a1(row: number, col: number): string {
-  let label = "";
-  for (let n = col; n >= 0; n = Math.floor(n / 26) - 1) {
-    label = String.fromCharCode(65 + (n % 26)) + label;
-  }
-  return `${label}${row + 1}`;
+/** A cell's value as it is set back: an empty cell is the empty string. */
+export function normalizeCellValue(value: unknown) {
+  return value ?? "";
 }
 
 export function captureCellMutationState(worksheet: Worksheet, cell: XlsxCellAddress): CellMutationState {
@@ -43,11 +41,11 @@ export function applyCellMutationState(worksheet: Worksheet, cell: XlsxCellAddre
   const block = state.arrayFormula;
   if (block) {
     // The block's other cells are filled when the workbook is calculated.
-    worksheet.setArrayFormula(a1(block.row, block.col), block.formula, block.rows, block.cols);
+    worksheet.setArrayFormula(cellAddressToA1(block), block.formula, block.rows, block.cols);
   } else if (state.formula) {
-    worksheet.setFormula(a1(cell.row, cell.col), state.formula);
+    worksheet.setFormula(cellAddressToA1(cell), state.formula);
   } else {
-    worksheet.setCell(a1(cell.row, cell.col), state.value ?? "");
+    worksheet.setCell(cellAddressToA1(cell), normalizeCellValue(state.value));
   }
 
   // A cell that had no style gets the default one back, dropping a format typing gave it.

@@ -1809,7 +1809,7 @@ impl XlsxWriter {
     }
 
     fn format_print_area_formula(sheet_name: &str, range: &CellRange) -> String {
-        let quoted_name = Self::quote_sheet_name(sheet_name);
+        let quoted_name = duke_sheets_formula::print::quoted(sheet_name);
         let start_col = CellAddress::column_to_letters(range.start.col);
         let end_col = CellAddress::column_to_letters(range.end.col);
         format!(
@@ -1827,7 +1827,7 @@ impl XlsxWriter {
         repeat_rows: Option<(u32, u32)>,
         repeat_cols: Option<(u16, u16)>,
     ) -> Option<String> {
-        let quoted_name = Self::quote_sheet_name(sheet_name);
+        let quoted_name = duke_sheets_formula::print::quoted(sheet_name);
         let mut parts = Vec::new();
 
         if let Some((r1, r2)) = repeat_rows {
@@ -1845,10 +1845,6 @@ impl XlsxWriter {
         } else {
             Some(parts.join(","))
         }
-    }
-
-    fn quote_sheet_name(name: &str) -> String {
-        duke_sheets_formula::print::quoted(name)
     }
 
     fn defined_name_key(name: &str, scope: &duke_sheets_core::named_range::NameScope) -> String {
@@ -1911,7 +1907,7 @@ impl XlsxWriter {
                         let formula = sheet.formula_data_at(row, col)?;
                         let (saved, dynamic) = match formula.kind {
                             FormulaKind::Cse { .. } => (duke_sheets_formula::legacy::saved_array_formula(text), false),
-                            FormulaKind::Dynamic if text.get(..7).is_some_and(|start| start.eq_ignore_ascii_case("=TABLE(")) => (text.to_string(), false),
+                            FormulaKind::DataTable => (text.to_string(), false),
                             FormulaKind::Dynamic => {
                                 let (saved, dynamic) = duke_sheets_formula::legacy::saved_formula(text, &names);
                                 let spills = sheet.is_spill_source(row, col)
@@ -2647,7 +2643,7 @@ impl XlsxWriter {
         // The cells of a Ctrl+Shift+Enter block are saved as plain values.
         if let duke_sheets_core::CellValue::SpillTarget { source_row, source_col, .. } = cell.value {
             if matches!(worksheet.formula_data_at(source_row, source_col).map(|f| f.kind), Some(FormulaKind::Cse { .. })) {
-                let value = duke_sheets_core::CellData::with_style(worksheet.get_value_at(row, col), cell.style_index);
+                let value = duke_sheets_core::CellData::with_style(worksheet.get_value_at_ref(row, col).clone(), cell.style_index);
                 return Self::write_cell(w, row, col, &value, sheet_index, style_table, sst, worksheet, saved_formulas);
             }
         }
@@ -2663,7 +2659,7 @@ impl XlsxWriter {
                         .get_spill_info(row, col)
                         .map_or((1, 1), |info| (info.rows, info.cols)),
                 ),
-                FormulaKind::Dynamic => None,
+                FormulaKind::Dynamic | FormulaKind::DataTable => None,
             }
             .map(|(rows, cols)| {
                 CellRange::new(addr, CellAddress::new(row + rows - 1, col + cols - 1)).to_a1_string()
@@ -2791,8 +2787,7 @@ impl XlsxWriter {
                 }
             }
             duke_sheets_core::CellValue::SpillTarget { .. } => {
-                let resolved = worksheet.get_value_at(row, col);
-                match &resolved {
+                match worksheet.get_value_at_ref(row, col) {
                     duke_sheets_core::CellValue::Number(n) => {
                         let mut c = BytesStart::new("c");
                         c.push_attribute(("r", cell_ref.as_str()));

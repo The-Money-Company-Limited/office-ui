@@ -2677,6 +2677,109 @@ mod tests {
     }
 
     #[test]
+    fn a_blocks_cells_keep_their_styles() {
+        let mut workbook = workbook_with_block();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_style("C3", &duke_sheets_core::Style::new().bold(true)).unwrap();
+        let bold = sheet.cell_style_index_at(2, 2);
+        assert_ne!(bold, 0);
+        sheet.set_cell_value("A3", 5.0).unwrap();
+        workbook.calculate().unwrap();
+        assert_eq!(value(&workbook, "C3"), CellValue::Number(10.0));
+        assert_eq!(workbook.worksheet(0).unwrap().cell_style_index_at(2, 2), bold, "calculating fills the value only");
+
+        workbook.worksheet_mut(0).unwrap().set_cell_value("C2", 9.0).unwrap();
+        assert_eq!(workbook.worksheet(0).unwrap().cell_style_index_at(2, 2), bold, "turned into values");
+
+        workbook.worksheet_mut(0).unwrap().set_array_formula_at(0, 2, "=A1:A3*2", 4, 1).unwrap();
+        workbook.calculate().unwrap();
+        assert_eq!(value(&workbook, "C2"), CellValue::Number(4.0));
+        assert_eq!(workbook.worksheet(0).unwrap().cell_style_index_at(2, 2), bold, "put back as undo does");
+
+        // A spill's cells keep theirs too, when it shrinks.
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_style("F2", &duke_sheets_core::Style::new().bold(true)).unwrap();
+        sheet.set_cell_formula("F1", "=SEQUENCE(3)").unwrap();
+        workbook.calculate().unwrap();
+        assert_eq!(value(&workbook, "F2"), CellValue::Number(2.0));
+        workbook.worksheet_mut(0).unwrap().set_cell_formula("F1", "=SEQUENCE(1)").unwrap();
+        workbook.calculate().unwrap();
+        assert_eq!(value(&workbook, "F2"), CellValue::Empty);
+        assert_eq!(workbook.worksheet(0).unwrap().cell_style_index_at(1, 5), bold);
+    }
+
+    #[test]
+    fn content_in_a_blocks_cell_turns_it_into_values() {
+        // Before it is calculated, a block put back as undo does already holds its cells.
+        let mut workbook = workbook_with_block();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_array_formula_at(0, 2, "=A1:A3*3", 3, 1).unwrap();
+        sheet.set_cell_formula("C2", "=1+1").unwrap();
+        workbook.calculate().unwrap();
+        assert!(workbook.worksheet(0).unwrap().formula_data_at(0, 2).is_none());
+        assert_eq!(value(&workbook, "C2"), CellValue::Number(2.0), "the new formula stays");
+
+        // Filling a range over a block's cell does the same.
+        let mut workbook = workbook_with_block();
+        let range = CellRange::parse("B2:C2").unwrap();
+        workbook.worksheet_mut(0).unwrap().fill_range(&range, 7.0).unwrap();
+        workbook.calculate().unwrap();
+        assert!(workbook.worksheet(0).unwrap().formula_data_at(0, 2).is_none());
+        assert_eq!(value(&workbook, "C1"), CellValue::Number(2.0));
+        assert_eq!(value(&workbook, "C2"), CellValue::Number(7.0));
+        assert_eq!(value(&workbook, "C3"), CellValue::Number(6.0));
+    }
+
+    #[test]
+    fn a_formula_blocks_a_spill_before_it_is_calculated() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(3)").unwrap();
+        sheet.set_formula_with_cached_value_at(1, 0, "=B1", CellValue::Empty).unwrap();
+        let column = vec![vec![CellValue::Number(1.0)], vec![CellValue::Number(2.0)], vec![CellValue::Number(3.0)]];
+        assert!(sheet.set_array_formula_result(0, 0, column).is_err());
+        assert_eq!(sheet.get_value_at(0, 0), CellValue::Error(CellError::Spill));
+        assert_eq!(sheet.get_formula_at(1, 0), Some("=B1"));
+    }
+
+    #[test]
+    fn index_of_a_table_column_or_a_name_takes_arrays() {
+        let mut workbook = workbook_with_sales_table(false);
+        workbook.define_name("Prices", "Sheet1!$C$2:$C$5").unwrap();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("E1", "=SUM(INDEX(Sales[Revenue],{1;2;3}))").unwrap();
+        sheet.set_cell_formula("E2", "=SUM(INDEX(Prices,SEQUENCE(3)))").unwrap();
+        sheet.set_cell_formula("E3", "=CONCAT(INDEX(Sales,MATCH(\"Gadget\",Sales[Product],0),{2,3}))").unwrap();
+        sheet.set_cell_formula("E4", "=INDEX({\"a\",\"b\",\"c\"},2)").unwrap();
+        sheet.set_cell_formula("E5", "=@INDEX(C2:C5*2,2)").unwrap();
+        sheet.set_cell_formula("E6", "=ROWS(Sales)").unwrap();
+        workbook.calculate().unwrap();
+        assert_eq!(value(&workbook, "E1"), CellValue::Number(600.0));
+        assert_eq!(value(&workbook, "E2"), CellValue::Number(600.0));
+        assert_eq!(value(&workbook, "E3"), CellValue::string("West200"));
+        assert_eq!(value(&workbook, "E4"), CellValue::string("b"));
+        assert_eq!(value(&workbook, "E5"), CellValue::Number(400.0));
+        assert_eq!(value(&workbook, "E6"), CellValue::Number(4.0), "a table's name is its data rows");
+    }
+
+    #[test]
+    fn at_works_out_its_operand_once() {
+        // Worked out twice, RAND could pick the reference, which has no cell in row 10, and then
+        // the array, whose first element @ gives.
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        for (i, n) in [7.0, 8.0, 9.0].iter().enumerate() {
+            sheet.set_cell_value_at(i as u32, 0, *n).unwrap();
+        }
+        sheet.set_cell_formula("C10", "=@IF(RAND()>0.5,A1:A3,0)").unwrap();
+        for _ in 0..100 {
+            workbook.calculate().unwrap();
+            let got = value(&workbook, "C10");
+            assert!(matches!(got, CellValue::Number(0.0) | CellValue::Error(CellError::Value)), "{got:?}");
+        }
+    }
+
+    #[test]
     fn test_iterative_calculation() {
         let mut workbook = Workbook::new();
         let sheet = workbook.worksheet_mut(0).unwrap();

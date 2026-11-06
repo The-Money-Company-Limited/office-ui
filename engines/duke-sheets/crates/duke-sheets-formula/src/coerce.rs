@@ -28,6 +28,8 @@ enum DateWritten {
     NamedMonth,
     /// `Mar-2024`, `May 2026`
     MonthAndYear,
+    /// `Feb 22`, `22 Feb`: a day of the current year
+    DayAndMonth,
 }
 
 /// The number `text` stands for, or `None` when Excel would give #VALUE!.
@@ -75,6 +77,7 @@ pub fn typed_number(text: &str, settings: &WorkbookSettings, current: &NumberFor
         Written::Date(DateWritten::Numbers) => (FormatKind::Date, NumberFormat::ID_DATE_SHORT),
         Written::Date(DateWritten::NamedMonth) => (FormatKind::Date, NumberFormat::ID_DATE_MEDIUM),
         Written::Date(DateWritten::MonthAndYear) => (FormatKind::Date, NumberFormat::ID_DATE_MONTH_YEAR),
+        Written::Date(DateWritten::DayAndMonth) => (FormatKind::Date, NumberFormat::ID_DATE_DAY_MONTH),
         Written::Time { .. } if value >= 1.0 => (FormatKind::Duration, NumberFormat::ID_ELAPSED_HOURS),
         Written::Time { seconds, twelve_hour } => (FormatKind::Time, match (twelve_hour, seconds) {
             (true, false) => NumberFormat::ID_TIME_AMPM,
@@ -317,7 +320,7 @@ fn date(text: &str) -> Option<(f64, DateWritten)> {
 fn month_and_number(month: u32, n: i32, digits: usize) -> Option<(i32, u32, i32, DateWritten)> {
     let year = chrono::Local::now().year();
     Some(match NaiveDate::from_ymd_opt(year, month, u32::try_from(n).ok()?) {
-        Some(_) => (year, month, n, DateWritten::NamedMonth),
+        Some(_) => (year, month, n, DateWritten::DayAndMonth),
         None => (full_year(n, digits)?, month, 1, DateWritten::MonthAndYear),
     })
 }
@@ -448,6 +451,10 @@ mod tests {
         assert_eq!(typed("en-US", "15-Mar-2024"), with(45366.0, 15));
         assert_eq!(typed("en-US", "15 March 2024"), with(45366.0, 15));
         assert_eq!(typed("en-US", "Mar-2024"), with(45352.0, 17));
+        // A day and month is this year's, shown d-mmm (16).
+        assert_eq!(typed("en-US", "Feb 22").and_then(|(_, format)| format), Some(16));
+        assert_eq!(typed("en-GB", "22 Feb").and_then(|(_, format)| format), Some(16));
+        assert_eq!(typed("en-US", "Feb 30").and_then(|(_, format)| format), Some(17));
         assert_eq!(typed("en-US", "13:30"), with(0.5625, 20));
         assert_eq!(typed("en-US", "13:30:00"), with(0.5625, 21));
         assert_eq!(typed("en-US", "1:30 PM"), with(0.5625, 18));
