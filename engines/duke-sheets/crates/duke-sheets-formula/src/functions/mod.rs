@@ -132,7 +132,6 @@ impl FunctionDef {
     }
 }
 
-
 /// LET, LAMBDA and the LAMBDA helpers are evaluated from the formula itself (`crate::lambda`),
 /// and INDIRECT and OFFSET as references (`crate::reference`), before the registry function would
 /// run; their entries keep their names, argument counts and BIFF metadata.

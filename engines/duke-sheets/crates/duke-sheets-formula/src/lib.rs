@@ -34,6 +34,7 @@ pub mod print;
 mod reference;
 mod regional;
 
+pub use array_lift::fit_array;
 pub use ast::{
     BinaryOperator, CellReference, ExternalReference, FormulaExpr, RangeReference,
     StructuredRefSpecifier, StructuredReference, UnaryOperator,
@@ -43,5 +44,4 @@ pub use eval_cache::{EvalCache, LookupIndex, RangeKey};
 pub use evaluator::{
     evaluate, EvaluationContext, FormulaValue, ImageInfo, ImageSizing, RangeSource,
 };
-pub use array_lift::fit_array;
 pub use parser::parse_formula;

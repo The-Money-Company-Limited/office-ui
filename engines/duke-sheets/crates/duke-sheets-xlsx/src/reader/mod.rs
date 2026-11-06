@@ -28,8 +28,8 @@ use duke_sheets_core::conditional_format::{
 use duke_sheets_core::style::{Color, Style};
 use duke_sheets_core::validation::DataValidation;
 use duke_sheets_core::{
-    CellAddress, CellError, CellRange, CellValue, FormulaKind, Hyperlink, PageBreak, SheetSlot, SplitPanes,
-    Workbook,
+    CellAddress, CellError, CellRange, CellValue, FormulaKind, Hyperlink, PageBreak, SheetSlot,
+    SplitPanes, Workbook,
 };
 use formulas::{
     parse_cell_formula_state, resolve_cell_formula, CellFormulaKind, SharedFormulaMaster,
@@ -929,9 +929,15 @@ impl XlsxReader {
                     &value_errors,
                     &mut sheet_formula_cells,
                 )?);
-                formula_cells.extend(sheet_formula_cells.into_iter().map(|(row, col, dynamic, shared)| {
-                    duke_sheets_formula::legacy::FileFormula { sheet: sheet_idx, row, col, dynamic, shared }
-                }));
+                formula_cells.extend(sheet_formula_cells.into_iter().map(
+                    |(row, col, dynamic, shared)| duke_sheets_formula::legacy::FileFormula {
+                        sheet: sheet_idx,
+                        row,
+                        col,
+                        dynamic,
+                        shared,
+                    },
+                ));
 
                 // Read comments for this worksheet (if present).
                 // Resolve paths via sheet .rels relationships; fall back to
@@ -1516,8 +1522,13 @@ impl XlsxReader {
         // Pending array/dataTable formulas with ref ranges - post-processed after all cells.
         // Each entry: (anchor_cell_ref, ref_range, kind, r1, r2)
         #[allow(clippy::type_complexity)]
-        let mut pending_array_formulas: Vec<(String, String, CellFormulaKind, Option<String>, Option<String>)> =
-            Vec::new();
+        let mut pending_array_formulas: Vec<(
+            String,
+            String,
+            CellFormulaKind,
+            Option<String>,
+            Option<String>,
+        )> = Vec::new();
 
         // Dynamic array tracking: cm="1" anchors and cm="2" ghost cells.
         // Anchor: (row, col). Ghost: set of (row, col) positions.
@@ -2304,9 +2315,9 @@ impl XlsxReader {
                                         cell_styles,
                                     )?;
                                 }
-                                // Each formula is spelled as the editor shows it once the workbook's
-                                // names are read (legacy::read_formulas): one without the
-                                // dynamic-array mark is from before dynamic arrays. A data table's
+                                // Each formula is spelled as the editor shows it once the
+                                // workbook's names are read (legacy::read_formulas): one
+                                // without the dynamic-array mark is from before dynamic arrays. A data table's
                                 // cells hold TABLE.
                                 if worksheet.has_formula_at(addr.row, addr.col)
                                     && current_formula_state.kind != CellFormulaKind::DataTable
@@ -3380,26 +3391,38 @@ impl XlsxReader {
         let mut dynamic_array_extents: HashMap<(u32, u16), (u32, u16)> = HashMap::new();
         let mut cse_anchors: Vec<(u32, u16)> = Vec::new();
         for (anchor_ref, ref_range, kind, r1, r2) in pending_array_formulas {
-            let (Ok(anchor), Ok(range)) = (CellAddress::parse(&anchor_ref), CellRange::parse(&ref_range)) else {
+            let (Ok(anchor), Ok(range)) = (
+                CellAddress::parse(&anchor_ref),
+                CellRange::parse(&ref_range),
+            ) else {
                 continue;
             };
-            let (rows, cols) = (range.end.row - range.start.row + 1, range.end.col - range.start.col + 1);
+            let (rows, cols) = (
+                range.end.row - range.start.row + 1,
+                range.end.col - range.start.col + 1,
+            );
             match kind {
                 CellFormulaKind::Array => {
                     dynamic_array_extents.insert((anchor.row, anchor.col), (rows, cols));
                     if !dynamic_array_anchors.contains(&(anchor.row, anchor.col)) {
-                        if let Some(formula) = worksheet.formula_data_at_mut(anchor.row, anchor.col) {
+                        if let Some(formula) = worksheet.formula_data_at_mut(anchor.row, anchor.col)
+                        {
                             formula.kind = FormulaKind::Cse { rows, cols };
                             cse_anchors.push((anchor.row, anchor.col));
                         }
                     }
                 }
                 CellFormulaKind::DataTable => {
-                    let table = format!("=TABLE({},{})", r1.as_deref().unwrap_or(""), r2.as_deref().unwrap_or(""));
+                    let table = format!(
+                        "=TABLE({},{})",
+                        r1.as_deref().unwrap_or(""),
+                        r2.as_deref().unwrap_or("")
+                    );
                     for r in range.start.row..=range.end.row {
                         for c in range.start.col..=range.end.col {
                             let cached = worksheet.get_value_at(r, c);
-                            let _ = worksheet.set_formula_with_cached_value_at(r, c, &table, cached);
+                            let _ =
+                                worksheet.set_formula_with_cached_value_at(r, c, &table, cached);
                             if let Some(formula) = worksheet.formula_data_at_mut(r, c) {
                                 formula.kind = FormulaKind::DataTable;
                             }
@@ -3410,8 +3433,9 @@ impl XlsxReader {
             }
         }
 
-        // Each array formula's cells become its array's: the anchor's `ref` gives their extent, else
-        // the ghosts (cm="2") that extend right and down from it, as other writers mark spilled cells.
+        // Each array formula's cells become its array's: the anchor's `ref` gives their extent,
+        // else the ghosts (cm="2") that extend right and down from it, as other writers mark
+        // spilled cells.
         for &(anchor_row, anchor_col) in dynamic_array_anchors.iter().chain(&cse_anchors) {
             let (num_rows, num_cols) = match dynamic_array_extents.get(&(anchor_row, anchor_col)) {
                 Some(&extent) => extent,

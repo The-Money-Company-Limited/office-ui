@@ -401,7 +401,8 @@ impl<'a> EvaluationContext<'a> {
         let Some(formula) = reference::name_formula(name, self) else {
             return Ok(FormulaValue::Error(CellError::Name));
         };
-        reference::nested(|| evaluate(&formula, self)).unwrap_or(Ok(FormulaValue::Error(CellError::Ref)))
+        reference::nested(|| evaluate(&formula, self))
+            .unwrap_or(Ok(FormulaValue::Error(CellError::Ref)))
     }
 
     /// Resolve a structured table reference to a formula value.
@@ -883,7 +884,10 @@ fn evaluate_unary_op(
 
 /// The @ operator reads one value: a reference's cell in the formula's own row or column (#VALUE!
 /// when there is none), or an array's first element.
-fn evaluate_implicit_intersection(operand: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+fn evaluate_implicit_intersection(
+    operand: &FormulaExpr,
+    ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
     Ok(match reference::resolve_value(operand, ctx)? {
         reference::Resolved::Reference(target) => reference::intersect_cell(&target, ctx),
         reference::Resolved::Value(FormulaValue::Array { data, .. }) => data
@@ -1996,9 +2000,13 @@ fn evaluate_position(name: &str, args: &[FormulaExpr], ctx: &EvaluationContext) 
     // A value read once goes to the registry function: ROW(IF(…)) of an array.
     let range = match reference::resolve_value(arg, ctx)? {
         reference::Resolved::Reference((_, range)) => range,
-        reference::Resolved::Value(FormulaValue::Error(e)) => return Ok(Some(FormulaValue::Error(e))),
+        reference::Resolved::Value(FormulaValue::Error(e)) => {
+            return Ok(Some(FormulaValue::Error(e)))
+        }
         reference::Resolved::Value(value) => {
-            let func = get_function_registry().get(name).expect("ROW, COLUMN, ROWS and COLUMNS are registered");
+            let func = get_function_registry()
+                .get(name)
+                .expect("ROW, COLUMN, ROWS and COLUMNS are registered");
             return (func.implementation)(&[value], ctx).map(Some);
         }
     };
@@ -3265,12 +3273,21 @@ mod tests {
         assert_eq!(eval("=COLUMN()").unwrap(), FormulaValue::Number(1.0));
 
         // A value isn't a reference: each element is #VALUE!, or its own error.
-        assert_eq!(eval("=ROW(5)").unwrap(), FormulaValue::Error(CellError::Value));
-        assert_eq!(eval("=COLUMN(5)").unwrap(), FormulaValue::Error(CellError::Value));
+        assert_eq!(
+            eval("=ROW(5)").unwrap(),
+            FormulaValue::Error(CellError::Value)
+        );
+        assert_eq!(
+            eval("=COLUMN(5)").unwrap(),
+            FormulaValue::Error(CellError::Value)
+        );
         assert_eq!(
             eval("=COLUMN({1,#N/A})").unwrap(),
             FormulaValue::Array {
-                data: vec![vec![FormulaValue::Error(CellError::Value), FormulaValue::Error(CellError::Na)]],
+                data: vec![vec![
+                    FormulaValue::Error(CellError::Value),
+                    FormulaValue::Error(CellError::Na)
+                ]],
                 source: None,
             }
         );

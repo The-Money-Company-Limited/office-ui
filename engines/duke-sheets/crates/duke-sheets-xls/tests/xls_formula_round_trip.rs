@@ -1137,7 +1137,11 @@ fn an_arrays_cells_are_saved_as_their_values() {
     ws.set_array_formula_result(
         0,
         0,
-        vec![vec![CellValue::Number(1.0)], vec![CellValue::string("two")], vec![CellValue::Number(3.0)]],
+        vec![
+            vec![CellValue::Number(1.0)],
+            vec![CellValue::string("two")],
+            vec![CellValue::Number(3.0)],
+        ],
     )
     .unwrap();
 

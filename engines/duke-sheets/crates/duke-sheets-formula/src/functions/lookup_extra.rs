@@ -2329,7 +2329,10 @@ mod tests {
         let value = FormulaValue::Error(CellError::Value);
         assert_eq!(
             eval("=ROW({0;0})").unwrap(),
-            FormulaValue::Array { data: vec![vec![value.clone()], vec![value]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![value.clone()], vec![value]],
+                source: None
+            }
         );
     }
 
@@ -2340,7 +2343,10 @@ mod tests {
         let value = FormulaValue::Error(CellError::Value);
         assert_eq!(
             eval("=COLUMN({0,0})").unwrap(),
-            FormulaValue::Array { data: vec![vec![value.clone(), value]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![value.clone(), value]],
+                source: None
+            }
         );
     }
 

@@ -1074,8 +1074,8 @@ impl XlsReader {
             }
         }
 
-        // An array's top-left cell holds its formula, and each of its cells, which repeats it in the
-        // file, shows its element.
+        // An array's top-left cell holds its formula, and each of its cells, which repeats it in
+        // the file, shows its element.
         for (row, col, rows, cols) in array_blocks {
             if let Some(formula) = ws.formula_data_at_mut(row, col) {
                 formula.kind = duke_sheets_core::FormulaKind::Cse { rows, cols };

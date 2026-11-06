@@ -1,7 +1,9 @@
 //! Formula text from a parsed formula. The editor's text writes `@x` and `A1#` as typed; a file
 //! writes them as `_xlfn.SINGLE(x)` and `_xlfn.ANCHORARRAY(A1)`, as Excel does.
 
-use crate::ast::{BinaryOperator, FormulaExpr, StructuredRefSpecifier, StructuredReference, UnaryOperator};
+use crate::ast::{
+    BinaryOperator, FormulaExpr, StructuredRefSpecifier, StructuredReference, UnaryOperator,
+};
 use duke_sheets_core::{CellAddress, CellRange, MAX_COLS, MAX_ROWS};
 
 /// The formula as the editor shows it, with its `=`.
@@ -71,7 +73,11 @@ fn write(expr: &FormulaExpr, file: bool, out: &mut String) {
         }
         FormulaExpr::UnaryOp { op, operand } => match op {
             UnaryOperator::Negate | UnaryOperator::Plus => {
-                out.push(if *op == UnaryOperator::Negate { '-' } else { '+' });
+                out.push(if *op == UnaryOperator::Negate {
+                    '-'
+                } else {
+                    '+'
+                });
                 write(operand, file, out);
             }
             UnaryOperator::Percent => {
@@ -83,12 +89,19 @@ fn write(expr: &FormulaExpr, file: bool, out: &mut String) {
                 write(operand, file, out);
                 out.push(')');
             }
-            UnaryOperator::ImplicitIntersection if file => call("_xlfn.SINGLE", std::slice::from_ref(&**operand), file, out),
+            UnaryOperator::ImplicitIntersection if file => {
+                call("_xlfn.SINGLE", std::slice::from_ref(&**operand), file, out)
+            }
             UnaryOperator::ImplicitIntersection => {
                 out.push('@');
                 operand_of_mark(operand, file, out);
             }
-            UnaryOperator::SpillRange if file => call("_xlfn.ANCHORARRAY", std::slice::from_ref(&**operand), file, out),
+            UnaryOperator::SpillRange if file => call(
+                "_xlfn.ANCHORARRAY",
+                std::slice::from_ref(&**operand),
+                file,
+                out,
+            ),
             UnaryOperator::SpillRange => {
                 operand_of_mark(operand, file, out);
                 out.push('#');
@@ -143,8 +156,14 @@ fn operand_of_mark(operand: &FormulaExpr, file: bool, out: &mut String) {
             | FormulaExpr::String(_)
             | FormulaExpr::Boolean(_)
             | FormulaExpr::Error(_)
-            | FormulaExpr::UnaryOp { op: UnaryOperator::Paren | UnaryOperator::SpillRange, .. }
-            | FormulaExpr::BinaryOp { op: BinaryOperator::Range | BinaryOperator::Intersect, .. }
+            | FormulaExpr::UnaryOp {
+                op: UnaryOperator::Paren | UnaryOperator::SpillRange,
+                ..
+            }
+            | FormulaExpr::BinaryOp {
+                op: BinaryOperator::Range | BinaryOperator::Intersect,
+                ..
+            }
     );
     if bare {
         write(operand, file, out);
@@ -201,8 +220,13 @@ pub fn quoted(name: &str) -> String {
 
 /// Whether a sheet name needs quotes before `!` (see `quoted`).
 pub fn sheet_needs_quotes(name: &str) -> bool {
-    let plain = name.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    let plain = name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
         && CellAddress::parse(name).is_err()
         && !name.eq_ignore_ascii_case("TRUE")
         && !name.eq_ignore_ascii_case("FALSE");
@@ -222,7 +246,13 @@ fn range(range: &CellRange, out: &mut String) {
             CellAddress::column_to_letters(b.col)
         ));
     } else if a.col == 0 && b.col == MAX_COLS - 1 && a.col_absolute && b.col_absolute {
-        out.push_str(&format!("{}{}:{}{}", dollar(a.row_absolute), a.row + 1, dollar(b.row_absolute), b.row + 1));
+        out.push_str(&format!(
+            "{}{}:{}{}",
+            dollar(a.row_absolute),
+            a.row + 1,
+            dollar(b.row_absolute),
+            b.row + 1
+        ));
     } else {
         out.push_str(&format!("{}:{}", a.to_a1_string(), b.to_a1_string()));
     }
@@ -301,8 +331,17 @@ mod tests {
             "=[1]!TBLink(\"a\")+[Book.xlsx]Sheet1!A1",
         ] {
             let expr = parse_formula(text).unwrap();
-            assert_eq!(parse_formula(&formula_text(&expr)).unwrap(), expr, "{text} -> {}", formula_text(&expr));
-            assert_eq!(parse_formula(&file_formula_text(&expr)).unwrap(), expr, "{text}");
+            assert_eq!(
+                parse_formula(&formula_text(&expr)).unwrap(),
+                expr,
+                "{text} -> {}",
+                formula_text(&expr)
+            );
+            assert_eq!(
+                parse_formula(&file_formula_text(&expr)).unwrap(),
+                expr,
+                "{text}"
+            );
         }
     }
 
@@ -315,7 +354,13 @@ mod tests {
     #[test]
     fn a_file_writes_at_and_spill_as_functions() {
         let expr = parse_formula("=SUM(@A1:A3)+B1#").unwrap();
-        assert_eq!(file_formula_text(&expr), "=SUM(_xlfn.SINGLE(A1:A3))+_xlfn.ANCHORARRAY(B1)");
-        assert_eq!(formula_text(&parse_formula(&file_formula_text(&expr)).unwrap()), "=SUM(@A1:A3)+B1#");
+        assert_eq!(
+            file_formula_text(&expr),
+            "=SUM(_xlfn.SINGLE(A1:A3))+_xlfn.ANCHORARRAY(B1)"
+        );
+        assert_eq!(
+            formula_text(&parse_formula(&file_formula_text(&expr)).unwrap()),
+            "=SUM(@A1:A3)+B1#"
+        );
     }
 }

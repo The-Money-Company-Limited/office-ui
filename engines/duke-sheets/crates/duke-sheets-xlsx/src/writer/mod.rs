@@ -798,7 +798,10 @@ impl XlsxWriter {
     pub fn write<W: Write + Seek>(workbook: &Workbook, writer: W) -> XlsxResult<()> {
         let mut zip = zip::ZipWriter::new(writer);
         let saved_formulas = Self::saved_formulas(workbook);
-        let needs_metadata = saved_formulas.iter().flat_map(|sheet| sheet.values()).any(|saved| saved.1);
+        let needs_metadata = saved_formulas
+            .iter()
+            .flat_map(|sheet| sheet.values())
+            .any(|saved| saved.1);
 
         // Build a workbook-wide style table.
         let style_table = XlsxStyleTable::build(workbook);
@@ -1906,13 +1909,19 @@ impl XlsxWriter {
                     .filter_map(|(row, col, text)| {
                         let formula = sheet.formula_data_at(row, col)?;
                         let (saved, dynamic) = match formula.kind {
-                            FormulaKind::Cse { .. } => (duke_sheets_formula::legacy::saved_array_formula(text), false),
+                            FormulaKind::Cse { .. } => (
+                                duke_sheets_formula::legacy::saved_array_formula(text),
+                                false,
+                            ),
                             FormulaKind::DataTable => (text.to_string(), false),
                             FormulaKind::Dynamic => {
-                                let (saved, dynamic) = duke_sheets_formula::legacy::saved_formula(text, &names);
+                                let (saved, dynamic) =
+                                    duke_sheets_formula::legacy::saved_formula(text, &names);
                                 let spills = sheet.is_spill_source(row, col)
                                     || sheet.get_value_at(row, col)
-                                        == duke_sheets_core::CellValue::Error(duke_sheets_core::CellError::Spill);
+                                        == duke_sheets_core::CellValue::Error(
+                                            duke_sheets_core::CellError::Spill,
+                                        );
                                 (saved, dynamic || spills)
                             }
                         };
@@ -2533,7 +2542,17 @@ impl XlsxWriter {
                 (Some(cols), None) | (None, Some(cols)) => {
                     for col in cols {
                         let cell = sheet.cell_at(row, *col).unwrap_or(&empty_cell);
-                        Self::write_cell(w, row, *col, cell, sheet_index, style_table, sst, sheet, saved_formulas)?;
+                        Self::write_cell(
+                            w,
+                            row,
+                            *col,
+                            cell,
+                            sheet_index,
+                            style_table,
+                            sst,
+                            sheet,
+                            saved_formulas,
+                        )?;
                     }
                 }
                 (Some(grid_cols), Some(formula_only_cols)) => {
@@ -2641,16 +2660,40 @@ impl XlsxWriter {
         let xf_str = xf_id.to_string();
 
         // The cells of a Ctrl+Shift+Enter block are saved as plain values.
-        if let duke_sheets_core::CellValue::SpillTarget { source_row, source_col, .. } = cell.value {
-            if matches!(worksheet.formula_data_at(source_row, source_col).map(|f| f.kind), Some(FormulaKind::Cse { .. })) {
-                let value = duke_sheets_core::CellData::with_style(worksheet.get_value_at_ref(row, col).clone(), cell.style_index);
-                return Self::write_cell(w, row, col, &value, sheet_index, style_table, sst, worksheet, saved_formulas);
+        if let duke_sheets_core::CellValue::SpillTarget {
+            source_row,
+            source_col,
+            ..
+        } = cell.value
+        {
+            if matches!(
+                worksheet
+                    .formula_data_at(source_row, source_col)
+                    .map(|f| f.kind),
+                Some(FormulaKind::Cse { .. })
+            ) {
+                let value = duke_sheets_core::CellData::with_style(
+                    worksheet.get_value_at_ref(row, col).clone(),
+                    cell.style_index,
+                );
+                return Self::write_cell(
+                    w,
+                    row,
+                    col,
+                    &value,
+                    sheet_index,
+                    style_table,
+                    sst,
+                    worksheet,
+                    saved_formulas,
+                );
             }
         }
 
-        if let (Some(formula), Some((formula_text, dynamic))) =
-            (worksheet.formula_data_at(row, col), saved_formulas.get(&(row, col)))
-        {
+        if let (Some(formula), Some((formula_text, dynamic))) = (
+            worksheet.formula_data_at(row, col),
+            saved_formulas.get(&(row, col)),
+        ) {
             // An array formula names the cells it covers: a dynamic one those it spills over.
             let array_ref = match formula.kind {
                 FormulaKind::Cse { rows, cols } => Some((rows, cols)),
@@ -2662,7 +2705,8 @@ impl XlsxWriter {
                 FormulaKind::Dynamic | FormulaKind::DataTable => None,
             }
             .map(|(rows, cols)| {
-                CellRange::new(addr, CellAddress::new(row + rows - 1, col + cols - 1)).to_a1_string()
+                CellRange::new(addr, CellAddress::new(row + rows - 1, col + cols - 1))
+                    .to_a1_string()
             });
             let mut c = BytesStart::new("c");
             c.push_attribute(("r", cell_ref.as_str()));

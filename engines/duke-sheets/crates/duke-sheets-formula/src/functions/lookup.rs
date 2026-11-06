@@ -398,14 +398,22 @@ pub(crate) fn positions(first: u32, last: u32, rows: bool) -> FormulaValue {
         return FormulaValue::Number((first + 1) as f64);
     }
     let numbers = (first..=last).map(|n| FormulaValue::Number((n + 1) as f64));
-    let data = if rows { numbers.map(|v| vec![v]).collect() } else { vec![numbers.collect()] };
+    let data = if rows {
+        numbers.map(|v| vec![v]).collect()
+    } else {
+        vec![numbers.collect()]
+    };
     FormulaValue::Array { data, source: None }
 }
 
 /// ROW or COLUMN of a value. A range's values still know their cells; anything else isn't a
 /// reference, so each element is #VALUE! or its own error: COLUMN(IF(A2:C2<>"",A2:C2)) gives
 /// {#VALUE!,#N/A,#VALUE!} over an #N/A in B2, which ERROR.TYPE then reads.
-fn position_of_value(args: &[FormulaValue], ctx: &EvaluationContext, rows: bool) -> FormulaResult<FormulaValue> {
+fn position_of_value(
+    args: &[FormulaValue],
+    ctx: &EvaluationContext,
+    rows: bool,
+) -> FormulaResult<FormulaValue> {
     let not_a_reference = |value: &FormulaValue| match value {
         FormulaValue::Error(e) => FormulaValue::Error(*e),
         _ => FormulaValue::Error(CellError::Value),
@@ -413,12 +421,17 @@ fn position_of_value(args: &[FormulaValue], ctx: &EvaluationContext, rows: bool)
     Ok(match args.first() {
         None if rows => FormulaValue::Number((ctx.current_row + 1) as f64),
         None => FormulaValue::Number((ctx.current_col + 1) as f64),
-        Some(FormulaValue::Array { source: Some(source), .. }) if rows => positions(source.start_row, source.end_row, true),
+        Some(FormulaValue::Array { source: Some(source), .. }) if rows => {
+            positions(source.start_row, source.end_row, true)
+        }
         Some(FormulaValue::Array { source: Some(source), .. }) => {
             positions(source.start_col.into(), source.end_col.into(), false)
         }
         Some(FormulaValue::Array { data, .. }) => FormulaValue::Array {
-            data: data.iter().map(|row| row.iter().map(not_a_reference).collect()).collect(),
+            data: data
+                .iter()
+                .map(|row| row.iter().map(not_a_reference).collect())
+                .collect(),
             source: None,
         },
         Some(value) => not_a_reference(value),

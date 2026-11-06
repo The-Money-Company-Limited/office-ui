@@ -2052,7 +2052,8 @@ pub struct WasmHyperlinkEntry {
     pub hyperlink: WasmHyperlink,
 }
 
-/// A Ctrl+Shift+Enter array formula: its top-left cell, extent and formula.
+/// A Ctrl+Shift+Enter array formula: its top-left cell, extent, formula and the values its cells
+/// show, which `setArrayFormula` takes back.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmArrayFormula {
@@ -2061,6 +2062,47 @@ pub struct WasmArrayFormula {
     pub rows: u32,
     pub cols: u32,
     pub formula: String,
+    pub values: Vec<Vec<WasmBlockValue>>,
+}
+
+/// A value an array formula's cell shows: `null` when blank, an error as `{ error: "#N/A" }`.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WasmBlockValue {
+    Boolean(bool),
+    Number(f64),
+    Text(String),
+    Error { error: String },
+    Blank(()),
+}
+
+impl WasmBlockValue {
+    pub fn of(value: &duke_sheets_core::CellValue) -> Self {
+        use duke_sheets_core::CellValue;
+        match value {
+            CellValue::Boolean(b) => Self::Boolean(*b),
+            CellValue::Number(n) => Self::Number(*n),
+            CellValue::String(s) => Self::Text(s.to_string()),
+            CellValue::RichText(runs) => Self::Text(duke_sheets_core::rich_text_to_plain(runs)),
+            CellValue::Error(e) => Self::Error {
+                error: e.as_str().to_string(),
+            },
+            CellValue::Empty | CellValue::SpillTarget { .. } => Self::Blank(()),
+        }
+    }
+
+    pub fn into_cell_value(self) -> duke_sheets_core::CellValue {
+        use duke_sheets_core::{CellError, CellValue};
+        match self {
+            Self::Boolean(b) => CellValue::Boolean(b),
+            Self::Number(n) => CellValue::Number(n),
+            Self::Text(s) => CellValue::string(s),
+            Self::Error { error } => {
+                CellValue::Error(CellError::parse(&error).unwrap_or(CellError::Value))
+            }
+            Self::Blank(()) => CellValue::Empty,
+        }
+    }
 }
 
 #[derive(Serialize)]

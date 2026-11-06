@@ -47,7 +47,11 @@ impl Names {
                 _ => false,
             };
             let key = name.name.to_ascii_uppercase();
-            if one { names.one.insert(key) } else { names.many.insert(key) };
+            if one {
+                names.one.insert(key)
+            } else {
+                names.many.insert(key)
+            };
         }
         names
     }
@@ -88,7 +92,9 @@ pub fn read_formulas(workbook: &mut Workbook, cells: &[FileFormula]) {
     // A legacy shared formula whose first cell reads the same needs nothing in its other cells.
     let mut unchanged: HashSet<(usize, u32)> = HashSet::new();
     for cell in cells {
-        let Some(formula) = workbook.worksheet_mut(cell.sheet).and_then(|ws| ws.formula_data_at_mut(cell.row, cell.col))
+        let Some(formula) = workbook
+            .worksheet_mut(cell.sheet)
+            .and_then(|ws| ws.formula_data_at_mut(cell.row, cell.col))
         else {
             continue;
         };
@@ -118,7 +124,13 @@ pub fn read_all_formulas(workbook: &mut Workbook, dynamic: bool) {
         .filter_map(|sheet| workbook.worksheet(sheet).map(|ws| (sheet, ws)))
         .flat_map(|(sheet, ws)| {
             ws.formula_cells()
-                .map(move |(row, col, _)| FileFormula { sheet, row, col, dynamic, shared: None })
+                .map(move |(row, col, _)| FileFormula {
+                    sheet,
+                    row,
+                    col,
+                    dynamic,
+                    shared: None,
+                })
                 .collect::<Vec<_>>()
         })
         .collect();
@@ -147,7 +159,11 @@ fn shown(text: &str, legacy: bool, names: &Names) -> Option<String> {
     if !legacy && !marked {
         return None;
     }
-    let (target, changed) = if legacy { walk(parsed.clone(), Place::One, names) } else { (parsed.clone(), false) };
+    let (target, changed) = if legacy {
+        walk(parsed.clone(), Place::One, names)
+    } else {
+        (parsed.clone(), false)
+    };
     if !changed && !marked {
         return None;
     }
@@ -179,7 +195,11 @@ pub fn saved_formula(text: &str, names: &Names) -> (String, bool) {
         return (spelled(text, &parsed, &plain), false);
     }
     let (_, more) = walk(expr.clone(), Place::One, names);
-    let text = if has_marks(&expr) { file_formula_text(&expr) } else { spelled(text, &parsed, &expr) };
+    let text = if has_marks(&expr) {
+        file_formula_text(&expr)
+    } else {
+        spelled(text, &parsed, &expr)
+    };
     (text, more)
 }
 
@@ -206,7 +226,9 @@ fn respell(text: &str, from: &FormulaExpr, to: &FormulaExpr) -> Option<String> {
     let before = tokens(&formula_text(from))?;
     let after = tokens(&formula_text(to))?;
     let same = |a: &Token, b: &Token| discriminant(a) == discriminant(b);
-    if original.len() != before.len() || original.iter().zip(&before).any(|(o, b)| !same(&o.1, &b.1)) {
+    if original.len() != before.len()
+        || original.iter().zip(&before).any(|(o, b)| !same(&o.1, &b.1))
+    {
         return None;
     }
     let mut out = String::with_capacity(text.len() + 8);
@@ -241,7 +263,13 @@ fn respell(text: &str, from: &FormulaExpr, to: &FormulaExpr) -> Option<String> {
 fn has_marks(expr: &FormulaExpr) -> bool {
     let mut found = false;
     visit(expr, &mut |e| {
-        found |= matches!(e, FormulaExpr::UnaryOp { op: UnaryOperator::ImplicitIntersection | UnaryOperator::SpillRange, .. });
+        found |= matches!(
+            e,
+            FormulaExpr::UnaryOp {
+                op: UnaryOperator::ImplicitIntersection | UnaryOperator::SpillRange,
+                ..
+            }
+        );
     });
     found
 }
@@ -265,24 +293,39 @@ fn visit(expr: &FormulaExpr, f: &mut dyn FnMut(&FormulaExpr)) {
 /// `expr` with `f` applied to each of its direct parts.
 fn map_parts(expr: FormulaExpr, f: &mut dyn FnMut(FormulaExpr) -> FormulaExpr) -> FormulaExpr {
     match expr {
-        FormulaExpr::UnaryOp { op, operand } => FormulaExpr::UnaryOp { op, operand: Box::new(f(*operand)) },
-        FormulaExpr::BinaryOp { op, left, right } => {
-            FormulaExpr::BinaryOp { op, left: Box::new(f(*left)), right: Box::new(f(*right)) }
-        }
-        FormulaExpr::Function { name, args } => FormulaExpr::Function { name, args: args.into_iter().map(&mut *f).collect() },
-        FormulaExpr::ExternalFunction { book, name, args } => {
-            FormulaExpr::ExternalFunction { book, name, args: args.into_iter().map(&mut *f).collect() }
-        }
-        FormulaExpr::Array(rows) => {
-            FormulaExpr::Array(rows.into_iter().map(|row| row.into_iter().map(&mut *f).collect()).collect())
-        }
+        FormulaExpr::UnaryOp { op, operand } => FormulaExpr::UnaryOp {
+            op,
+            operand: Box::new(f(*operand)),
+        },
+        FormulaExpr::BinaryOp { op, left, right } => FormulaExpr::BinaryOp {
+            op,
+            left: Box::new(f(*left)),
+            right: Box::new(f(*right)),
+        },
+        FormulaExpr::Function { name, args } => FormulaExpr::Function {
+            name,
+            args: args.into_iter().map(&mut *f).collect(),
+        },
+        FormulaExpr::ExternalFunction { book, name, args } => FormulaExpr::ExternalFunction {
+            book,
+            name,
+            args: args.into_iter().map(&mut *f).collect(),
+        },
+        FormulaExpr::Array(rows) => FormulaExpr::Array(
+            rows.into_iter()
+                .map(|row| row.into_iter().map(&mut *f).collect())
+                .collect(),
+        ),
         other => other,
     }
 }
 
 fn without_at(expr: FormulaExpr) -> FormulaExpr {
     match expr {
-        FormulaExpr::UnaryOp { op: UnaryOperator::ImplicitIntersection, operand } => without_at(*operand),
+        FormulaExpr::UnaryOp {
+            op: UnaryOperator::ImplicitIntersection,
+            operand,
+        } => without_at(*operand),
         other => map_parts(other, &mut without_at),
     }
 }
@@ -291,9 +334,10 @@ fn without_at(expr: FormulaExpr) -> FormulaExpr {
 /// One on a LET name or another workbook's name stays.
 fn without_redundant_at(expr: FormulaExpr, names: &Names) -> FormulaExpr {
     match expr {
-        FormulaExpr::UnaryOp { op: UnaryOperator::ImplicitIntersection, operand }
-            if !could_be_array(&operand, names, Unknown::Dropping) =>
-        {
+        FormulaExpr::UnaryOp {
+            op: UnaryOperator::ImplicitIntersection,
+            operand,
+        } if !could_be_array(&operand, names, Unknown::Dropping) => {
             without_redundant_at(*operand, names)
         }
         other => map_parts(other, &mut |part| without_redundant_at(part, names)),
@@ -333,7 +377,10 @@ fn place_of(def: &FunctionDef, position: usize, count: usize, call: Place) -> Pl
 }
 
 fn at(expr: FormulaExpr) -> FormulaExpr {
-    FormulaExpr::UnaryOp { op: UnaryOperator::ImplicitIntersection, operand: Box::new(expr) }
+    FormulaExpr::UnaryOp {
+        op: UnaryOperator::ImplicitIntersection,
+        operand: Box::new(expr),
+    }
 }
 
 /// `expr` with the `@` the old rules put at `place`, and whether it gained any.
@@ -348,7 +395,11 @@ fn walk_into(expr: FormulaExpr, place: Place, names: &Names, changed: &mut bool)
         return array_place(expr, names, changed);
     }
     match expr {
-        FormulaExpr::BinaryOp { op: op @ (BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect), left, right } => {
+        FormulaExpr::BinaryOp {
+            op: op @ (BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect),
+            left,
+            right,
+        } => {
             let reference = FormulaExpr::BinaryOp {
                 op,
                 left: Box::new(walk_into(*left, Place::Whole, names, changed)),
@@ -361,11 +412,18 @@ fn walk_into(expr: FormulaExpr, place: Place, names: &Names, changed: &mut bool)
             left: Box::new(walk_into(*left, Place::One, names, changed)),
             right: Box::new(walk_into(*right, Place::One, names, changed)),
         },
-        FormulaExpr::UnaryOp { op: op @ (UnaryOperator::Negate | UnaryOperator::Plus | UnaryOperator::Percent), operand } => {
-            FormulaExpr::UnaryOp { op, operand: Box::new(walk_into(*operand, Place::One, names, changed)) }
-        }
+        FormulaExpr::UnaryOp {
+            op: op @ (UnaryOperator::Negate | UnaryOperator::Plus | UnaryOperator::Percent),
+            operand,
+        } => FormulaExpr::UnaryOp {
+            op,
+            operand: Box::new(walk_into(*operand, Place::One, names, changed)),
+        },
         // `(A1,B1)` and `(A1:A3)` take the `@` outside their parentheses.
-        FormulaExpr::UnaryOp { op: UnaryOperator::Paren, operand } => {
+        FormulaExpr::UnaryOp {
+            op: UnaryOperator::Paren,
+            operand,
+        } => {
             let inner = FormulaExpr::UnaryOp {
                 op: UnaryOperator::Paren,
                 operand: Box::new(walk_into(*operand, Place::Whole, names, changed)),
@@ -379,7 +437,8 @@ fn walk_into(expr: FormulaExpr, place: Place, names: &Names, changed: &mut bool)
                 .into_iter()
                 .enumerate()
                 .map(|(position, arg)| {
-                    let takes = def.map_or(Place::Whole, |def| place_of(def, position, count, place));
+                    let takes =
+                        def.map_or(Place::Whole, |def| place_of(def, position, count, place));
                     walk_into(arg, takes, names, changed)
                 })
                 .collect();
@@ -388,7 +447,10 @@ fn walk_into(expr: FormulaExpr, place: Place, names: &Names, changed: &mut bool)
         reference @ (FormulaExpr::RangeRef(_)
         | FormulaExpr::NameRef(_)
         | FormulaExpr::StructuredRef(_)
-        | FormulaExpr::UnaryOp { op: UnaryOperator::SpillRange, .. }) => one_value(reference, place, names, changed),
+        | FormulaExpr::UnaryOp {
+            op: UnaryOperator::SpillRange,
+            ..
+        }) => one_value(reference, place, names, changed),
         other => other,
     }
 }
@@ -439,10 +501,19 @@ fn could_be_array(expr: &FormulaExpr, names: &Names, unknown: Unknown) -> bool {
         FormulaExpr::NameRef(name) => names.many(name, unknown),
         FormulaExpr::StructuredRef(sr) => !sr.specifiers.contains(&StructuredRefSpecifier::ThisRow),
         FormulaExpr::Array(rows) => rows.len() > 1 || rows.first().is_some_and(|row| row.len() > 1),
-        FormulaExpr::BinaryOp { op: BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect, .. } => true,
+        FormulaExpr::BinaryOp {
+            op: BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect,
+            ..
+        } => true,
         FormulaExpr::BinaryOp { left, right, .. } => could(left) || could(right),
-        FormulaExpr::UnaryOp { op: UnaryOperator::ImplicitIntersection, .. } => false,
-        FormulaExpr::UnaryOp { op: UnaryOperator::SpillRange, .. } => true,
+        FormulaExpr::UnaryOp {
+            op: UnaryOperator::ImplicitIntersection,
+            ..
+        } => false,
+        FormulaExpr::UnaryOp {
+            op: UnaryOperator::SpillRange,
+            ..
+        } => true,
         FormulaExpr::UnaryOp { operand, .. } => could(operand),
         FormulaExpr::ExternalFunction { .. } => true,
         FormulaExpr::Function { name, args } => match registry().get(function_name(name)) {
@@ -452,10 +523,9 @@ fn could_be_array(expr: &FormulaExpr, names: &Names, unknown: Unknown) -> bool {
                 Returns::Array | Returns::Reference => true,
                 Returns::PerCell => args.iter().any(could),
                 Returns::Last => args.last().is_some_and(could),
-                Returns::Value => args
-                    .iter()
-                    .enumerate()
-                    .any(|(position, arg)| place_of(def, position, args.len(), Place::One) == Place::One && could(arg)),
+                Returns::Value => args.iter().enumerate().any(|(position, arg)| {
+                    place_of(def, position, args.len(), Place::One) == Place::One && could(arg)
+                }),
             },
         },
         _ => false,
@@ -467,7 +537,10 @@ mod tests {
     use super::*;
 
     fn names() -> Names {
-        Names { many: ["PRICES".to_string()].into_iter().collect(), one: ["TAXRATE".to_string()].into_iter().collect() }
+        Names {
+            many: ["PRICES".to_string()].into_iter().collect(),
+            one: ["TAXRATE".to_string()].into_iter().collect(),
+        }
     }
 
     fn shown_legacy(text: &str) -> String {
@@ -478,27 +551,60 @@ mod tests {
     fn ranges_where_one_value_is_expected_get_an_at() {
         assert_eq!(shown_legacy("=A1:A3"), "=@A1:A3");
         assert_eq!(shown_legacy("=SUM(A1:A3*B1:B3)"), "=SUM(@A1:A3*@B1:B3)");
-        assert_eq!(shown_legacy("=SUMIFS(B:B,A:A,C1:C3)"), "=SUMIFS(B:B,A:A,@C1:C3)");
-        assert_eq!(shown_legacy("=NETWORKDAYS(A:A,B:B)"), "=NETWORKDAYS(@A:A,@B:B)");
-        assert_eq!(shown_legacy("=MAX(IF(A1:A9=1,B1:B9))"), "=MAX(IF(@A1:A9=1,B1:B9))");
-        assert_eq!(shown_legacy("=IF(A1>1,B1:B3,C1)+0"), "=IF(A1>1,@B1:B3,C1)+0");
+        assert_eq!(
+            shown_legacy("=SUMIFS(B:B,A:A,C1:C3)"),
+            "=SUMIFS(B:B,A:A,@C1:C3)"
+        );
+        assert_eq!(
+            shown_legacy("=NETWORKDAYS(A:A,B:B)"),
+            "=NETWORKDAYS(@A:A,@B:B)"
+        );
+        assert_eq!(
+            shown_legacy("=MAX(IF(A1:A9=1,B1:B9))"),
+            "=MAX(IF(@A1:A9=1,B1:B9))"
+        );
+        assert_eq!(
+            shown_legacy("=IF(A1>1,B1:B3,C1)+0"),
+            "=IF(A1>1,@B1:B3,C1)+0"
+        );
         assert_eq!(shown_legacy("=INDEX(A:A,5)"), "=@INDEX(A:A,5)");
         assert_eq!(shown_legacy("=Prices*2"), "=@Prices*2");
         assert_eq!(shown_legacy("=(A1,B1)"), "=@(A1,B1)");
-        assert_eq!(shown_legacy("=SUMPRODUCT(IF(A1:A3>1,1,0))"), "=SUMPRODUCT(IF(@A1:A3>1,1,0))");
-        assert_eq!(shown_legacy("=SUM(MID(A1,ROW(A1:A9),1)*1)"), "=SUM(MID(A1,@ROW(A1:A9),1)*1)");
+        assert_eq!(
+            shown_legacy("=SUMPRODUCT(IF(A1:A3>1,1,0))"),
+            "=SUMPRODUCT(IF(@A1:A3>1,1,0))"
+        );
+        assert_eq!(
+            shown_legacy("=SUM(MID(A1,ROW(A1:A9),1)*1)"),
+            "=SUM(MID(A1,@ROW(A1:A9),1)*1)"
+        );
         assert_eq!(shown_legacy("=SUM(A2#*B2#)"), "=SUM(@A2#*@B2#)");
         assert_eq!(shown_legacy("=A1:A3%"), "=@A1:A3%");
-        assert_eq!(shown_legacy("=SUM(IFERROR(1/0,A1:A3))"), "=SUM(IFERROR(1/0,@A1:A3))");
-        assert_eq!(shown_legacy("=SUM(SWITCH(A1,1,B1:B3,C1:C3))"), "=SUM(SWITCH(A1,1,B1:B3,C1:C3))");
+        assert_eq!(
+            shown_legacy("=SUM(IFERROR(1/0,A1:A3))"),
+            "=SUM(IFERROR(1/0,@A1:A3))"
+        );
+        assert_eq!(
+            shown_legacy("=SUM(SWITCH(A1,1,B1:B3,C1:C3))"),
+            "=SUM(SWITCH(A1,1,B1:B3,C1:C3))"
+        );
     }
 
     #[test]
     fn a_dynamic_files_formulas_change_only_where_they_spell_at() {
         let mut workbook = Workbook::new();
         let sheet = workbook.worksheet_mut(0).unwrap();
-        sheet.set_formula_with_cached_value_at(0, 0, "=_xlfn.SINGLE(B1:B3)+_xlfn.ANCHORARRAY(C1)", 0.0.into()).unwrap();
-        sheet.set_formula_with_cached_value_at(1, 0, "=SUM(B1:B3*2)", 0.0.into()).unwrap();
+        sheet
+            .set_formula_with_cached_value_at(
+                0,
+                0,
+                "=_xlfn.SINGLE(B1:B3)+_xlfn.ANCHORARRAY(C1)",
+                0.0.into(),
+            )
+            .unwrap();
+        sheet
+            .set_formula_with_cached_value_at(1, 0, "=SUM(B1:B3*2)", 0.0.into())
+            .unwrap();
         read_all_formulas(&mut workbook, true);
         let sheet = workbook.worksheet(0).unwrap();
         assert_eq!(sheet.get_formula_at(0, 0), Some("=@B1:B3+C1#"));
@@ -507,7 +613,10 @@ mod tests {
 
     #[test]
     fn only_the_at_change_in_the_text() {
-        assert_eq!(shown_legacy("= SUM( A1:A3 * b1:b3 )\n+MyUdf(1E+20,[1]$A$1)"), "= SUM( @A1:A3 * @b1:b3 )\n+@MyUdf(1E+20,[1]$A$1)");
+        assert_eq!(
+            shown_legacy("= SUM( A1:A3 * b1:b3 )\n+MyUdf(1E+20,[1]$A$1)"),
+            "= SUM( @A1:A3 * @b1:b3 )\n+@MyUdf(1E+20,[1]$A$1)"
+        );
         let (saved, dynamic) = saved_formula("= SUM( @A1:A3 * @b1:b3 )", &names());
         assert_eq!((saved.as_str(), dynamic), ("= SUM( A1:A3 * b1:b3 )", false));
     }
@@ -536,9 +645,20 @@ mod tests {
 
     #[test]
     fn what_the_rules_build_prints_and_parses_back() {
-        for text in ["=A1:A3%", "=SUM(A2#*B2#)", "=-A1:A3", "=(A1:A3)*2+(B1:B3*2)", "=A1:B3 B2:C4", "=INDEX(A:A,5)%"] {
+        for text in [
+            "=A1:A3%",
+            "=SUM(A2#*B2#)",
+            "=-A1:A3",
+            "=(A1:A3)*2+(B1:B3*2)",
+            "=A1:B3 B2:C4",
+            "=INDEX(A:A,5)%",
+        ] {
             let legacy = intersections(parse_formula(text).unwrap(), &names());
-            assert_eq!(parse_formula(&formula_text(&legacy)).unwrap(), legacy, "{text}");
+            assert_eq!(
+                parse_formula(&formula_text(&legacy)).unwrap(),
+                legacy,
+                "{text}"
+            );
         }
     }
 
@@ -546,11 +666,26 @@ mod tests {
     fn saving_marks_formulas_that_read_differently() {
         let names = names();
         let saved = |text: &str| saved_formula(text, &names);
-        assert_eq!(saved("=SUM(A1:A3*B1:B3)"), ("=SUM(A1:A3*B1:B3)".to_string(), true));
-        assert_eq!(saved("=SUM(@A1:A3*@B1:B3)"), ("=SUM(A1:A3*B1:B3)".to_string(), false));
-        assert_eq!(saved("=SUM(@A1:A3)"), ("=SUM(_xlfn.SINGLE(A1:A3))".to_string(), false));
-        assert_eq!(saved("=@A1+@SUM(A1:A3)"), ("=A1+SUM(A1:A3)".to_string(), false));
-        assert_eq!(saved("=FILTER(A1:A3,A1:A3>1)"), ("=FILTER(A1:A3,A1:A3>1)".to_string(), true));
+        assert_eq!(
+            saved("=SUM(A1:A3*B1:B3)"),
+            ("=SUM(A1:A3*B1:B3)".to_string(), true)
+        );
+        assert_eq!(
+            saved("=SUM(@A1:A3*@B1:B3)"),
+            ("=SUM(A1:A3*B1:B3)".to_string(), false)
+        );
+        assert_eq!(
+            saved("=SUM(@A1:A3)"),
+            ("=SUM(_xlfn.SINGLE(A1:A3))".to_string(), false)
+        );
+        assert_eq!(
+            saved("=@A1+@SUM(A1:A3)"),
+            ("=A1+SUM(A1:A3)".to_string(), false)
+        );
+        assert_eq!(
+            saved("=FILTER(A1:A3,A1:A3>1)"),
+            ("=FILTER(A1:A3,A1:A3>1)".to_string(), true)
+        );
         assert!(saved("=SUM(OFFSET(A1,0,0,3,1)*B1)").1);
         assert!(saved("=SUM(--(A2#>5))").1);
         assert!(saved("=MAX(A2#-B1)").1);
@@ -558,7 +693,10 @@ mod tests {
         assert!(!saved("=TaxRate*A1").1);
         assert!(!saved("=VLOOKUP(A1,C:D,2,FALSE)").1);
         // An `@` on a LET name stays: the name may hold a range.
-        assert_eq!(saved("=LET(r,A1:A3,@r*2)").0, "=LET(r,A1:A3,_xlfn.SINGLE(r)*2)");
+        assert_eq!(
+            saved("=LET(r,A1:A3,@r*2)").0,
+            "=LET(r,A1:A3,_xlfn.SINGLE(r)*2)"
+        );
         assert_eq!(saved("=@TaxRate*2"), ("=TaxRate*2".to_string(), false));
     }
 }

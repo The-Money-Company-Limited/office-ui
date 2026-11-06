@@ -31,7 +31,7 @@ describe("undo and redo of a Ctrl+Shift+Enter array formula", () => {
     assert.equal(value(sheet, 1, 2), 4);
     const cell = { row: 1, col: 2 };
     const before = captureCellMutationState(sheet, cell);
-    assert.deepEqual(before.arrayFormula, { row: 0, col: 2, rows: 3, cols: 1, formula: "=A1:A3*2" });
+    assert.deepEqual(before.arrayFormula, { row: 0, col: 2, rows: 3, cols: 1, formula: "=A1:A3*2", values: [[2], [4], [6]] });
 
     sheet.setCell("C2", 9);
     const after = captureCellMutationState(sheet, cell);
@@ -63,6 +63,28 @@ describe("undo and redo of a Ctrl+Shift+Enter array formula", () => {
     workbook.calculate();
     assert.deepEqual([value(sheet, 0, 2), value(sheet, 1, 2), value(sheet, 2, 2)], [2, 4, 6]);
     assert.equal(sheet.arrayFormulaAt(1, 2)?.rows, 3);
+  });
+
+  it("shows the block's values before the workbook is calculated", () => {
+    // A large workbook isn't calculated after undo.
+    const { workbook, sheet } = workbookWithBlock();
+    sheet.setFormula("A3", "=1/0");
+    workbook.calculate();
+    const cell = { row: 1, col: 2 };
+    const before = captureCellMutationState(sheet, cell);
+    sheet.setCell("C2", 9);
+    applyCellMutationState(sheet, cell, before);
+    assert.deepEqual([value(sheet, 0, 2), value(sheet, 1, 2), value(sheet, 2, 2)], [2, 4, "#DIV/0!"]);
+    assert.equal(sheet.getCalculatedValueAt(2, 2).is_error, true, "an error stays an error");
+  });
+
+  it("puts a blank cell back blank", () => {
+    const { sheet } = workbookWithBlock();
+    const cell = { row: 5, col: 0 };
+    const before = captureCellMutationState(sheet, cell);
+    sheet.setCell("A6", "x");
+    applyCellMutationState(sheet, cell, before);
+    assert.equal(sheet.getCellAt(5, 0).is_empty, true);
   });
 
   it("keeps the styles of the block's cells", () => {

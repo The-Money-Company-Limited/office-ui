@@ -3226,8 +3226,8 @@ fn push_url_moniker_payload(buf: &mut Vec<u8>, url: &str) {
 
 /// Emit cell records (BLANK, NUMBER, BOOLERR, LABELSST, FORMULA) for
 /// every non-empty cell in `sheet`, sorted in row-major order.
-/// Spill-target cells are silently skipped (dynamic-array machinery;
-/// deferred). Formula cells with an unsupported AST shape (named
+/// A spilled or Ctrl+Shift+Enter array's cells are written as the values
+/// they show. Formula cells with an unsupported AST shape (named
 /// ranges, structured refs, function calls, etc.) fall back to
 /// emitting their cached value as a static cell.
 ///
@@ -3610,8 +3610,19 @@ fn compile_ptgs_with_context(
         }
         // `@x` is how a formula from before dynamic arrays reads x where one value is expected:
         // a .xls file says the same with a value-class token.
-        FormulaExpr::UnaryOp { op: UnaryOperator::ImplicitIntersection, operand } => {
-            compile_ptgs_with_context(operand, out, extra, externsheet, names, addins, OperandClass::V)?;
+        FormulaExpr::UnaryOp {
+            op: UnaryOperator::ImplicitIntersection,
+            operand,
+        } => {
+            compile_ptgs_with_context(
+                operand,
+                out,
+                extra,
+                externsheet,
+                names,
+                addins,
+                OperandClass::V,
+            )?;
         }
         FormulaExpr::UnaryOp { op, operand } => {
             // Unary value operators force their operand to V-class even
@@ -3962,7 +3973,7 @@ fn func_token_class(iftab: u16, context: OperandClass) -> OperandClass {
     }
 }
 
-/// PtgFunc opcode for the given class: R=0x21, V=0x41 (A=0x61 unused here).
+/// PtgFunc opcode for the given class: R=0x21, V=0x41, A=0x61.
 fn ptg_func_opcode(class: OperandClass) -> u8 {
     match class {
         OperandClass::R => 0x21,
@@ -3971,7 +3982,7 @@ fn ptg_func_opcode(class: OperandClass) -> u8 {
     }
 }
 
-/// PtgFuncVar opcode for the given class: R=0x22, V=0x42 (A=0x62 unused here).
+/// PtgFuncVar opcode for the given class: R=0x22, V=0x42, A=0x62.
 fn ptg_func_var_opcode(class: OperandClass) -> u8 {
     match class {
         OperandClass::R => 0x22,

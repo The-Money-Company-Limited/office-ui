@@ -66,7 +66,6 @@ import {
   applyCellMutationState,
   applyCellMutationStates,
   captureCellMutationState as captureWorksheetCellState,
-  normalizeCellValue,
   type CellMutationState
 } from "./cell-history";
 import { safeCalculate, tryRecalculate } from "./safe-calculate";
@@ -1365,6 +1364,10 @@ function pushHistoryEntry(stack: HistoryEntry[], entry: HistoryEntry) {
   if (stack.length > HISTORY_LIMIT) {
     stack.shift();
   }
+}
+
+function normalizeCellValue(value: unknown) {
+  return value ?? "";
 }
 
 function cloneCellStyle(style: unknown): unknown {

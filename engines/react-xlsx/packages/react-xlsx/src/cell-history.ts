@@ -2,13 +2,17 @@ import type { CellStyle, Worksheet } from "../vendor/sheets-wasm/duke_sheets_was
 import { cellAddressToA1 } from "./range-reference.ts";
 import type { XlsxCellAddress } from "./types";
 
-/** A Ctrl+Shift+Enter array formula: its top-left cell, extent and formula. */
+/**
+ * A Ctrl+Shift+Enter array formula: its top-left cell, extent and formula, and the values its
+ * cells showed, which undo puts back as they were (`setArrayFormula` takes them).
+ */
 export type ArrayFormulaBlock = {
   col: number;
   cols: number;
   formula: string;
   row: number;
   rows: number;
+  values: unknown[][];
 };
 
 /**
@@ -21,11 +25,6 @@ export type CellMutationState = {
   style: CellStyle | null;
   value: unknown;
 };
-
-/** A cell's value as it is set back: an empty cell is the empty string. */
-export function normalizeCellValue(value: unknown) {
-  return value ?? "";
-}
 
 export function captureCellMutationState(worksheet: Worksheet, cell: XlsxCellAddress): CellMutationState {
   const arrayFormula = (worksheet.arrayFormulaAt(cell.row, cell.col) as ArrayFormulaBlock | null) ?? undefined;
@@ -40,12 +39,12 @@ export function captureCellMutationState(worksheet: Worksheet, cell: XlsxCellAdd
 export function applyCellMutationState(worksheet: Worksheet, cell: XlsxCellAddress, state: CellMutationState) {
   const block = state.arrayFormula;
   if (block) {
-    // The block's other cells are filled when the workbook is calculated.
-    worksheet.setArrayFormula(cellAddressToA1(block), block.formula, block.rows, block.cols);
+    // Its cells show the values they had, also when the workbook isn't calculated after undo.
+    worksheet.setArrayFormula(cellAddressToA1(block), block.formula, block.values);
   } else if (state.formula) {
     worksheet.setFormula(cellAddressToA1(cell), state.formula);
   } else {
-    worksheet.setCell(cellAddressToA1(cell), normalizeCellValue(state.value));
+    worksheet.setCell(cellAddressToA1(cell), state.value ?? null);
   }
 
   // A cell that had no style gets the default one back, dropping a format typing gave it.

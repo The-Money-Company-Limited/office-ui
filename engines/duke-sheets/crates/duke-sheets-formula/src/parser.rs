@@ -50,7 +50,10 @@ pub(crate) fn tokens(formula: &str) -> Option<Vec<(std::ops::Range<usize>, Token
     let mut parser = FormulaParser::new(body);
     let mut out = Vec::new();
     while *parser.current_token() != Token::Eof {
-        out.push((offset + parser.token_start..offset + parser.pos, parser.current_token().clone()));
+        out.push((
+            offset + parser.token_start..offset + parser.pos,
+            parser.current_token().clone(),
+        ));
         parser.consume();
     }
     Some(out)
@@ -809,17 +812,24 @@ impl<'a> FormulaParser<'a> {
         // Parse primary (via intersection layer, which folds Space
         // tokens into BinaryOp(Intersect)), then check for postfix
         // operators (%, #).
-        let mut expr = if at && matches!(self.current_token(), Token::At | Token::Minus | Token::Plus) {
-            self.parse_unary()?
-        } else {
-            self.parse_intersect()?
-        };
+        let mut expr =
+            if at && matches!(self.current_token(), Token::At | Token::Minus | Token::Plus) {
+                self.parse_unary()?
+            } else {
+                self.parse_intersect()?
+            };
         if at {
             while matches!(self.current_token(), Token::Hash) {
                 self.consume();
-                expr = FormulaExpr::UnaryOp { op: UnaryOperator::SpillRange, operand: Box::new(expr) };
+                expr = FormulaExpr::UnaryOp {
+                    op: UnaryOperator::SpillRange,
+                    operand: Box::new(expr),
+                };
             }
-            expr = FormulaExpr::UnaryOp { op: UnaryOperator::ImplicitIntersection, operand: Box::new(expr) };
+            expr = FormulaExpr::UnaryOp {
+                op: UnaryOperator::ImplicitIntersection,
+                operand: Box::new(expr),
+            };
         }
 
         loop {

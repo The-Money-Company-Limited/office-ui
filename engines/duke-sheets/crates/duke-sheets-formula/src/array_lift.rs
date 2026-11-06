@@ -34,31 +34,47 @@ pub fn fit_array(result: &FormulaValue, rows: usize, cols: usize) -> Vec<Vec<For
     (0..rows)
         .map(|r| {
             (0..cols)
-                .map(|c| broadcast_at(&data, d, r, c).cloned().unwrap_or(FormulaValue::Error(CellError::Na)))
+                .map(|c| {
+                    broadcast_at(&data, d, r, c)
+                        .cloned()
+                        .unwrap_or(FormulaValue::Error(CellError::Na))
+                })
                 .collect()
         })
         .collect()
 }
 
 /// Whether an argument's value comes from cells: a reference, a defined name, a LET name bound to
-/// a reference, or a function that hands one through (INDEX, OFFSET, XLOOKUP, IF(c,A1,B1), LET's
-/// result). Anything else is typed into the formula, including IF(1,"5") and other functions'
-/// results.
+/// a reference, or a function that hands one through (INDEX, OFFSET, XLOOKUP, IF(c,A1,B1),
+/// IFERROR(A1,0), LET's result). Anything else is typed into the formula, including IF(A1,"5")
+/// and other functions' results.
 fn from_cells(expr: &FormulaExpr, ctx: &EvaluationContext) -> bool {
     match expr {
         FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::StructuredRef(_) | FormulaExpr::ExternalRef(_) => true,
-        FormulaExpr::NameRef(name) => matches!(ctx.local(name), None | Some(crate::lambda::Binding::Reference(_))),
+        FormulaExpr::NameRef(name) => {
+            matches!(ctx.local(name), None | Some(crate::lambda::Binding::Reference(_)))
+        }
         // `@A1:A9` reads one cell of the range.
-        FormulaExpr::UnaryOp { op: crate::ast::UnaryOperator::ImplicitIntersection, operand } => from_cells(operand, ctx),
+        FormulaExpr::UnaryOp {
+            op: crate::ast::UnaryOperator::ImplicitIntersection,
+            operand,
+        } => from_cells(operand, ctx),
         // These hand back one of their arguments, so the value is from cells when an argument is.
         FormulaExpr::Function { name, args } => {
             let name = crate::evaluator::function_name(name);
             match crate::functions::registry().get(name) {
                 Some(def) => match def.returns {
                     crate::functions::Returns::Reference => true,
-                    crate::functions::Returns::Last => args.last().is_some_and(|arg| from_cells(arg, ctx)),
-                    _ if def.result_args != crate::functions::ArgPositions::None => args.iter().any(|arg| from_cells(arg, ctx)),
-                    _ => false,
+                    crate::functions::Returns::Last => {
+                        args.last().is_some_and(|arg| from_cells(arg, ctx))
+                    }
+                    // IFERROR and IFNA take values, and hand back one of them as it is.
+                    _ if matches!(name, "IFERROR" | "IFNA") => {
+                        args.iter().any(|arg| from_cells(arg, ctx))
+                    }
+                    _ => args.iter().enumerate().any(|(i, arg)| {
+                        def.result_args.includes_in(i, args.len()) && from_cells(arg, ctx)
+                    }),
                 },
                 None => false,
             }

@@ -580,7 +580,9 @@ fn resolve_sheet_prefix(ctx: &FormulaContext, extern_sheet_idx: u16) -> String {
                     .get(entry.last_sheet as usize)
                     .cloned()
                     .unwrap_or_default();
-                if crate::print::sheet_needs_quotes(&first_raw) || crate::print::sheet_needs_quotes(&last_raw) {
+                if crate::print::sheet_needs_quotes(&first_raw)
+                    || crate::print::sheet_needs_quotes(&last_raw)
+                {
                     format!(
                         "'{}'",
                         format!(

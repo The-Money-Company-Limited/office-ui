@@ -14,7 +14,7 @@ use crate::functions::{registry, ArgClass};
 
 /// The class a .xls or .xlsb token is written with ([MS-XLS] §2.5.198), encoded in the low bits
 /// of certain PTG opcodes (PtgRef 0x24=R, 0x44=V, 0x64=A; PtgArea 0x25=R, 0x45=V, 0x65=A). A
-/// function argument's comes from its class in the registry (`function_arg_class`).
+/// function argument's class comes from the registry (`function_arg_class`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperandClass {
     /// Reference class — operand must be a cell/range/name reference.
@@ -108,11 +108,11 @@ pub fn function_is_fixed_arity(iftab: u16, actual_argc: usize) -> bool {
 /// function whose Ftab index is `iftab`. Defaults to V for unrecognized
 /// functions.
 ///
-/// Reads [`FunctionDef::arg_classes`] (per-position overrides) first, then
-/// falls back to [`FunctionDef::default_arg_class`].
+/// The class is [`FunctionDef::arg_class`]: the argument's entry in `arg_classes`, else V for the
+/// criteria of COUNTIFS, SUMIFS and the like, else `default_arg_class`. A reference read as an
+/// array (RA) is written R.
 ///
-/// [`FunctionDef::arg_classes`]: crate::functions::FunctionDef::arg_classes
-/// [`FunctionDef::default_arg_class`]: crate::functions::FunctionDef::default_arg_class
+/// [`FunctionDef::arg_class`]: crate::functions::FunctionDef::arg_class
 pub fn function_arg_class(iftab: u16, arg_idx: usize) -> OperandClass {
     let Some(def) = registry().get_by_iftab(iftab) else {
         return OperandClass::V;
