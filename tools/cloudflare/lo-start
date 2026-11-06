@@ -1,14 +1,20 @@
 #!/bin/bash
-# Starts LibreOffice listening for URP on port 2002, where the duke-sheets integration tests look
-# for it before they try Docker, which the box doesn't have. Returns once it accepts connections.
-# One instance serves one test at a time: run the tests with --test-threads=1.
-# The tests and LibreOffice exchange fixture files here (duke-sheets-test-harness SHARED_DIR).
-mkdir -p /tmp/duke-sheets-urp
-(echo > /dev/tcp/127.0.0.1/2002) 2>/dev/null && exit 0
-nohup soffice --headless --norestore --nologo \
-  --accept="socket,host=127.0.0.1,port=2002;urp;StarOffice.ComponentContext" >/tmp/soffice.log 2>&1 &
+# Starts LibreOffice listening for URP on port 2002, where the duke-sheets tests look for it before
+# they try Docker, which the box doesn't have, and restarts it if it dies, as the tests' Docker
+# image does. Returns once it accepts connections. `lo-start --restart` replaces a running one.
+up() { : </dev/tcp/127.0.0.1/2002; } 2>/dev/null
+if [ "$1" = --restart ] && [ -f /tmp/soffice.pid ]; then
+  kill -- "-$(cat /tmp/soffice.pid)" 2>/dev/null
+  while up; do sleep 0.2; done
+fi
+up && exit 0
+setsid nohup bash -c 'while :; do
+  soffice --headless --norestore --nologo --accept="socket,host=127.0.0.1,port=2002;urp;StarOffice.ComponentContext"
+  sleep 1
+done' >/tmp/soffice.log 2>&1 </dev/null &
+echo $! > /tmp/soffice.pid
 for _ in $(seq 60); do
-  (echo > /dev/tcp/127.0.0.1/2002) 2>/dev/null && exit 0
+  up && exit 0
   sleep 1
 done
 echo "LibreOffice didn't start within 60 s; see /tmp/soffice.log on the box." >&2
