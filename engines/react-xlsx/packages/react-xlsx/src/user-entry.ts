@@ -1,58 +1,66 @@
-import type { CellNumberFormat, Worksheet } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
+import type { CellStyle, NumberFormatInput, Worksheet } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
+import { cellAddressToA1 } from "./range-reference.ts";
+import type { XlsxCellAddress } from "./types";
 
 /** What a typed entry stores: a number, boolean or text, and the format it gives its cell. */
-export type UserEntry = { value: unknown; numberFormat?: CellNumberFormat };
+export type UserEntry = { value: unknown; numberFormat?: NumberFormatInput };
+
+/** Whether the cell has the Text (`@`) format, which keeps what is typed as text. */
+const hasTextFormat = (style: CellStyle | null | undefined) =>
+  style?.numberFormat.id === 49 || style?.numberFormat.formatString === "@";
 
 /**
- * The formats typing gives a cell (the engine's `coerce::typed_number`): dates, times and
- * percents. A cell showing one of these takes the format of whatever is typed next; any other
- * format is one the user chose.
+ * Reads text typed into a cell as Excel does. A leading apostrophe keeps the rest as text, and
+ * TRUE and FALSE are booleans. The engine reads numbers, percents, dates and times in the
+ * workbook's regional settings (`5/11/2026` is 5 November in en-GB, `1,5` is 1.5 in de-DE) and
+ * decides whether the cell's format changes: it stays for an entry of the same kind.
  */
-const TYPED_FORMAT_IDS = new Set([14, 15, 17, 18, 19, 20, 21, 22, 46]);
-const TYPED_PERCENT_FORMAT = "0.##########%";
-
-const formatKind = (format: CellNumberFormat) =>
-  format.isDateFormat ? "date" : format.formatString.includes("%") ? "percent" : "number";
-
-/**
- * Reads text typed into a cell as Excel does, in the workbook's regional settings: `5/11/2026` is
- * 5 November in en-GB and `1,5` is 1.5 in de-DE (the engine's `readTypedNumber`). A leading
- * apostrophe, or a Text (`@`) format on the cell, keeps the text as it is. A typed date, time or
- * percent gets its format unless the cell has one of the same kind that the user chose
- * (`dd mmm yyyy` stays for a typed date).
- */
-export function readUserEntry(text: string, worksheet: Worksheet, current?: CellNumberFormat | null): UserEntry {
+export function readUserEntry(text: string, worksheet: Worksheet, cell: XlsxCellAddress): UserEntry {
   if (text.startsWith("'")) return { value: text.slice(1) };
   const trimmed = text.trim();
-  if (!trimmed || current?.id === 49 || current?.formatString === "@") return { value: text };
+  if (!trimmed) return { value: text };
   if (/^(true|false)$/i.test(trimmed)) return { value: trimmed.toLowerCase() === "true" };
-  const typed = worksheet.readTypedNumber(trimmed);
-  if (!typed) return { value: text };
-  const { value, numberFormat } = typed;
-  if (!numberFormat || !current || current.formatType === "general") return { value, numberFormat };
-  const chosen = !TYPED_FORMAT_IDS.has(current.id ?? -1) && current.formatString !== TYPED_PERCENT_FORMAT;
-  return chosen && formatKind(current) === formatKind(numberFormat) ? { value } : { value, numberFormat };
+  return worksheet.readTypedNumberAt(cell.row, cell.col, trimmed) ?? { value: text };
 }
 
-/** Stores text typed or pasted into a cell (an A1 address) as Excel reads it. */
-export function enterUserText(worksheet: Worksheet, address: string, text: string): void {
-  const entry = readUserEntry(text, worksheet, worksheet.getCellStyle(address)?.numberFormat);
-  worksheet.setCell(address, entry.value);
-  if (entry.numberFormat) {
-    worksheet.setCellStyle(address, { numberFormat: entry.numberFormat });
+/**
+ * Stores text typed or pasted into a cell whose style is `style`, as Excel does. A cell with the
+ * Text format keeps the text as it is; otherwise an entry starting with `=` is a formula, and
+ * anything else is read by readUserEntry.
+ */
+export function enterUserText(worksheet: Worksheet, cell: XlsxCellAddress, text: string, style: CellStyle | null): void {
+  const address = cellAddressToA1(cell);
+  const entry = text.trim();
+  if (hasTextFormat(style)) {
+    worksheet.setCell(address, text);
+  } else if (entry.length > 1 && entry.startsWith("=")) {
+    worksheet.setFormula(address, entry);
+  } else {
+    const { value, numberFormat } = readUserEntry(text, worksheet, cell);
+    worksheet.setCell(address, value);
+    if (numberFormat) {
+      worksheet.setCellStyle(address, { numberFormat });
+    }
   }
 }
 
 /**
  * The cell's value as text to edit, which committed unchanged gives back the same value: text
- * that would read as something else (a number, a date, a formula) starts with an apostrophe.
+ * that would read as something else (a number, a date, a formula) starts with an apostrophe,
+ * except in a Text-formatted cell, which keeps whatever is typed.
  */
-export function cellInputText(worksheet: Worksheet, row: number, col: number): string {
-  const value = worksheet.getCellAt(row, col);
+export function cellInputText(worksheet: Worksheet, cell: XlsxCellAddress): string {
+  const value = worksheet.getCellAt(cell.row, cell.col);
   if (value.is_empty) return "";
-  const text = worksheet.getInputTextAt(row, col);
-  if (!value.is_text) return text;
-  const current = worksheet.getCellStyleAt(row, col)?.numberFormat;
-  const readsAsText = typeof readUserEntry(text, worksheet, current).value === "string";
-  return readsAsText && !text.startsWith("=") && !text.startsWith("'") ? text : `'${text}`;
+  const text = worksheet.getInputTextAt(cell.row, cell.col);
+  if (!value.is_text || hasTextFormat(worksheet.getCellStyleAt(cell.row, cell.col))) return text;
+  const readsAsText = !text.startsWith("=") && !text.startsWith("'") && typeof readUserEntry(text, worksheet, cell).value === "string";
+  return readsAsText ? text : `'${text}`;
+}
+
+/** The cell's number format, to put on the clipboard and paste with the value. */
+export function numberFormatInput(style: CellStyle | null): NumberFormatInput {
+  if (!style) return { formatType: "general" };
+  const { formatType, id, formatString } = style.numberFormat;
+  return formatType === "builtin" && id !== null ? { formatType, id } : { formatType, formatString };
 }

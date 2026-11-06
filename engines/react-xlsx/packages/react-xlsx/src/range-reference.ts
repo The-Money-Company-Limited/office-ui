@@ -26,6 +26,24 @@ function parseCell(value: string): XlsxCellAddress | null {
   return col === null || row === null ? null : { col, row };
 }
 
+/** The A1 letters of a zero-based column: 0 is A, 26 is AA. */
+function columnLabel(col: number): string {
+  let label = "";
+  let nextValue = col;
+
+  while (nextValue >= 0) {
+    label = String.fromCharCode(65 + (nextValue % 26)) + label;
+    nextValue = Math.floor(nextValue / 26) - 1;
+  }
+
+  return label;
+}
+
+/** The A1 address of a zero-based cell. */
+export function cellAddressToA1(cell: XlsxCellAddress): string {
+  return `${columnLabel(cell.col)}${cell.row + 1}`;
+}
+
 /** Parses one rectangular A1 reference into normalized, zero-based coordinates. */
 export function parseXlsxRange(reference: string): XlsxParsedRange | null {
   if (typeof reference !== "string") {

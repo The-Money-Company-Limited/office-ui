@@ -1,7 +1,7 @@
 import { editWorkbookStructure, mapStructuralSheetIndex, type XlsxStructuralEdit } from "./structural-edits";
-import { Workbook } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
+import { Workbook, type CellStyle, type NumberFormatInput } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import * as React from "react";
-import { cellInputText, enterUserText } from "./user-entry";
+import { cellInputText, enterUserText, numberFormatInput } from "./user-entry";
 import type {
   DrawingAnchor as DukeDrawingAnchor,
   DrawingColor as DukeDrawingColor,
@@ -63,7 +63,7 @@ import {
 } from "./comments";
 import { applyXlsxCut, captureXlsxCut, getXlsxInitialActiveCell } from "./selection-tools";
 import { safeCalculate, tryRecalculate } from "./safe-calculate";
-import { parseXlsxRange } from "./range-reference";
+import { cellAddressToA1, parseXlsxRange } from "./range-reference";
 import { canUseConfiguredWasmSourceInWorker, getSheetsWasmModule } from "./wasm";
 import { XlsxWorkerClient } from "./worker-client";
 import { normalizeWorkbookArrayBuffer } from "./zip-entry-names";
@@ -159,7 +159,7 @@ type SnapshotHistoryEntry = {
 
 type CellMutationState = {
   formula: string | null;
-  style: unknown;
+  style: CellStyle | null;
   value: unknown;
 };
 
@@ -392,6 +392,10 @@ type HistoryEntry = SnapshotHistoryEntry | CellEditHistoryEntry | RangeEditHisto
 type ClipboardMatrixCell = {
   colOffset: number;
   formula: string | null;
+  /** The cell's number format, pasted with its value. */
+  numberFormat?: NumberFormatInput;
+  /** The cell's value (a number, text or boolean); `value` is the text it shows. */
+  raw?: unknown;
   rowOffset: number;
   value: string;
 };
@@ -731,22 +735,6 @@ function resolveInheritedCellStyle(sheet: XlsxSheetData | null | undefined, row:
   }
 
   return null;
-}
-
-function columnLabel(col: number): string {
-  let label = "";
-  let nextValue = col;
-
-  while (nextValue >= 0) {
-    label = String.fromCharCode(65 + (nextValue % 26)) + label;
-    nextValue = Math.floor(nextValue / 26) - 1;
-  }
-
-  return label;
-}
-
-function cellAddressToA1(cell: XlsxCellAddress): string {
-  return `${columnLabel(cell.col)}${cell.row + 1}`;
 }
 
 function parseA1CellReference(reference: string): XlsxCellAddress | null {
@@ -1352,7 +1340,7 @@ function applyCellMutationState(
   }
 
   // A cell that had no style gets the default one back, dropping a format typing gave it.
-  if (state.style && typeof state.style === "object") {
+  if (state.style) {
     worksheet.setCellStyleAt(cell.row, cell.col, state.style);
   } else {
     worksheet.clearCellStyleAt(cell.row, cell.col);
@@ -3245,7 +3233,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     if (formula) return formula.startsWith("=") ? formula : `=${formula}`;
     const worksheet = getActiveWorksheet();
     if (!worksheet || !cell) return getCellDisplayValue(cell);
-    return cellInputText(worksheet, cell.row, cell.col);
+    return cellInputText(worksheet, cell);
   }, [getActiveWorksheet, getCellDisplayValue, getCellFormula]);
 
   const getClipboardData = React.useCallback((): XlsxClipboardData | null => {
@@ -3354,6 +3342,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         payload.cells.push({
           colOffset: col - normalized.start.col,
           formula,
+          numberFormat: numberFormatInput(worksheet.getCellStyleAt(row, col)),
+          raw: worksheet.getCellAt(row, col).toJs(),
           rowOffset: row - normalized.start.row,
           value
         });
@@ -4616,14 +4606,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       return;
     }
 
-    // An entry that starts with "=" is a formula, as in Excel; a leading
-    // apostrophe keeps it as text.
-    const entry = value.trim();
-    if (entry.length > 1 && entry.startsWith("=")) {
-      worksheet.setFormula(cellAddressToA1(cell), entry);
-    } else {
-      enterUserText(worksheet, cellAddressToA1(cell), value);
-    }
+    enterUserText(worksheet, cell, value, before.style);
     const after = captureCellMutationState(cell);
     if (!after) {
       return;
@@ -4990,29 +4973,16 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         if (!before) {
           continue;
         }
-        if (rawValue.startsWith("=") && rawValue.length > 1) {
-          worksheet.setFormula(cellAddressToA1(nextCell), rawValue);
-          const after = captureCellMutationState(nextCell);
-          if (!after) {
-            continue;
-          }
-          mutations.push({
-            after,
-            before,
-            cell: nextCell
-          });
-        } else {
-          enterUserText(worksheet, cellAddressToA1(nextCell), rawValue);
-          const after = captureCellMutationState(nextCell);
-          if (!after) {
-            continue;
-          }
-          mutations.push({
-            after,
-            before,
-            cell: nextCell
-          });
+        enterUserText(worksheet, nextCell, rawValue, before.style);
+        const after = captureCellMutationState(nextCell);
+        if (!after) {
+          continue;
         }
+        mutations.push({
+          after,
+          before,
+          cell: nextCell
+        });
       }
     }
 
@@ -5065,32 +5035,26 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       };
       const before = hasMergeOperations ? null : captureCellMutationState(nextCell);
 
+      // The copied value and number format; a payload without them (an older copy) has the
+      // text the cell showed.
       if (cell.formula) {
         worksheet.setFormula(cellAddressToA1(nextCell), cell.formula);
-        if (before) {
-          const after = captureCellMutationState(nextCell);
-          if (!after) {
-            continue;
-          }
-          mutations.push({
-            after,
-            before,
-            cell: nextCell
-          });
-        }
       } else {
-        worksheet.setCell(cellAddressToA1(nextCell), cell.value);
-        if (before) {
-          const after = captureCellMutationState(nextCell);
-          if (!after) {
-            continue;
-          }
-          mutations.push({
-            after,
-            before,
-            cell: nextCell
-          });
+        worksheet.setCell(cellAddressToA1(nextCell), cell.raw !== undefined ? cell.raw : cell.value);
+      }
+      if (cell.numberFormat) {
+        worksheet.setCellStyle(cellAddressToA1(nextCell), { numberFormat: cell.numberFormat });
+      }
+      if (before) {
+        const after = captureCellMutationState(nextCell);
+        if (!after) {
+          continue;
         }
+        mutations.push({
+          after,
+          before,
+          cell: nextCell
+        });
       }
     }
 

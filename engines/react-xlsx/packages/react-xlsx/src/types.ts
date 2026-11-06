@@ -1223,11 +1223,14 @@ export interface XlsxViewerController {
    * Sets the value for a cell in the active worksheet.
    *
    * The text is read as Excel reads typing, in the user's regional settings
-   * (the browser's language): booleans, numbers with the regional separators
-   * (`1,5` is 1.5 in de-DE), percents, dates in the regional day and month
-   * order (`5/11/2026` is 5 November in en-GB) and times become values with a
-   * matching number format. `yyyy-mm-dd` reads the same everywhere. Prefix text
-   * with an apostrophe to keep it as text.
+   * (the browser's language). A leading `=` makes a formula. Booleans, numbers
+   * with the regional separators (`1,5` is 1.5 in de-DE), percents, dates in
+   * the regional day and month order (`5/11/2026` is 5 November in en-GB) and
+   * times become values; `yyyy-mm-dd` reads the same everywhere. The cell keeps
+   * its own number format for an entry of the same kind (a date in a date
+   * format) and otherwise gets the format Excel gives the entry. Amounts with
+   * `$` stay text for now. A cell with the Text (`@`) format, or text with a
+   * leading apostrophe, keeps the text as it is.
    *
    * @param cell Zero-based row and column address in the active worksheet.
    * @param value Text entered by the user.
@@ -1397,11 +1400,14 @@ export interface XlsxViewerEditing {
    * Sets the value for a cell in the active worksheet.
    *
    * The text is read as Excel reads typing, in the user's regional settings
-   * (the browser's language): booleans, numbers with the regional separators
-   * (`1,5` is 1.5 in de-DE), percents, dates in the regional day and month
-   * order (`5/11/2026` is 5 November in en-GB) and times become values with a
-   * matching number format. `yyyy-mm-dd` reads the same everywhere. Prefix text
-   * with an apostrophe to keep it as text.
+   * (the browser's language). A leading `=` makes a formula. Booleans, numbers
+   * with the regional separators (`1,5` is 1.5 in de-DE), percents, dates in
+   * the regional day and month order (`5/11/2026` is 5 November in en-GB) and
+   * times become values; `yyyy-mm-dd` reads the same everywhere. The cell keeps
+   * its own number format for an entry of the same kind (a date in a date
+   * format) and otherwise gets the format Excel gives the entry. Amounts with
+   * `$` stay text for now. A cell with the Text (`@`) format, or text with a
+   * leading apostrophe, keeps the text as it is.
    *
    * @param cell Zero-based row and column address in the active worksheet.
    * @param value Text entered by the user.
