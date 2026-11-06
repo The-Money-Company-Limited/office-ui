@@ -1,7 +1,7 @@
 {
   "dukeSheets": {
     "dirty": false,
-    "sourceSha256": "cc8ed428568a180242d9518733a5566c9fd8b2e014af0827ccbd087f49ac6f27"
+    "sourceSha256": "19e23cb4b2fe39c9b96ac9d93e379cce41cfd510ffb2e839e6c7fd58f67de4a9"
   },
   "build": {
     "command": "wasm-pack build bindings/wasm --target web --release --out-dir pkg -- --locked",
@@ -9,6 +9,6 @@
   },
   "artifact": {
     "file": "duke_sheets_wasm_bg.wasm",
-    "sha256": "46f442ae2ca1d628abd4c5c798a234f711b58a9a5bd4fd18adfadeea1478409e"
+    "sha256": "89c726ae42ffea918c07030edc4ccbca45268ef6a5168b50b84c37d4836aee6a"
   }
 }
