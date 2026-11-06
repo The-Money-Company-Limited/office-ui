@@ -1,7 +1,7 @@
 import { editWorkbookStructure, mapStructuralSheetIndex, type XlsxStructuralEdit } from "./structural-edits";
 import { Workbook } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import * as React from "react";
-import { enterUserText, readUserEntry } from "./user-entry";
+import { cellInputText, enterUserText } from "./user-entry";
 import type {
   DrawingAnchor as DukeDrawingAnchor,
   DrawingColor as DukeDrawingColor,
@@ -1351,8 +1351,11 @@ function applyCellMutationState(
     worksheet.setCell(cellAddressToA1(cell), normalizeCellValue(state.value));
   }
 
+  // A cell that had no style gets the default one back, dropping a format typing gave it.
   if (state.style && typeof state.style === "object") {
     worksheet.setCellStyleAt(cell.row, cell.col, state.style);
+  } else {
+    worksheet.clearCellStyleAt(cell.row, cell.col);
   }
 }
 
@@ -3242,12 +3245,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     if (formula) return formula.startsWith("=") ? formula : `=${formula}`;
     const worksheet = getActiveWorksheet();
     if (!worksheet || !cell) return getCellDisplayValue(cell);
-    const value = worksheet.getCellAt(cell.row, cell.col);
-    if (value.is_empty) return "";
-    const text = worksheet.getInputTextAt(cell.row, cell.col);
-    const readsAsText = typeof readUserEntry(text, (typed) => worksheet.readTypedNumber(typed)).value === "string";
-    if (value.is_text && (!readsAsText || text.startsWith("=") || text.startsWith("'"))) return `'${text}`;
-    return text;
+    return cellInputText(worksheet, cell.row, cell.col);
   }, [getActiveWorksheet, getCellDisplayValue, getCellFormula]);
 
   const getClipboardData = React.useCallback((): XlsxClipboardData | null => {

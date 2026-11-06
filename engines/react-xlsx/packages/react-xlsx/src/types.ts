@@ -1222,8 +1222,12 @@ export interface XlsxViewerController {
   /**
    * Sets the value for a cell in the active worksheet.
    *
-   * User-entered strings are coerced to booleans or numbers when they match
-   * Excel-like input. Prefix text with an apostrophe to force literal text.
+   * The text is read as Excel reads typing, in the user's regional settings
+   * (the browser's language): booleans, numbers with the regional separators
+   * (`1,5` is 1.5 in de-DE), percents, dates in the regional day and month
+   * order (`5/11/2026` is 5 November in en-GB) and times become values with a
+   * matching number format. `yyyy-mm-dd` reads the same everywhere. Prefix text
+   * with an apostrophe to keep it as text.
    *
    * @param cell Zero-based row and column address in the active worksheet.
    * @param value Text entered by the user.
@@ -1391,6 +1395,13 @@ export interface XlsxViewerEditing {
   setCellStyle: (cell: XlsxCellAddress, style: XlsxCellStyleInput) => void;
   /**
    * Sets the value for a cell in the active worksheet.
+   *
+   * The text is read as Excel reads typing, in the user's regional settings
+   * (the browser's language): booleans, numbers with the regional separators
+   * (`1,5` is 1.5 in de-DE), percents, dates in the regional day and month
+   * order (`5/11/2026` is 5 November in en-GB) and times become values with a
+   * matching number format. `yyyy-mm-dd` reads the same everywhere. Prefix text
+   * with an apostrophe to keep it as text.
    *
    * @param cell Zero-based row and column address in the active worksheet.
    * @param value Text entered by the user.

@@ -170,6 +170,19 @@ function Calendar03Glyph(props: RegistryIconProps) {
   )
 }
 
+function Clock01Glyph(props: RegistryIconProps) {
+  return (
+    <IconPlaceholder
+      lucide="Clock"
+      tabler="IconClock"
+      hugeicons="Clock01Icon"
+      phosphor="ClockIcon"
+      remixicon="RiTimeLine"
+      {...props}
+    />
+  )
+}
+
 function DollarCircleGlyph(props: RegistryIconProps) {
   return (
     <IconPlaceholder
@@ -377,13 +390,35 @@ const NUMBER_FORMAT_OPTIONS: NumberFormatOption[] = [
     value: "Percent",
   },
   {
-    formatString: "m/d/yyyy",
-    formatType: "custom",
+    // Excel's short date, which shows in the user's regional date order.
+    formatType: "builtin",
     icon: Calendar03Glyph,
+    id: 14,
     label: "Date",
     value: "Date",
   },
+  {
+    formatType: "builtin",
+    icon: Clock01Glyph,
+    id: 21,
+    label: "Time",
+    value: "Time",
+  },
 ]
+
+/** What a built-in format shows, for one the picker has no option for. */
+function getBuiltinNumberFormatKind(id: number) {
+  if (id >= 1 && id <= 4) return "Number"
+  if ((id >= 5 && id <= 8) || (id >= 37 && id <= 44)) return "Currency"
+  if (id === 9 || id === 10) return "Percent"
+  if (id === 11 || id === 48) return "Scientific"
+  if (id === 12 || id === 13) return "Fraction"
+  if (id === 22) return "Date and time"
+  if (id >= 14 && id <= 17) return "Date"
+  if ((id >= 18 && id <= 21) || (id >= 45 && id <= 47)) return "Time"
+  if (id === 49) return "Text"
+  return `Built-in ${id}`
+}
 
 const GENERAL_NUMBER_FORMAT_VALUE = "General"
 const BUILTIN_NUMBER_FORMAT_VALUE_PREFIX = "builtin:"
@@ -549,22 +584,18 @@ function getNumberFormatValue(style: XlsxResolvedCellStyle | null) {
       : ""
   const id = getNumericValue(numberFormat.id)
 
-  if (formatString) {
-    const matchingOption = NUMBER_FORMAT_OPTIONS.find(
-      (option) => option.formatString === formatString
-    )
+  // A built-in format also carries its code (14 is m/d/yyyy): match its id, then its code.
+  const builtin = formatType === "builtin" && id !== undefined
+  const matchingOption =
+    (builtin && NUMBER_FORMAT_OPTIONS.find((option) => option.id === id)) ||
+    (formatString &&
+      NUMBER_FORMAT_OPTIONS.find(
+        (option) => option.formatString === formatString
+      ))
 
-    return matchingOption?.value ?? formatString
-  }
-  if (formatType === "builtin" && id !== undefined) {
-    const matchingOption = NUMBER_FORMAT_OPTIONS.find(
-      (option) => option.id === id
-    )
-
-    if (matchingOption) return matchingOption.value
-
-    return `${BUILTIN_NUMBER_FORMAT_VALUE_PREFIX}${id}`
-  }
+  if (matchingOption) return matchingOption.value
+  if (builtin) return `${BUILTIN_NUMBER_FORMAT_VALUE_PREFIX}${id}`
+  if (formatString) return formatString
   if (formatType === "general") return GENERAL_NUMBER_FORMAT_VALUE
 
   return GENERAL_NUMBER_FORMAT_VALUE
@@ -579,7 +610,9 @@ function getNumberFormatLabel(value: string) {
   if (matchingOption) return matchingOption.label
 
   if (value.startsWith(BUILTIN_NUMBER_FORMAT_VALUE_PREFIX)) {
-    return `Builtin ${value.slice(BUILTIN_NUMBER_FORMAT_VALUE_PREFIX.length)}`
+    return getBuiltinNumberFormatKind(
+      Number(value.slice(BUILTIN_NUMBER_FORMAT_VALUE_PREFIX.length))
+    )
   }
 
   return value
