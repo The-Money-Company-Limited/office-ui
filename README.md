@@ -269,6 +269,7 @@ repo=.
 "$r" run "$repo" 'cd engines/react-docx && pnpm exec vitest run'
 "$r" run "$repo" 'cd engines/react-xlsx && pnpm test'
 "$r" run "$repo" 'cd engines/react-pptx && pnpm exec vitest run'
+"$r" run "$repo" 'cd engines/duke-sheets && lo-start && cargo test -p duke-sheets-xlsx --test e2e'
 "$r" down
 ```
 

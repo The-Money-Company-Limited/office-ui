@@ -16,6 +16,9 @@ its files go with it: a fresh box needs `r sync` again and rebuilds node_modules
 from scratch. Pull what you need before then. Files deleted locally stay on the box until it
 stops. The first start after a deploy pulls the new image and can take several minutes.
 Commands travel in the request URL, which the Worker's logs record: keep secrets out of them.
+Tests that use LibreOffice (duke-sheets xlsx, xls and libreoffice crates) need `lo-start` first:
+`r run <repo>/engines/duke-sheets 'lo-start && cargo test -p duke-sheets-xlsx --test e2e'`. One
+LibreOffice on the box serves everyone's tests; `lo-start --restart` replaces one that hangs.
 
 Setup, once per laptop:
   1. The office-builds workflow (.github/workflows/office-builds.yml) deploys the Worker and

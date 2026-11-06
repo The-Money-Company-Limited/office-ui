@@ -23,6 +23,14 @@ RUN mkdir -p /opt/cod1460/tmp && cd /opt/cod1460 \
     && printf '<?xml version="1.0"?><fontconfig><dir>/usr/share/fonts</dir><cachedir>/tmp/fc</cachedir></fontconfig>' > fonts.conf \
     && rm -rf /var/lib/apt/lists/*
 
+# LibreOffice for the duke-sheets tests that make fixtures with it (`lo-start`; see `r`). The full
+# Calc package, because Debian's libreoffice-calc-nogui aborts on the first UNO call, and the fonts
+# the tests' own Docker image has, so Calibri and Cambria get metric-compatible stand-ins.
+RUN apt-get update && apt-get install -y --no-install-recommends libreoffice-calc \
+      fonts-crosextra-carlito fonts-crosextra-caladea fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+COPY lo-start /usr/local/bin/lo-start
+
 RUN git config --global --add safe.directory '*'
 WORKDIR /work
 CMD ["sleep", "infinity"]
