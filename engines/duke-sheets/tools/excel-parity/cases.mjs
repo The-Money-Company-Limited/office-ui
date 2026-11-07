@@ -469,7 +469,9 @@ export const cases = [
   ["de-DE format escaped slashes in a date", { Z1: d(2026, 11, 5) }, null, "05/11/2026", "Z1", "dd\\/mm\\/yyyy", "de-DE"],
   ["en-GB format slashes in a date", { Z1: d(2026, 11, 5) }, null, "05/11/2026", "Z1", "dd/mm/yyyy", "en-GB"],
   ["de-DE format fraction keeps its bar", { Z1: 1.5 }, null, "1 1/2", "Z1", "# ?/?", "de-DE"],
-  inLocale("de-DE", "de-DE TEXT slashes in a date", '=TEXT(DATE(2026,11,5),"TT/MM/JJJJ")', "05.11.2026"),
+  // TEXT's format is in the computer's language, where a slash is a slash (sv-SE Excel saved
+  // 31/12/2025 for TEXT(date,"dd/mm/yyyy") in SpreadsheetBench 45896).
+  inLocale("de-DE", "de-DE TEXT keeps slashes in a date", '=TEXT(DATE(2026,11,5),"TT/MM/JJJJ")', "05/11/2026"),
   ["en-US built-in currency", { Z1: 1234.5 }, null, "$1,234.50 ", "Z1", 7],
   ["en-US built-in currency negative", { Z1: -1234.5 }, null, "($1,234.50)", "Z1", 7],
   ["en-GB built-in currency", { Z1: 1234.5 }, null, "£1,234.50", "Z1", 7, "en-GB"],

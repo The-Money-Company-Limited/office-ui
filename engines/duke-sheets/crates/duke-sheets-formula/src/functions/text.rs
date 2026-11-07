@@ -611,7 +611,11 @@ pub fn fn_text(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     let Ok(format) = ssfmt::NumberFormat::parse(&crate::regional::format_code(&format_code)) else {
         return Ok(FormulaValue::Error(CellError::Value));
     };
-    let options = ssfmt::FormatOptions { locale: crate::regional::current().format_locale(), ..Default::default() };
+    // A TEXT format is written in the regional language, so a `/` in it is a slash, not the
+    // date separator a `/` in a cell's (language-neutral) format stands for: Excel in sv-SE
+    // gives 31/12/2025 for TEXT(date,"dd/mm/yyyy").
+    let locale = ssfmt::Locale { date_separator: '/', ..crate::regional::current().format_locale() };
+    let options = ssfmt::FormatOptions { locale, ..Default::default() };
     let text = match value {
         FormulaValue::String(text) => match value.as_number() {
             Some(number) => format.format(number, &options),
