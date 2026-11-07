@@ -116,9 +116,8 @@ pub(crate) enum ReferenceEdit<'a> {
 
 /// A formula copied `rows` down and `cols` right of its cell, as a paste or fill writes it, as in
 /// Excel: the parts of its references without `$` move by as much (`=A1` copied from B1 to B2 is
-/// `=A2`), on whichever sheet they read, and one that would leave the sheet is #REF!. Names,
-/// structured references (`[@Qty]`), strings, other workbooks' references and the rest of the text
-/// stay as written.
+/// `=A2`), on whichever sheet or workbook they read, and one that would leave the sheet is #REF!.
+/// Names, structured references (`[@Qty]`), strings and the rest of the text stay as written.
 pub fn shift_formula(text: &str, rows: i32, cols: i32) -> String {
     rewrite_references(text, "", &ReferenceEdit::Offset { rows, cols })
 }
@@ -242,6 +241,10 @@ fn sheet_prefix(text: &str, start: usize) -> Option<(String, usize)> {
             }
         }
     } else {
+        // Another workbook's sheet: `[1]Sheet1!`, `[Book.xlsx]Sheet1!`.
+        if text[pos..].starts_with('[') {
+            pos += text[pos..].find(']')? + 1;
+        }
         while pos < text.len()
             && text[pos..]
                 .chars()
@@ -276,14 +279,20 @@ fn rewrite_sheet_prefix(prefix: &str, sheet: &str, change: &ReferenceEdit<'_>) -
     prefix.to_owned()
 }
 
-// Keep strings, structured references, and external workbook references opaque.
-// Only reference tokens are replaced, preserving all other formula spelling.
+// Keep strings and structured references opaque, and other workbooks' references to all but a
+// copy. Only reference tokens are replaced, preserving all other formula spelling.
 pub(crate) fn rewrite_references(text: &str, context: &str, change: &ReferenceEdit<'_>) -> String {
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
     while i < text.len() {
         let c = text[i..].chars().next().unwrap();
-        if c == '"' || c == '[' {
+        let boundary = i == 0
+            || !text[..i]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| name_char(ch) || matches!(ch, '!' | ']' | '\''));
+        let workbook_prefix = c == '[' && boundary && sheet_prefix(text, i).is_some();
+        if c == '"' || (c == '[' && !workbook_prefix) {
             let start = i;
             i += c.len_utf8();
             let mut depth = 1;
@@ -308,32 +317,9 @@ pub(crate) fn rewrite_references(text: &str, context: &str, change: &ReferenceEd
                     }
                 }
             }
-            if c == '[' {
-                // An external prefix may continue as Sheet!A1, without brackets.
-                let tail = &text[i..];
-                if let Some(bang) = tail
-                    .find('!')
-                    .filter(|n| !tail[..*n].contains(['+', '-', '*', '/', ',', '(', ')', ' ']))
-                {
-                    i += bang + 1;
-                    if let Some((_, end)) = endpoint(text, i) {
-                        i = end;
-                        if text[i..].starts_with(':') {
-                            if let Some((_, end)) = endpoint(text, i + 1) {
-                                i = end;
-                            }
-                        }
-                    }
-                }
-            }
             out.push_str(&text[start..i]);
             continue;
         }
-        let boundary = i == 0
-            || !text[..i]
-                .chars()
-                .next_back()
-                .is_some_and(|ch| name_char(ch) || matches!(ch, '!' | ']' | '\''));
         if !boundary {
             out.push(c);
             i += c.len_utf8();
@@ -356,8 +342,17 @@ pub(crate) fn rewrite_references(text: &str, context: &str, change: &ReferenceEd
                 prefix = format!("'{}'!", sheet.replace('\'', "''"));
             }
         }
+        let ends_here = |end: usize| {
+            !text[end..]
+                .chars()
+                .next()
+                .is_some_and(|ch| name_char(ch) || matches!(ch, '(' | '[' | '!'))
+        };
         let parsed = endpoint(text, pos).and_then(|(a, first_end)| {
-            if text[first_end..].starts_with(':') {
+            let range = || {
+                if !text[first_end..].starts_with(':') {
+                    return None;
+                }
                 let second_start = first_end + 1;
                 let (second_prefix, second_pos) =
                     if let Some((name, end)) = sheet_prefix(text, second_start) {
@@ -372,31 +367,23 @@ pub(crate) fn rewrite_references(text: &str, context: &str, change: &ReferenceEd
                         (String::new(), second_start)
                     };
                 let (b, end) = endpoint(text, second_pos)?;
-                (a.row.is_some() == b.row.is_some() && a.col.is_some() == b.col.is_some())
-                    .then_some((a, Some(b), first_end, second_prefix, second_pos, end))
-            } else {
-                (a.row.is_some() && a.col.is_some()).then_some((
-                    a,
-                    None,
-                    first_end,
-                    String::new(),
-                    first_end,
-                    first_end,
-                ))
-            }
-        });
-        if let Some((mut a, mut b, first_end, second_prefix, second_pos, end)) =
-            parsed.filter(|(_, _, _, _, _, end)| {
-                !text[*end..]
-                    .chars()
-                    .next()
-                    .is_some_and(|ch| name_char(ch) || matches!(ch, '(' | '[' | '!'))
+                (a.row.is_some() == b.row.is_some()
+                    && a.col.is_some() == b.col.is_some()
+                    && ends_here(end))
+                .then(|| (a.clone(), Some(b), first_end, second_prefix, second_pos, end))
+            };
+            // A cell before `:` and what isn't a cell (`A1:INDEX(…)`) is a cell of its own.
+            range().or_else(|| {
+                (a.row.is_some() && a.col.is_some() && ends_here(first_end)).then(|| {
+                    (a.clone(), None, first_end, String::new(), first_end, first_end)
+                })
             })
-        {
+        });
+        if let Some((mut a, mut b, first_end, second_prefix, second_pos, end)) = parsed {
             let target = sheet.as_deref().unwrap_or(context);
             let mut valid = true;
             let mut changed = false;
-            if !external {
+            if !external || matches!(change, ReferenceEdit::Offset { .. }) {
                 match change {
                     ReferenceEdit::Axis { sheet, edit } if target.eq_ignore_ascii_case(sheet) => {
                         let first = if edit.rows {
@@ -441,7 +428,7 @@ pub(crate) fn rewrite_references(text: &str, context: &str, change: &ReferenceEd
                     ReferenceEdit::Offset { rows, cols } => {
                         valid = a.offset(*rows, *cols).is_some()
                             && b.as_mut().map_or(true, |b| b.offset(*rows, *cols).is_some());
-                        changed = true;
+                        changed = (*rows, *cols) != (0, 0);
                     }
                     _ => {}
                 }

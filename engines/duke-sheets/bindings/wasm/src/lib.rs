@@ -1308,9 +1308,7 @@ pub fn set_locale(tag: &str) {
     REGIONAL.with(|r| r.set(duke_sheets_core::RegionalSettings::from_tag(tag)));
 }
 
-/// A formula copied `rows` down and `cols` right of its cell, as a paste or fill writes it: its
-/// references without `$` move by as much (`=A1` copied from B1 to B2 is `=A2`), and one that
-/// would leave the sheet is #REF!. The rest of the text stays as written.
+/// A formula copied `rows` down and `cols` right of its cell (duke_sheets_core::shift_formula).
 #[wasm_bindgen(js_name = shiftFormula)]
 pub fn shift_formula(formula: &str, rows: i32, cols: i32) -> String {
     duke_sheets_core::shift_formula(formula, rows, cols)

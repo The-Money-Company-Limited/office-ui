@@ -422,10 +422,12 @@ fn copied_formulas_move_their_relative_references() {
         ("=SUM(A:A)+SUM(1:1)+SUM($A:$A)", 1, 1, "=SUM(B:B)+SUM(2:2)+SUM($A:$A)"),
         ("=SUM(A2#)+@A1:A3", 1, 0, "=SUM(A3#)+@A2:A4"),
         ("=LOG10(A1)&\"A1\"&TaxRate", 1, 0, "=LOG10(A2)&\"A1\"&TaxRate"),
-        ("=[@Qty]*Table1[Price]+[1]Sheet1!A1", 1, 1, "=[@Qty]*Table1[Price]+[1]Sheet1!A1"),
+        ("=[@Qty]*Table1[Price]+[1]Sheet1!A1+'[Book.xlsx]Q 1'!$A1", 1, 1, "=[@Qty]*Table1[Price]+[1]Sheet1!B2+'[Book.xlsx]Q 1'!$A2"),
+        ("=[@Qty]>Sheet2!A1&\"Hi!\"&A1&\" B2\"&[1]!Total", 1, 0, "=[@Qty]>Sheet2!A2&\"Hi!\"&A2&\" B2\"&[1]!Total"),
+        ("=SUM(B2:INDEX(B:B,ROW()))+A1:Total", 1, 0, "=SUM(B3:INDEX(B:B,ROW()))+A2:Total"),
         ("=A2+SUM(A1:B2)", -1, 0, "=A1+SUM(#REF!)"),
         ("=XFD1+A1048576", 1, 1, "=#REF!+#REF!"),
-        ("=A1", 0, 0, "=A1"),
+        ("=a1", 0, 0, "=a1"),
     ];
     for (text, rows, cols, expected) in cases {
         assert_eq!(shift_formula(text, rows, cols), expected, "{text}");
