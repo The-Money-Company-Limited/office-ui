@@ -200,3 +200,15 @@ test("a pasted merge clears the cells it covers", () => {
   assert.equal(sheet.isMergedSecondary(1, 1), true);
   workbook.free();
 });
+
+test("a copy pastes the cells a formula in it spills into blank", () => {
+  const workbook = new Workbook();
+  const sheet = workbook.getSheet(0);
+  sheet.setFormula("A1", "=SEQUENCE(3)");
+  workbook.calculate();
+  const all = { start: { row: 0, col: 0 }, end: { row: 2, col: 0 } };
+  assert.equal(tools.spillsFromRange(sheet, all, { row: 1, col: 0 }), true);
+  assert.equal(tools.spillsFromRange(sheet, all, { row: 0, col: 0 }), false);
+  assert.equal(tools.spillsFromRange(sheet, { start: { row: 1, col: 0 }, end: { row: 2, col: 0 } }, { row: 1, col: 0 }), false);
+  workbook.free();
+});

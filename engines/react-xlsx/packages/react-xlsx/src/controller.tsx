@@ -61,7 +61,7 @@ import {
   setCommentThreadResolved,
   type XlsxCommentThread
 } from "./comments";
-import { applyXlsxCut, captureXlsxCut, getXlsxInitialActiveCell, pasteMerge, writeCopiedFormula } from "./selection-tools";
+import { applyXlsxCut, captureXlsxCut, getXlsxInitialActiveCell, pasteMerge, spillsFromRange, writeCopiedFormula } from "./selection-tools";
 import {
   applyCellMutationState,
   applyCellMutationStates,
@@ -430,7 +430,7 @@ type ClipboardPayload = {
   merges: ClipboardMerge[];
   /**
    * The copied range's top-left cell: a formula pastes with its references moved as far as it
-   * is pasted from its cell. A copy from an older build has none, and its formulas paste as they are.
+   * is pasted from its cell (missing in a copy from an older build).
    */
   origin?: XlsxCellAddress;
   rows: number;
@@ -3391,11 +3391,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         const colSpan = Math.min(merge?.colSpan ?? 1, normalized.end.col - col + 1);
 
         const formatKind = (rawStyle?.numberFormat as { kind?: string } | undefined)?.kind;
-        // A cell a copied formula spills into, or a cell of its Ctrl+Shift+Enter block, pastes
-        // blank, for the pasted formula to spill there again.
-        const spillSource = worksheet.getSpillSource(row, col) as XlsxCellAddress | null;
         payload.cells.push({
-          cellValue: spillSource && rangeContainsCell(normalized, spillSource) ? null : worksheet.getCellAt(row, col).toJs(),
+          cellValue: spillsFromRange(worksheet, normalized, { row, col }) ? null : worksheet.getCellAt(row, col).toJs(),
           colOffset: col - normalized.start.col,
           formula,
           isDate: formatKind === "date" || formatKind === "time" || formatKind === "datetime",
@@ -4840,8 +4837,11 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         const sourceFormula = worksheet.getFormulaAt(sourceRow, sourceCol);
         const sourceStyle = cloneCellStyle(worksheet.getCellStyleAt(sourceRow, sourceCol));
 
+        const sourceCell = { row: sourceRow, col: sourceCol };
         if (sourceFormula) {
-          writeCopiedFormula(worksheet, sourceFormula, { row: sourceRow, col: sourceCol }, targetCell);
+          writeCopiedFormula(worksheet, sourceFormula, sourceCell, targetCell);
+        } else if (spillsFromRange(worksheet, sourceRange, sourceCell)) {
+          worksheet.setCell(cellAddressToA1(targetCell), null);
         } else {
           const sourceValue = normalizeCellValue(worksheet.getCellAt(sourceRow, sourceCol).toJs());
           worksheet.setCell(cellAddressToA1(targetCell), sourceValue);
@@ -5089,6 +5089,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
 
     const hasMergeOperations = Array.isArray(payload.merges) && payload.merges.some((merge) => (merge.rowSpan ?? 1) > 1 || (merge.colSpan ?? 1) > 1);
     const targetDate1904 = Boolean(workbook.settings?.date1904);
+    // A copy from an older build has no origin: its formulas paste as they are.
+    const origin = payload.origin ?? targetCell;
     const blocks: ArrayFormulaBlocks = new Map();
     const mutations: RangeCellMutation[] = [];
     if (hasMergeOperations) {
@@ -5102,9 +5104,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       const before = hasMergeOperations ? null : captureCellMutationState(nextCell, blocks);
 
       if (cell.formula) {
-        const from = payload.origin
-          ? { col: payload.origin.col + cell.colOffset, row: payload.origin.row + cell.rowOffset }
-          : nextCell;
+        const from = { col: origin.col + cell.colOffset, row: origin.row + cell.rowOffset };
         writeCopiedFormula(worksheet, cell.formula, from, nextCell);
       } else if (typeof cell.cellValue === "number") {
         // A date keeps the day it shows when the workbooks count days from different years.
