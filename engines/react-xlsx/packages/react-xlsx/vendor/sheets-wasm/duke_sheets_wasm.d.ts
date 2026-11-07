@@ -778,6 +778,12 @@ export class Workbook {
      * profile supports them.
      */
     saveXlsxBytesEncrypted(password: string, profile?: string | null, key_bits?: number | null, spin_count?: number | null): Uint8Array;
+    /**
+     * Changes this workbook's regional settings to those of a language tag, as `setLocale` sets
+     * them for workbooks opened from now on. Cells show, and typed entries read, in them at
+     * once; calculate to bring formulas that depend on them (TEXT, DATEVALUE) up to date.
+     */
+    setLocale(tag: string): void;
     setWorkbookProtection(protection: any): void;
     sheetIndex(name: string): number | undefined;
     /**
@@ -927,6 +933,12 @@ export class Worksheet {
 export function init(): void;
 
 /**
+ * How a short date and a number show in the regional settings of a language tag, for a picker
+ * to show beside it: `["05/11/2026", "1,234.5"]` in en-GB, `["05.11.2026", "1.234,5"]` in de-DE.
+ */
+export function regionalSample(tag: string): string[];
+
+/**
  * Sets the regional settings of workbooks opened or created from now on, from a language tag
  * such as `en-GB` (the browser's `navigator.language`): the order of day and month in dates
  * written as text or typed, the language of month and day names and of TEXT's date codes, the
@@ -977,6 +989,7 @@ export interface InitOutput {
     readonly cellvalue_toJs: (a: number) => any;
     readonly cellvalue_toString: (a: number) => [number, number];
     readonly init: () => void;
+    readonly regionalSample: (a: number, b: number) => [number, number];
     readonly setLocale: (a: number, b: number) => void;
     readonly shiftFormula: (a: number, b: number, c: number, d: number) => [number, number];
     readonly workbook_addSheet: (a: number, b: number, c: number) => [number, number, number];
@@ -1002,6 +1015,7 @@ export interface InitOutput {
     readonly workbook_saveXlsbBytes: (a: number) => [number, number, number, number];
     readonly workbook_saveXlsxBytes: (a: number) => [number, number, number, number];
     readonly workbook_saveXlsxBytesEncrypted: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+    readonly workbook_setLocale: (a: number, b: number, c: number) => void;
     readonly workbook_setWorkbookProtection: (a: number, b: any) => [number, number];
     readonly workbook_sheetCount: (a: number) => [number, number, number];
     readonly workbook_sheetNames: (a: number) => [number, number, number, number];
@@ -1108,8 +1122,8 @@ export interface InitOutput {
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
-    readonly __externref_table_dealloc: (a: number) => void;
     readonly __externref_drop_slice: (a: number, b: number) => void;
+    readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_start: () => void;
 }
 
