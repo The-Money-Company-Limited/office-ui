@@ -934,6 +934,11 @@ export function init(): void;
  */
 export function setLocale(tag: string): void;
 
+/**
+ * A formula copied `rows` down and `cols` right of its cell (duke_sheets_core::shift_formula).
+ */
+export function shiftFormula(formula: string, rows: number, cols: number): string;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -973,6 +978,7 @@ export interface InitOutput {
     readonly cellvalue_toString: (a: number) => [number, number];
     readonly init: () => void;
     readonly setLocale: (a: number, b: number) => void;
+    readonly shiftFormula: (a: number, b: number, c: number, d: number) => [number, number];
     readonly workbook_addSheet: (a: number, b: number, c: number) => [number, number, number];
     readonly workbook_calculate: (a: number, b: number) => [number, number, number];
     readonly workbook_defineName: (a: number, b: number, c: number, d: number, e: number) => [number, number];

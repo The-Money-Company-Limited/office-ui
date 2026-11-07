@@ -1308,6 +1308,12 @@ pub fn set_locale(tag: &str) {
     REGIONAL.with(|r| r.set(duke_sheets_core::RegionalSettings::from_tag(tag)));
 }
 
+/// A formula copied `rows` down and `cols` right of its cell (duke_sheets_core::shift_formula).
+#[wasm_bindgen(js_name = shiftFormula)]
+pub fn shift_formula(formula: &str, rows: i32, cols: i32) -> String {
+    duke_sheets_core::shift_formula(formula, rows, cols)
+}
+
 fn with_regional_settings(mut wb: CoreWorkbook) -> Rc<RefCell<CoreWorkbook>> {
     wb.settings_mut().regional = REGIONAL.with(|r| r.get());
     Rc::new(RefCell::new(wb))

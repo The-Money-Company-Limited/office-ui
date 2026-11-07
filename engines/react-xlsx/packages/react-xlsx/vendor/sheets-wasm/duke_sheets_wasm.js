@@ -1913,6 +1913,28 @@ export function setLocale(tag) {
     wasm.setLocale(ptr0, len0);
 }
 
+/**
+ * A formula copied `rows` down and `cols` right of its cell (duke_sheets_core::shift_formula).
+ * @param {string} formula
+ * @param {number} rows
+ * @param {number} cols
+ * @returns {string}
+ */
+export function shiftFormula(formula, rows, cols) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(formula, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.shiftFormula(ptr0, len0, rows, cols);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,

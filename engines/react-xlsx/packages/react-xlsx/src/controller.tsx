@@ -61,7 +61,7 @@ import {
   setCommentThreadResolved,
   type XlsxCommentThread
 } from "./comments";
-import { applyXlsxCut, captureXlsxCut, getXlsxInitialActiveCell } from "./selection-tools";
+import { applyXlsxCut, captureXlsxCut, getXlsxInitialActiveCell, pasteMerge, spillsFromRange, writeCopiedFormula } from "./selection-tools";
 import {
   applyCellMutationState,
   applyCellMutationStates,
@@ -428,6 +428,11 @@ type ClipboardPayload = {
   /** The copied workbook's date system (missing in a copy from an older build). */
   date1904?: boolean;
   merges: ClipboardMerge[];
+  /**
+   * The copied range's top-left cell: a formula pastes with its references moved as far as it
+   * is pasted from its cell (missing in a copy from an older build).
+   */
+  origin?: XlsxCellAddress;
   rows: number;
 };
 
@@ -3296,6 +3301,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       cols: normalized.end.col - normalized.start.col + 1,
       date1904: Boolean(workbook?.settings?.date1904),
       merges: [],
+      origin: normalized.start,
       rows: normalized.end.row - normalized.start.row + 1
     };
 
@@ -3386,7 +3392,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
 
         const formatKind = (rawStyle?.numberFormat as { kind?: string } | undefined)?.kind;
         payload.cells.push({
-          cellValue: worksheet.getCellAt(row, col).toJs(),
+          cellValue: spillsFromRange(worksheet, normalized, { row, col }) ? null : worksheet.getCellAt(row, col).toJs(),
           colOffset: col - normalized.start.col,
           formula,
           isDate: formatKind === "date" || formatKind === "time" || formatKind === "datetime",
@@ -4831,8 +4837,11 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         const sourceFormula = worksheet.getFormulaAt(sourceRow, sourceCol);
         const sourceStyle = cloneCellStyle(worksheet.getCellStyleAt(sourceRow, sourceCol));
 
+        const sourceCell = { row: sourceRow, col: sourceCol };
         if (sourceFormula) {
-          worksheet.setFormula(cellAddressToA1(targetCell), sourceFormula);
+          writeCopiedFormula(worksheet, sourceFormula, sourceCell, targetCell);
+        } else if (spillsFromRange(worksheet, sourceRange, sourceCell)) {
+          worksheet.setCell(cellAddressToA1(targetCell), null);
         } else {
           const sourceValue = normalizeCellValue(worksheet.getCellAt(sourceRow, sourceCol).toJs());
           worksheet.setCell(cellAddressToA1(targetCell), sourceValue);
@@ -5080,6 +5089,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
 
     const hasMergeOperations = Array.isArray(payload.merges) && payload.merges.some((merge) => (merge.rowSpan ?? 1) > 1 || (merge.colSpan ?? 1) > 1);
     const targetDate1904 = Boolean(workbook.settings?.date1904);
+    // A copy from an older build has no origin: its formulas paste as they are.
+    const origin = payload.origin ?? targetCell;
     const blocks: ArrayFormulaBlocks = new Map();
     const mutations: RangeCellMutation[] = [];
     if (hasMergeOperations) {
@@ -5093,7 +5104,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       const before = hasMergeOperations ? null : captureCellMutationState(nextCell, blocks);
 
       if (cell.formula) {
-        worksheet.setFormula(cellAddressToA1(nextCell), cell.formula);
+        const from = { col: origin.col + cell.colOffset, row: origin.row + cell.rowOffset };
+        writeCopiedFormula(worksheet, cell.formula, from, nextCell);
       } else if (typeof cell.cellValue === "number") {
         // A date keeps the day it shows when the workbooks count days from different years.
         const crossesSystems = cell.isDate && cell.cellValue >= 1 && payload.date1904 !== undefined && payload.date1904 !== targetDate1904;
@@ -5135,7 +5147,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
             row: targetCell.row + merge.rowOffset + merge.rowSpan - 1
           }
         });
-        worksheet.mergeCells(rangeToA1(mergeRange));
+        pasteMerge(worksheet, mergeRange);
       }
     }
 

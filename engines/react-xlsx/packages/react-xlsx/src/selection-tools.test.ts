@@ -171,3 +171,57 @@ test("cut moves formulas and merged cells between sheets", () => {
   assert.equal(target.getFormulaAt(2, 2), "=1+2");
   assert.equal(target.isMergedSecondary(2, 3), true);
 });
+
+test("pasted and filled formulas move their relative references as in Excel", () => {
+  const workbook = new Workbook();
+  const sheet = workbook.getSheet(0);
+  const b1 = { row: 0, col: 1 };
+  tools.writeCopiedFormula(sheet, "=A1+$A$1+Sheet1!A$1+SUM(A:A)", b1, { row: 1, col: 1 });
+  assert.equal(sheet.getFormulaAt(1, 1), "=A2+$A$1+Sheet1!A$1+SUM(A:A)");
+  tools.writeCopiedFormula(sheet, "= SUM( A1:A3 ) & \"A1\" + [@Qty]", b1, { row: 4, col: 3 });
+  assert.equal(sheet.getFormulaAt(4, 3), "= SUM( C5:C7 ) & \"A1\" + [@Qty]");
+  tools.writeCopiedFormula(sheet, "=A2", { row: 1, col: 1 }, b1);
+  assert.equal(sheet.getFormulaAt(0, 1), "=A1");
+  tools.writeCopiedFormula(sheet, "=A1", { row: 1, col: 1 }, b1);
+  assert.equal(sheet.getFormulaAt(0, 1), "=#REF!");
+  workbook.free();
+});
+
+test("a pasted merge clears the cells it covers", () => {
+  const workbook = new Workbook();
+  const sheet = workbook.getSheet(0);
+  sheet.setCell("A1", "kept");
+  sheet.setCell("B1", "covered");
+  sheet.setFormula("A2", "=1");
+  tools.pasteMerge(sheet, { start: { row: 0, col: 0 }, end: { row: 1, col: 1 } });
+  assert.equal(sheet.getCell("A1").asText(), "kept");
+  assert.equal(sheet.getCell("B1").is_empty, true);
+  assert.equal(sheet.getFormulaAt(1, 0), undefined);
+  assert.equal(sheet.isMergedSecondary(1, 1), true);
+  workbook.free();
+});
+
+test("a copy pastes the cells a formula in it spills into blank", () => {
+  const workbook = new Workbook();
+  const sheet = workbook.getSheet(0);
+  sheet.setFormula("A1", "=SEQUENCE(3)");
+  workbook.calculate();
+  const all = { start: { row: 0, col: 0 }, end: { row: 2, col: 0 } };
+  assert.equal(tools.spillsFromRange(sheet, all, { row: 1, col: 0 }), true);
+  assert.equal(tools.spillsFromRange(sheet, all, { row: 0, col: 0 }), false);
+  assert.equal(tools.spillsFromRange(sheet, { start: { row: 1, col: 0 }, end: { row: 2, col: 0 } }, { row: 1, col: 0 }), false);
+  workbook.free();
+});
+
+test("a copy pastes the other cells of a Ctrl+Shift+Enter block in it blank", () => {
+  const workbook = new Workbook();
+  const sheet = workbook.getSheet(0);
+  sheet.setArrayFormula("C1", "=A1:B2*2", [[2, 4], [6, 8]]);
+  const block = { start: { row: 0, col: 2 }, end: { row: 1, col: 3 } };
+  assert.equal(tools.spillsFromRange(sheet, block, { row: 0, col: 2 }), false);
+  for (const cell of [{ row: 0, col: 3 }, { row: 1, col: 2 }, { row: 1, col: 3 }]) {
+    assert.equal(tools.spillsFromRange(sheet, block, cell), true);
+  }
+  assert.equal(tools.spillsFromRange(sheet, { start: { row: 1, col: 2 }, end: { row: 1, col: 3 } }, { row: 1, col: 3 }), false);
+  workbook.free();
+});
