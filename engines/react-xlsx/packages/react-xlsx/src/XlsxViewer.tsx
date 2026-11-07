@@ -16244,7 +16244,7 @@ function XlsxGrid({
       return;
     }
 
-    pasteText(textPayload);
+    pasteText(textPayload, clipboard.getData("text/html") || undefined);
   };
   const keyboardInputLayer = (
     <div

@@ -45,6 +45,32 @@ export function enterUserText(worksheet: Worksheet, cell: XlsxCellAddress, text:
   }
 }
 
+/** Three numbers with one separator (`13/11/2026`, `5.11.26`): a date Excel wrote. */
+const NUMERIC_DATE = /^\d{1,4}([./-])\d{1,2}\1\d{1,4}\.?$/;
+
+/**
+ * Stores a cell pasted from desktop Excel, whose HTML carried its value (`number`, see
+ * excelClipboardNumbers) beside the text it shows. The value wins over the text, which Excel
+ * wrote in its computer's regional settings; the text still gives the cell its format as typing
+ * it would (a currency, a percent, a date), and the short date when it is a date written in
+ * another day and month order than the editor's. A Text-formatted cell keeps the text.
+ */
+export function enterPastedNumber(worksheet: Worksheet, cell: XlsxCellAddress, text: string, number: number, baseStyle: StyleInput = {}): void {
+  if (hasTextFormat(worksheet.getCellStyleAt(cell.row, cell.col))) {
+    enterUserText(worksheet, cell, text, baseStyle);
+    return;
+  }
+  const address = cellAddressToA1(cell);
+  const entry = readUserEntry(text, worksheet, cell);
+  const numberFormat: NumberFormatInput | undefined = typeof entry.value === "number"
+    ? entry.numberFormat
+    : NUMERIC_DATE.test(text.trim()) ? { formatType: "builtin", id: 14 } : undefined;
+  worksheet.setCell(address, number);
+  if (numberFormat) {
+    worksheet.setCellStyle(address, { ...baseStyle, numberFormat });
+  }
+}
+
 /**
  * The cell's value as text to edit, which committed unchanged gives back the same value: text
  * that would read as something else (a number, a date, a formula) starts with an apostrophe,

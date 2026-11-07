@@ -1,5 +1,5 @@
 import type { XlsxChart, XlsxChartsheet, XlsxFormControl, XlsxSheetData, XlsxTable, XlsxWorkbookTab } from "./types";
-import { getConfiguredWorkerWasmSource, type WorkerWasmSource } from "./wasm";
+import { getConfiguredWorkerWasmSource, getRegionalFormat, type WorkerWasmSource } from "./wasm";
 
 type WorkerMessage =
   | {
@@ -10,6 +10,8 @@ type WorkerMessage =
         showHiddenSheets?: boolean;
         skipXmlParsing?: boolean;
         wasmSource?: WorkerWasmSource;
+        /** The language tag the workbook's regional settings come from. */
+        regionalFormat?: string;
       };
     }
   | {
@@ -20,6 +22,8 @@ type WorkerMessage =
         showHiddenSheets?: boolean;
         skipXmlParsing?: boolean;
         wasmSource?: WorkerWasmSource;
+        /** The language tag the workbook's regional settings come from. */
+        regionalFormat?: string;
       };
     }
   | {
@@ -146,7 +150,8 @@ export class XlsxWorkerClient {
         buffer: workerBuffer,
         showHiddenSheets,
         skipXmlParsing,
-        wasmSource: getConfiguredWorkerWasmSource()
+        wasmSource: getConfiguredWorkerWasmSource(),
+        regionalFormat: getRegionalFormat()
       },
       type: "load"
     }, [workerBuffer]);
@@ -175,7 +180,8 @@ export class XlsxWorkerClient {
         buffer: workerBuffer,
         showHiddenSheets,
         skipXmlParsing,
-        wasmSource: getConfiguredWorkerWasmSource()
+        wasmSource: getConfiguredWorkerWasmSource(),
+        regionalFormat: getRegionalFormat()
       },
       type: "parseCharts"
     }, [workerBuffer]);

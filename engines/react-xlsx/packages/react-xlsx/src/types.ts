@@ -1174,6 +1174,10 @@ export interface XlsxViewerController {
   removeFormControl: (controlIndex: number, sheetIndex?: number) => boolean;
   readOnly: boolean;
   recalculate: () => void;
+  /** The language tag (`en-GB`) the workbook's regional settings come from: how dates and numbers are typed and shown. */
+  regionalFormat: string;
+  /** Re-applies the regional settings of a language tag to the open workbook, and to workbooks opened from now on. */
+  setRegionalFormat: (tag: string) => void;
   revision: number;
   resetZoom: () => void;
   resizeChartBy: (
@@ -1193,7 +1197,8 @@ export interface XlsxViewerController {
   redo: () => void;
   pasteFromClipboard: () => Promise<boolean>;
   pasteStructuredClipboardData: (payload: string) => boolean;
-  pasteText: (text: string) => boolean;
+  /** Pastes tab-separated text; `html`, the clipboard's HTML, gives desktop Excel's cell values. */
+  pasteText: (text: string, html?: string) => boolean;
   selectedRangeAddress: string | null;
   selectedValue: string;
   selectedFormula: string;
@@ -1370,7 +1375,8 @@ export interface XlsxViewerEditing {
   mergeSelection: () => void;
   pasteFromClipboard: () => Promise<boolean>;
   pasteStructuredClipboardData: (payload: string) => boolean;
-  pasteText: (text: string) => boolean;
+  /** Pastes tab-separated text; `html`, the clipboard's HTML, gives desktop Excel's cell values. */
+  pasteText: (text: string, html?: string) => boolean;
   removeActiveSheet: () => void;
   removeFormControl: (controlIndex: number, sheetIndex?: number) => boolean;
   readOnly: boolean;

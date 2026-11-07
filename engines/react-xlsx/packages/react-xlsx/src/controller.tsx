@@ -1,7 +1,7 @@
 import { editWorkbookStructure, mapStructuralSheetIndex, type XlsxStructuralEdit } from "./structural-edits";
 import { Workbook, type ColorInput, type NumberFormatInput, type StyleInput } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import * as React from "react";
-import { cellInputText, enterUserText } from "./user-entry";
+import { cellInputText, enterPastedNumber, enterUserText } from "./user-entry";
 import type {
   DrawingAnchor as DukeDrawingAnchor,
   DrawingColor as DukeDrawingColor,
@@ -71,7 +71,8 @@ import {
 } from "./cell-history";
 import { safeCalculate, tryRecalculate } from "./safe-calculate";
 import { cellAddressToA1, parseXlsxRange } from "./range-reference";
-import { canUseConfiguredWasmSourceInWorker, getSheetsWasmModule } from "./wasm";
+import { canUseConfiguredWasmSourceInWorker, getRegionalFormat, getSheetsWasmModule, setRegionalFormat as setDefaultRegionalFormat } from "./wasm";
+import { excelClipboardNumbers } from "./clipboard-html";
 import { XlsxWorkerClient } from "./worker-client";
 import { normalizeWorkbookArrayBuffer } from "./zip-entry-names";
 import type {
@@ -1967,6 +1968,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   const [shouldAutoCalculate, setShouldAutoCalculate] = React.useState(false);
   const [workerCellSnapshotRevision, setWorkerCellSnapshotRevision] = React.useState(0);
   const [isWorkerBacked, setIsWorkerBacked] = React.useState(false);
+  const [regionalFormat, setRegionalFormatState] = React.useState(getRegionalFormat);
+  const [workerReloadRevision, setWorkerReloadRevision] = React.useState(0);
   const [sortState, setSortState] = React.useState<XlsxTableSortState | null>(null);
   const [forcedReadOnly, setForcedReadOnly] = React.useState(false);
   const deferredBufferRef = React.useRef<ArrayBuffer | null>(null);
@@ -2516,7 +2519,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     shouldForceReadOnlyForBuffer,
     shouldUseWorkerForReadOnlyLoad,
     src,
-    showHiddenSheets
+    showHiddenSheets,
+    workerReloadRevision
   ]);
 
   const activeTab = tabs[activeTabIndex] ?? null;
@@ -4135,6 +4139,21 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     setShouldAutoCalculate(false);
   }, [refreshWorkbookState, workbook]);
 
+  // Re-applies a regional format to the open workbook, as Excel does when the computer's
+  // regional settings change: cells redisplay and formulas recalculate. A workbook held by the
+  // worker (read-only) loads again in it.
+  const setRegionalFormat = React.useCallback((tag: string) => {
+    setDefaultRegionalFormat(tag);
+    setRegionalFormatState(tag);
+    if (workbook) {
+      workbook.setLocale(tag);
+      maybeRecalculateWorkbook(workbook);
+      refreshWorkbookState(workbook);
+    } else if (isWorkerBacked) {
+      setWorkerReloadRevision((current) => current + 1);
+    }
+  }, [isWorkerBacked, maybeRecalculateWorkbook, refreshWorkbookState, workbook]);
+
   const applyReadOnlyResizeOverride = React.useCallback((
     axis: "column" | "row",
     actualIndex: number,
@@ -5008,7 +5027,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     return true;
   }, [activeCell, cancelCut, getActiveWorksheet, maybeRecalculateWorkbook, readOnly, recordHistoryBeforeMutation, refreshWorkbookState, selection, workbook]);
 
-  const pasteText = React.useCallback((text: string) => {
+  // `html` is the clipboard's HTML, whose numbers (from desktop Excel) win over the text's.
+  const pasteText = React.useCallback((text: string, html?: string) => {
     const worksheet = getActiveWorksheet();
     const targetCell = activeCell ?? selection?.start ?? null;
     if (readOnly || !worksheet || !workbook || !targetCell || !text) {
@@ -5023,12 +5043,18 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       return false;
     }
 
+    // Excel's numbers apply only where its table has the text's rows and columns.
+    const htmlNumbers = html ? excelClipboardNumbers(html) : null;
+    const numbers = htmlNumbers?.length === grid.length && htmlNumbers.every((row, index) => row.length === grid[index]?.length)
+      ? htmlNumbers
+      : null;
     const blocks: ArrayFormulaBlocks = new Map();
     const mutations: RangeCellMutation[] = [];
     for (let rowIndex = 0; rowIndex < grid.length; rowIndex += 1) {
       const row = grid[rowIndex] ?? [];
       for (let colIndex = 0; colIndex < row.length; colIndex += 1) {
         const rawValue = row[colIndex] ?? "";
+        const number = numbers?.[rowIndex]?.[colIndex];
         const nextCell = {
           col: targetCell.col + colIndex,
           row: targetCell.row + rowIndex
@@ -5037,7 +5063,12 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         if (!before) {
           continue;
         }
-        enterUserText(worksheet, nextCell, rawValue, inheritedStyleInput(worksheet, activeSheet, nextCell));
+        const baseStyle = inheritedStyleInput(worksheet, activeSheet, nextCell);
+        if (number === undefined) {
+          enterUserText(worksheet, nextCell, rawValue, baseStyle);
+        } else {
+          enterPastedNumber(worksheet, nextCell, rawValue, number, baseStyle);
+        }
         const after = captureCellMutationState(nextCell, blocks);
         if (!after) {
           continue;
@@ -5214,8 +5245,9 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
 
       for (const item of items) {
         if (item.types.includes("text/plain")) {
-          const blob = await item.getType("text/plain");
-          return pasteText(await blob.text());
+          const text = await (await item.getType("text/plain")).text();
+          const html = item.types.includes("text/html") ? await (await item.getType("text/html")).text() : undefined;
+          return pasteText(text, html);
         }
       }
     }
@@ -5383,6 +5415,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       removeFormControl,
       readOnly,
       recalculate,
+      regionalFormat,
+      setRegionalFormat,
       redo,
       resetZoom,
       revision,
@@ -5529,6 +5563,8 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       removeFormControl,
       readOnly,
       recalculate,
+      regionalFormat,
+      setRegionalFormat,
       redo,
       revision,
       resizeChartBy,

@@ -15,7 +15,7 @@ import type { WorkbookStructureAssets } from "./images";
 import { safeCalculate } from "./safe-calculate";
 import { getXlsxInitialActiveCell } from "./selection-tools";
 import { getWorksheetRowsBatch } from "./worksheet-batch";
-import { getSheetsWasmModule, setWasmSource, type WorkerWasmSource } from "./wasm";
+import { getSheetsWasmModule, setRegionalFormat, setWasmSource, type WorkerWasmSource } from "./wasm";
 import type {
   XlsxChart,
   XlsxChartsheet,
@@ -71,6 +71,8 @@ type WorkerRequest =
         showHiddenSheets?: boolean;
         skipXmlParsing?: boolean;
         wasmSource?: WorkerWasmSource;
+        /** The language tag the workbook's regional settings come from. */
+        regionalFormat?: string;
       };
     }
   | {
@@ -81,6 +83,8 @@ type WorkerRequest =
         showHiddenSheets?: boolean;
         skipXmlParsing?: boolean;
         wasmSource?: WorkerWasmSource;
+        /** The language tag the workbook's regional settings come from. */
+        regionalFormat?: string;
       };
     }
   | {
@@ -916,11 +920,17 @@ async function handleMessage(message: WorkerRequest) {
       if (message.payload.wasmSource !== undefined) {
         setWasmSource(message.payload.wasmSource);
       }
+      if (message.payload.regionalFormat !== undefined) {
+        setRegionalFormat(message.payload.regionalFormat);
+      }
       return loadWorkbook(message.payload.buffer, message.payload.skipXmlParsing, message.payload.showHiddenSheets);
     }
     case "parseCharts": {
       if (message.payload.wasmSource !== undefined) {
         setWasmSource(message.payload.wasmSource);
+      }
+      if (message.payload.regionalFormat !== undefined) {
+        setRegionalFormat(message.payload.regionalFormat);
       }
       return parseCharts(message.payload.buffer, message.payload.skipXmlParsing, message.payload.showHiddenSheets);
     }
