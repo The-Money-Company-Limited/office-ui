@@ -212,3 +212,16 @@ test("a copy pastes the cells a formula in it spills into blank", () => {
   assert.equal(tools.spillsFromRange(sheet, { start: { row: 1, col: 0 }, end: { row: 2, col: 0 } }, { row: 1, col: 0 }), false);
   workbook.free();
 });
+
+test("a copy pastes the other cells of a Ctrl+Shift+Enter block in it blank", () => {
+  const workbook = new Workbook();
+  const sheet = workbook.getSheet(0);
+  sheet.setArrayFormula("C1", "=A1:B2*2", [[2, 4], [6, 8]]);
+  const block = { start: { row: 0, col: 2 }, end: { row: 1, col: 3 } };
+  assert.equal(tools.spillsFromRange(sheet, block, { row: 0, col: 2 }), false);
+  for (const cell of [{ row: 0, col: 3 }, { row: 1, col: 2 }, { row: 1, col: 3 }]) {
+    assert.equal(tools.spillsFromRange(sheet, block, cell), true);
+  }
+  assert.equal(tools.spillsFromRange(sheet, { start: { row: 1, col: 2 }, end: { row: 1, col: 3 } }, { row: 1, col: 3 }), false);
+  workbook.free();
+});
