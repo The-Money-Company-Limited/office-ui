@@ -11,7 +11,7 @@ type WorkerMessage =
         skipXmlParsing?: boolean;
         wasmSource?: WorkerWasmSource;
         /** The language tag the workbook's regional settings come from. */
-        regionalFormat?: string;
+        regionalFormat: string;
       };
     }
   | {
@@ -23,7 +23,7 @@ type WorkerMessage =
         skipXmlParsing?: boolean;
         wasmSource?: WorkerWasmSource;
         /** The language tag the workbook's regional settings come from. */
-        regionalFormat?: string;
+        regionalFormat: string;
       };
     }
   | {
@@ -34,6 +34,11 @@ type WorkerMessage =
         row: number;
         col: number;
       };
+    }
+  | {
+      id: number;
+      type: "setRegionalFormat";
+      payload: { regionalFormat: string };
     }
   | {
       id: number;
@@ -185,6 +190,15 @@ export class XlsxWorkerClient {
       },
       type: "parseCharts"
     }, [workerBuffer]);
+  }
+
+  /** Re-applies a regional format to the workbook the worker holds, and recalculates it. */
+  setRegionalFormat(regionalFormat: string) {
+    return this.request<null>({
+      id: 0,
+      payload: { regionalFormat },
+      type: "setRegionalFormat"
+    });
   }
 
   getRowsBatch(workbookSheetIndex: number, startRow: number, rowCount: number) {

@@ -1031,6 +1031,15 @@ export interface UseXlsxViewerControllerOptions {
    *
    * @default false
    */
+  /**
+   * The language tag (`en-GB`, `de-DE`) the workbook's regional settings come from, standing in
+   * for the computer's regional settings Excel uses: the order of day and month in dates, the
+   * separators and currency numbers are typed and shown with. Changing it re-applies it to the
+   * open workbook, which redisplays and recalculates without a reload.
+   *
+   * @default the browser's language
+   */
+  regionalFormat?: string;
   readOnly?: boolean;
   /**
    * Called with the active tab's name once a workbook loads and whenever the active tab changes, e.g. to mirror
@@ -1176,9 +1185,10 @@ export interface XlsxViewerController {
   recalculate: () => void;
   /** The language tag (`en-GB`) the workbook's regional settings come from: how dates and numbers are typed and shown. */
   regionalFormat: string;
-  /** Re-applies the regional settings of a language tag to the open workbook, and to workbooks opened from now on. */
-  setRegionalFormat: (tag: string) => void;
+  /** Changes whenever the grid redraws: an edit, an undo, a load, a regional format re-applied. */
   revision: number;
+  /** Changes when the workbook's content changes (an edit, an undo, a load), not when it only redisplays: what a host saves on. */
+  editRevision: number;
   resetZoom: () => void;
   resizeChartBy: (
     id: string,

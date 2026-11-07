@@ -12,7 +12,7 @@ import {
   resolveWorksheetMergeMetadata
 } from "./images";
 import type { WorkbookStructureAssets } from "./images";
-import { safeCalculate } from "./safe-calculate";
+import { safeCalculate, tryRecalculate } from "./safe-calculate";
 import { getXlsxInitialActiveCell } from "./selection-tools";
 import { getWorksheetRowsBatch } from "./worksheet-batch";
 import { getSheetsWasmModule, setRegionalFormat, setWasmSource, type WorkerWasmSource } from "./wasm";
@@ -72,7 +72,7 @@ type WorkerRequest =
         skipXmlParsing?: boolean;
         wasmSource?: WorkerWasmSource;
         /** The language tag the workbook's regional settings come from. */
-        regionalFormat?: string;
+        regionalFormat: string;
       };
     }
   | {
@@ -84,8 +84,13 @@ type WorkerRequest =
         skipXmlParsing?: boolean;
         wasmSource?: WorkerWasmSource;
         /** The language tag the workbook's regional settings come from. */
-        regionalFormat?: string;
+        regionalFormat: string;
       };
+    }
+  | {
+      id: number;
+      type: "setRegionalFormat";
+      payload: { regionalFormat: string };
     }
   | {
       id: number;
@@ -140,6 +145,8 @@ type WorkerErrorResponse = {
 type WorkerResponse = WorkerSuccessResponse | WorkerErrorResponse;
 
 let workbook: Workbook | null = null;
+/** Whether the workbook is small enough to calculate here, as it was when loaded. */
+let shouldCalculate = false;
 let chartsByWorkbookSheetIndex: XlsxChart[][] = [];
 let chartsheets: XlsxChartsheet[] = [];
 let formControlsByWorkbookSheetIndex: XlsxFormControl[][] = [];
@@ -840,6 +847,7 @@ async function loadWorkbook(buffer: ArrayBuffer, skipXmlParsing = false, showHid
   );
   const sheetLayoutStates = structureAssets ? undefined : parseWorkerSheetLayoutAssets(bytes, nextWorkbook.sheetCount);
   workbook = nextWorkbook;
+  shouldCalculate = totalFormulas <= FORMULA_COUNT_THRESHOLD;
   sheets = buildSheetList(nextWorkbook, themePalette, structureAssets, sheetLayoutStates, showHiddenSheets);
   tablesByWorkbookSheetIndex = Array.from({ length: nextWorkbook.sheetCount }, (_, workbookSheetIndex) =>
     mapWorksheetTables(
@@ -914,25 +922,31 @@ function respond(message: WorkerResponse) {
   self.postMessage(message);
 }
 
+/** The engine source and regional format a load request carries. */
+function applyLoadEnvironment(payload: { regionalFormat: string; wasmSource?: WorkerWasmSource }) {
+  if (payload.wasmSource !== undefined) {
+    setWasmSource(payload.wasmSource);
+  }
+  setRegionalFormat(payload.regionalFormat);
+}
+
 async function handleMessage(message: WorkerRequest) {
   switch (message.type) {
     case "load": {
-      if (message.payload.wasmSource !== undefined) {
-        setWasmSource(message.payload.wasmSource);
-      }
-      if (message.payload.regionalFormat !== undefined) {
-        setRegionalFormat(message.payload.regionalFormat);
-      }
+      applyLoadEnvironment(message.payload);
       return loadWorkbook(message.payload.buffer, message.payload.skipXmlParsing, message.payload.showHiddenSheets);
     }
     case "parseCharts": {
-      if (message.payload.wasmSource !== undefined) {
-        setWasmSource(message.payload.wasmSource);
-      }
-      if (message.payload.regionalFormat !== undefined) {
-        setRegionalFormat(message.payload.regionalFormat);
-      }
+      applyLoadEnvironment(message.payload);
       return parseCharts(message.payload.buffer, message.payload.skipXmlParsing, message.payload.showHiddenSheets);
+    }
+    case "setRegionalFormat": {
+      setRegionalFormat(message.payload.regionalFormat);
+      if (workbook) {
+        workbook.setLocale(message.payload.regionalFormat);
+        if (shouldCalculate) tryRecalculate(workbook);
+      }
+      return null;
     }
     case "getCellSnapshot": {
       if (!workbook) {

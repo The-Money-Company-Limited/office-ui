@@ -71,7 +71,7 @@ import {
 } from "./cell-history";
 import { safeCalculate, tryRecalculate } from "./safe-calculate";
 import { cellAddressToA1, parseXlsxRange } from "./range-reference";
-import { canUseConfiguredWasmSourceInWorker, getRegionalFormat, getSheetsWasmModule, setRegionalFormat as setDefaultRegionalFormat } from "./wasm";
+import { BROWSER_REGIONAL_FORMAT, canUseConfiguredWasmSourceInWorker, getSheetsWasmModule, setRegionalFormat as setEngineRegionalFormat } from "./wasm";
 import { excelClipboardNumbers } from "./clipboard-html";
 import { XlsxWorkerClient } from "./worker-client";
 import { normalizeWorkbookArrayBuffer } from "./zip-entry-names";
@@ -1919,6 +1919,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     readOnly: requestedReadOnly = false,
     onActiveSheetChange,
     readOnlyAboveBytes = 0,
+    regionalFormat = BROWSER_REGIONAL_FORMAT,
     showHiddenSheets = false,
     skipXmlParsing = false,
     src,
@@ -1968,8 +1969,13 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   const [shouldAutoCalculate, setShouldAutoCalculate] = React.useState(false);
   const [workerCellSnapshotRevision, setWorkerCellSnapshotRevision] = React.useState(0);
   const [isWorkerBacked, setIsWorkerBacked] = React.useState(false);
-  const [regionalFormat, setRegionalFormatState] = React.useState(getRegionalFormat);
-  const [workerReloadRevision, setWorkerReloadRevision] = React.useState(0);
+  // Redraws that change nothing in the file (a regional format re-applied): part of `revision`,
+  // which redraws the grid, but not of `editRevision`, which a host saves on.
+  const [displayRevision, setDisplayRevision] = React.useState(0);
+  // The regional format the open workbook has, and the one the next load opens in.
+  const appliedRegionalFormatRef = React.useRef(regionalFormat);
+  const regionalFormatRef = React.useRef(regionalFormat);
+  regionalFormatRef.current = regionalFormat;
   const [sortState, setSortState] = React.useState<XlsxTableSortState | null>(null);
   const [forcedReadOnly, setForcedReadOnly] = React.useState(false);
   const deferredBufferRef = React.useRef<ArrayBuffer | null>(null);
@@ -2345,6 +2351,9 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
 
     let isCurrent = true;
     const abortController = new AbortController();
+    // The workbook opens in the regional format current now; a later change re-applies.
+    setEngineRegionalFormat(regionalFormatRef.current);
+    appliedRegionalFormatRef.current = regionalFormatRef.current;
     setIsLoading(true);
     setError(null);
     clearImageAssets();
@@ -2519,8 +2528,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     shouldForceReadOnlyForBuffer,
     shouldUseWorkerForReadOnlyLoad,
     src,
-    showHiddenSheets,
-    workerReloadRevision
+    showHiddenSheets
   ]);
 
   const activeTab = tabs[activeTabIndex] ?? null;
@@ -2967,7 +2975,9 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     }
 
     return getWorkerClient().getRowsBatch(workbookSheetIndex, startRow, rowCount);
-  }, [getWorkerClient, isWorkerBacked]);
+    // A new function when the worker's cells change (a regional format), so the grid fetches
+    // its rows again.
+  }, [getWorkerClient, isWorkerBacked, workerCellSnapshotRevision]);
 
   const visibleSheetIndexByWorkbookSheetIndex = React.useMemo(
     () => new Map(sheets.map((sheet, index) => [sheet.workbookSheetIndex, index])),
@@ -4139,20 +4149,26 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     setShouldAutoCalculate(false);
   }, [refreshWorkbookState, workbook]);
 
-  // Re-applies a regional format to the open workbook, as Excel does when the computer's
-  // regional settings change: cells redisplay and formulas recalculate. A workbook held by the
-  // worker (read-only) loads again in it.
-  const setRegionalFormat = React.useCallback((tag: string) => {
-    setDefaultRegionalFormat(tag);
-    setRegionalFormatState(tag);
-    if (workbook) {
-      workbook.setLocale(tag);
-      maybeRecalculateWorkbook(workbook);
-      refreshWorkbookState(workbook);
-    } else if (isWorkerBacked) {
-      setWorkerReloadRevision((current) => current + 1);
+  // Re-applies a changed regional format to the open workbook, as Excel does when the
+  // computer's regional settings change: cells redisplay and formulas recalculate. Only the
+  // display changes, so `editRevision` stays.
+  React.useEffect(() => {
+    if (appliedRegionalFormatRef.current === regionalFormat || (!workbook && !isWorkerBacked)) {
+      return;
     }
-  }, [isWorkerBacked, maybeRecalculateWorkbook, refreshWorkbookState, workbook]);
+    appliedRegionalFormatRef.current = regionalFormat;
+    setEngineRegionalFormat(regionalFormat);
+    if (workbook) {
+      workbook.setLocale(regionalFormat);
+      if (shouldAutoCalculate) tryRecalculate(workbook);
+      setDisplayRevision((current) => current + 1);
+      return;
+    }
+    void getWorkerClient().setRegionalFormat(regionalFormat).then(() => {
+      workerCellSnapshotCacheRef.current.clear();
+      setWorkerCellSnapshotRevision((current) => current + 1);
+    });
+  }, [getWorkerClient, isWorkerBacked, regionalFormat, shouldAutoCalculate, workbook]);
 
   const applyReadOnlyResizeOverride = React.useCallback((
     axis: "column" | "row",
@@ -5043,11 +5059,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       return false;
     }
 
-    // Excel's numbers apply only where its table has the text's rows and columns.
-    const htmlNumbers = html ? excelClipboardNumbers(html) : null;
-    const numbers = htmlNumbers?.length === grid.length && htmlNumbers.every((row, index) => row.length === grid[index]?.length)
-      ? htmlNumbers
-      : null;
+    const numbers = html ? excelClipboardNumbers(html, grid) : null;
     const blocks: ArrayFormulaBlocks = new Map();
     const mutations: RangeCellMutation[] = [];
     for (let rowIndex = 0; rowIndex < grid.length; rowIndex += 1) {
@@ -5245,8 +5257,13 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
 
       for (const item of items) {
         if (item.types.includes("text/plain")) {
-          const text = await (await item.getType("text/plain")).text();
-          const html = item.types.includes("text/html") ? await (await item.getType("text/html")).text() : undefined;
+          // The HTML only adds Excel's numbers; without it the text pastes as typed.
+          const [text, html] = await Promise.all([
+            item.getType("text/plain").then((blob) => blob.text()),
+            item.types.includes("text/html")
+              ? item.getType("text/html").then((blob) => blob.text()).catch(() => undefined)
+              : undefined
+          ]);
           return pasteText(text, html);
         }
       }
@@ -5416,10 +5433,10 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       readOnly,
       recalculate,
       regionalFormat,
-      setRegionalFormat,
       redo,
       resetZoom,
-      revision,
+      editRevision: revision,
+      revision: revision + displayRevision,
       resizeChartBy,
       resizeImageBy,
       resizeColumn,
@@ -5564,9 +5581,9 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       readOnly,
       recalculate,
       regionalFormat,
-      setRegionalFormat,
       redo,
       revision,
+      displayRevision,
       resizeChartBy,
       resizeImageBy,
       resizeColumn,

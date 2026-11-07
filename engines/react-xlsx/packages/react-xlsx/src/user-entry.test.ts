@@ -200,9 +200,9 @@ describe("typed entries", () => {
     assert.equal(sheet.getFormattedValueAt(0, 1), "November");
     sheet.clearCellStyleAt(0, 0);
     assert.equal(type(sheet, "1,5"), "1,5");
-    assert.equal(regionalSample("en-GB"), "05/11/2026 · 1,234.5");
-    assert.equal(regionalSample("de-DE"), "05.11.2026 · 1.234,5");
-    assert.equal(regionalSample("en-US"), "11/5/2026 · 1,234.5");
+    assert.deepEqual(regionalSample("en-GB"), ["05/11/2026", "1,234.5"]);
+    assert.deepEqual(regionalSample("de-DE"), ["05.11.2026", "1.234,5"]);
+    assert.deepEqual(regionalSample("en-US"), ["11/5/2026", "1,234.5"]);
   });
 
   it("a paste from desktop Excel takes the values its HTML carries", () => {
@@ -210,19 +210,26 @@ describe("typed entries", () => {
     const html = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><body><table>
       <tr><td class=xl65 align=right x:num="46153">5/11/2026</td><td x:num>12</td><td>Name</td></tr>
       <tr><td align=right x:num="46339">11/13/2026</td><td x:num="1234.5">$1,234.50</td><td colspan=2 x:num='0.25'>25%</td></tr>
+      <tr style='display:none'><td width=64></td></tr>
       </table></body></html>`;
-    assert.deepEqual(excelClipboardNumbers(html), [[46153, undefined, undefined], [46339, 1234.5, 0.25, undefined]]);
-    assert.equal(excelClipboardNumbers("<table><tr><td>1</td></tr></table>"), null);
-    assert.equal(excelClipboardNumbers('<table><tr><td rowspan=2 x:num="1">1</td></tr></table>'), null);
+    const grid = [["5/11/2026", "12", "Name"], ["11/13/2026", "$1,234.50", "25%", ""]];
+    assert.deepEqual(excelClipboardNumbers(html, grid), [[46153, undefined, undefined], [46339, 1234.5, 0.25, undefined]]);
+    // Only a table with the text's rows and columns, and Excel's numbers, counts.
+    assert.equal(excelClipboardNumbers(html, [["5/11/2026"]]), null);
+    assert.equal(excelClipboardNumbers("<table><tr><td>1</td></tr></table>", [["1"]]), null);
+    assert.equal(excelClipboardNumbers('<table><tr><td rowspan=2 x:num="1">1</td></tr></table>', [["1"]]), null);
     const sheet = sheetIn("en-GB");
-    enterPastedNumber(sheet, A1, "5/11/2026", 46153);
-    assert.equal(sheet.getFormattedValueAt(0, 0), "11/05/2026");
-    enterPastedNumber(sheet, { row: 1, col: 0 }, "11/13/2026", 46339);
-    assert.equal(sheet.getFormattedValueAt(1, 0), "13/11/2026");
-    enterPastedNumber(sheet, { row: 2, col: 0 }, "$1,234.50", 1234.5);
-    assert.equal(sheet.getCellAt(2, 0).asNumber(), 1234.5);
-    enterPastedNumber(sheet, { row: 3, col: 0 }, "25%", 0.25);
-    assert.equal(sheet.getFormattedValueAt(3, 0), "25%");
+    const paste = (row: number, text: string, number: number) => {
+      enterPastedNumber(sheet, { row, col: 0 }, text, number);
+      return sheet.getFormattedValueAt(row, 0);
+    };
+    assert.equal(paste(0, "5/11/2026", 46153), "11/05/2026");
+    assert.equal(paste(1, "11/13/2026", 46339), "13/11/2026");
+    assert.equal(paste(2, "25%", 0.25), "25%");
+    // Text that reads as another value gives no format: a fraction, an ID, a dollar amount in en-GB.
+    assert.equal(paste(3, "1/2", 0.5), "0.5");
+    assert.equal(paste(4, "123-45-6789", 123456789), "123456789");
+    assert.equal(paste(5, "$1,234.50", 1234.5), "1234.5");
   });
 
   it("a cell a dynamic array spills into edits as the value it shows", () => {

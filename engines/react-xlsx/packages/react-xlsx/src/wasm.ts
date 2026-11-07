@@ -70,30 +70,30 @@ export function getConfiguredWorkerWasmSource(): WorkerWasmSource | undefined {
 
 // Formulas, typed entries and the grid follow a regional format, standing in for the regional
 // settings Excel takes from the computer: 5/11/2026 is 5 November in en-GB, and de-DE shows 1.5
-// as 1,5. It is the browser's language unless the host picks another.
-let regionalFormat = globalThis.navigator?.language || "en-US";
+// as 1,5. The browser's language, unless a controller is given another (its `regionalFormat`
+// option), which it sets here before it opens a workbook.
+export const BROWSER_REGIONAL_FORMAT = globalThis.navigator?.language || "en-US";
+let regionalFormat = BROWSER_REGIONAL_FORMAT;
 let loadedModule: SheetsWasmModule | null = null;
 
-/** The language tag workbooks opened from now on take their regional settings from. */
+/** The language tag the next workbook opened takes its regional settings from. */
 export function getRegionalFormat(): string {
   return regionalFormat;
 }
 
-/**
- * Sets the language tag (`en-GB`, `de-DE`) workbooks opened from now on take their regional
- * settings from. A controller's `setRegionalFormat` also re-applies it to its open workbook.
- */
+/** Sets the language tag (`en-GB`) the next workbook opened takes its regional settings from. */
 export function setRegionalFormat(tag: string): void {
   regionalFormat = tag;
   loadedModule?.setLocale(tag);
 }
 
 /**
- * How a short date and a number show in a regional format (`05/11/2026 · 1,234.5` in en-GB), for
- * a picker to show beside it; `null` until the engine has loaded.
+ * How a short date and a number show in each regional format (`["05/11/2026", "1,234.5"]` in
+ * en-GB), for a picker to show beside it. Loads the engine on this thread if it hasn't yet.
  */
-export function getRegionalFormatSample(tag: string): string | null {
-  return loadedModule?.regionalSample(tag) ?? null;
+export async function getRegionalFormatSamples(tags: readonly string[]): Promise<Record<string, [date: string, number: string]>> {
+  const mod = await getSheetsWasmModule();
+  return Object.fromEntries(tags.map((tag) => [tag, mod.regionalSample(tag) as [string, string]]));
 }
 
 export function getSheetsWasmModule() {

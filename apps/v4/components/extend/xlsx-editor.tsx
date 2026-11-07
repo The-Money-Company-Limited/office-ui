@@ -11,11 +11,9 @@ import {
 
 import {
   findXlsxCells,
-  getRegionalFormatSample,
   getXlsxSelectionStatistics,
   parseXlsxRange,
   resolveXlsxFindIndex,
-  setRegionalFormat,
   useXlsxCellEditor,
   useXlsxFormulaAssist,
   useXlsxViewer,
@@ -48,9 +46,6 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -77,6 +72,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { ToolbarOverflow } from "@/components/extend/toolbar-overflow"
+import {
+  EditorRegionalFormat,
+  RegionalFormatProvider,
+  useRegionalFormat,
+} from "@/components/extend/xlsx-regional-format"
 import {
   renderXlsxScroller,
   WorkbookSheetTabs,
@@ -2830,7 +2830,7 @@ function XlsxCommentPopover({
 }
 
 function EditorSelectionStatus() {
-  const { getActiveWorksheet, revision } = useXlsxViewer()
+  const { getActiveWorksheet, regionalFormat, revision } = useXlsxViewer()
   const { selection } = useXlsxViewerSelection()
   const startRow = selection?.start.row
   const startCol = selection?.start.col
@@ -2866,8 +2866,9 @@ function EditorSelectionStatus() {
     )
   }
   if (!statistics || statistics.count < 2) return null
+  // In the regional format the grid shows numbers in.
   const format = (value: number) =>
-    value.toLocaleString(undefined, { maximumFractionDigits: 10 })
+    value.toLocaleString(regionalFormat, { maximumFractionDigits: 10 })
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -2892,148 +2893,6 @@ function EditorSelectionStatus() {
           </>
         ) : null}
         <DropdownMenuItem>Count: {statistics.count}</DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
-const REGIONAL_FORMAT_STORAGE_KEY = "xlsx-editor-regional-format"
-/** Regional formats the engine knows the dates, numbers and currency of. */
-const REGIONAL_FORMATS = [
-  "en-US",
-  "en-GB",
-  "en-CA",
-  "en-AU",
-  "en-IN",
-  "en-IE",
-  "de-DE",
-  "de-CH",
-  "fr-FR",
-  "fr-CA",
-  "es-ES",
-  "es-MX",
-  "it-IT",
-  "pt-BR",
-  "pt-PT",
-  "nl-NL",
-  "sv-SE",
-  "da-DK",
-  "nb-NO",
-  "pl-PL",
-  "cs-CZ",
-  "ja-JP",
-  "zh-CN",
-  "ko-KR",
-]
-
-function readStoredRegionalFormat() {
-  try {
-    return window.localStorage.getItem(REGIONAL_FORMAT_STORAGE_KEY)
-  } catch {
-    return null
-  }
-}
-
-function storeRegionalFormat(tag: string) {
-  try {
-    window.localStorage.setItem(REGIONAL_FORMAT_STORAGE_KEY, tag)
-  } catch {
-    // Without storage the choice lasts until the page closes.
-  }
-}
-
-/** The viewer's stored regional format, applied before the workbook opens. */
-function useStoredRegionalFormat() {
-  React.useState(() => {
-    const stored =
-      typeof window === "undefined" ? null : readStoredRegionalFormat()
-    if (stored) setRegionalFormat(stored)
-    return null
-  })
-}
-
-function regionalFormatName(tag: string) {
-  try {
-    return new Intl.DisplayNames(["en"], { type: "language" }).of(tag) ?? tag
-  } catch {
-    return tag
-  }
-}
-
-/**
- * The regional format dates and numbers are typed and shown in, as Excel takes it from the
- * computer: the browser's language until the viewer picks another, which re-applies to the open
- * workbook and is remembered for this viewer.
- */
-function EditorRegionalFormat() {
-  const { regionalFormat, setRegionalFormat: applyRegionalFormat } =
-    useXlsxViewer()
-  const browserFormat =
-    typeof navigator === "undefined" ? "en-US" : navigator.language
-  const formats = React.useMemo(
-    () =>
-      // The browser's own first; one picked elsewhere (an older choice) last.
-      [browserFormat, ...REGIONAL_FORMATS, regionalFormat].filter(
-        (tag, index, tags) =>
-          tags.findIndex(
-            (other) => other.toLowerCase() === tag.toLowerCase()
-          ) === index
-      ),
-    [browserFormat, regionalFormat]
-  )
-  const name = regionalFormatName(regionalFormat)
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-label={`Regional format: ${name}`}
-          className="text-muted-foreground"
-        >
-          <IconPlaceholder
-            lucide="Globe"
-            tabler="IconWorld"
-            hugeicons="Globe02Icon"
-            phosphor="GlobeIcon"
-            remixicon="RiGlobalLine"
-            className="size-3.5"
-          />
-          <span className="max-w-40 truncate">{name}</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        side="top"
-        className={cn(
-          "max-h-80 w-80 overflow-y-auto",
-          XLSX_DROPDOWN_Z_INDEX_CLASS
-        )}
-      >
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>
-            Regional format: how dates and numbers are typed and shown
-          </DropdownMenuLabel>
-          <DropdownMenuRadioGroup
-            value={regionalFormat}
-            onValueChange={(tag: string) => {
-              storeRegionalFormat(tag)
-              applyRegionalFormat(tag)
-            }}
-          >
-            {formats.map((tag) => (
-              <DropdownMenuRadioItem key={tag} value={tag}>
-                <span className="min-w-0 flex-1 truncate">
-                  {regionalFormatName(tag)}
-                </span>
-                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                  {getRegionalFormatSample(tag)}
-                </span>
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -3834,7 +3693,7 @@ function XlsxWorkbookLoadedEditor({
   workbookIdentity: string
 }) {
   const { canSave } = useSaveState()
-  useStoredRegionalFormat()
+  const [regionalFormat, setRegionalFormat] = useRegionalFormat()
   const controller = useXlsxViewerController(
     React.useMemo(
       () => ({
@@ -3843,9 +3702,10 @@ function XlsxWorkbookLoadedEditor({
         fileName,
         readOnly: defaultReadOnly || !canSave,
         readOnlyAboveBytes: XLSX_EDITOR_READ_ONLY_THRESHOLD_BYTES,
+        regionalFormat,
         useWorker: true,
       }),
-      [canSave, defaultReadOnly, fileName, workbookBuffer]
+      [canSave, defaultReadOnly, fileName, regionalFormat, workbookBuffer]
     )
   )
   useDocumentAdapter({
@@ -3854,7 +3714,11 @@ function XlsxWorkbookLoadedEditor({
     }),
     download: controller.exportXlsx,
   })
-  useDocumentRevision(controller.revision, !controller.isLoading && controller.canExport)
+  // A regional format changes what the viewer sees, not the file.
+  useDocumentRevision(
+    controller.editRevision,
+    !controller.isLoading && controller.canExport
+  )
   const { activeSheetName, setActiveSheetByName } = controller
   const hasRestoredSheetRef = React.useRef(false)
 
@@ -3884,18 +3748,20 @@ function XlsxWorkbookLoadedEditor({
 
   return (
     <XlsxViewerProvider controller={controller} isDark={isDark}>
-      <XlsxEditorSurface
-        author={author}
-        cellAnchorIdPrefix={cellAnchorIdPrefix}
-        fileName={fileName}
-        isDark={isDark}
-        onIsDarkChange={onIsDarkChange}
-        onUploadClick={onUploadClick}
-        renderTableHeaderMenu={renderTableHeaderMenu}
-        scrollsWindow={scrollsWindow}
-        showNightRenderToggle={showNightRenderToggle}
-        workbookIdentity={workbookIdentity}
-      />
+      <RegionalFormatProvider value={setRegionalFormat}>
+        <XlsxEditorSurface
+          author={author}
+          cellAnchorIdPrefix={cellAnchorIdPrefix}
+          fileName={fileName}
+          isDark={isDark}
+          onIsDarkChange={onIsDarkChange}
+          onUploadClick={onUploadClick}
+          renderTableHeaderMenu={renderTableHeaderMenu}
+          scrollsWindow={scrollsWindow}
+          showNightRenderToggle={showNightRenderToggle}
+          workbookIdentity={workbookIdentity}
+        />
+      </RegionalFormatProvider>
     </XlsxViewerProvider>
   )
 }
