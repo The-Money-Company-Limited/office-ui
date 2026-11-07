@@ -1460,11 +1460,11 @@ impl XlsReader {
                             shared_formulas.get(&(*master_row as u16, *master_col))
                         {
                             // Shared formula found - decompile with base cell
-                            let shared_ctx = FormulaContext {
-                                base_cell: Some((row, col)),
-                                ..formula_ctx.clone()
-                            };
-                            let text = crate::biff::formula::decompile(shared_tokens, &shared_ctx);
+                            let text = crate::biff::formula::decompile_shared(
+                                shared_tokens,
+                                formula_ctx,
+                                (row, col),
+                            );
                             if text.is_empty() {
                                 String::new()
                             } else {
@@ -1734,12 +1734,8 @@ impl XlsReader {
         shared_tokens: &[u8],
         formula_ctx: &FormulaContext,
     ) -> XlsResult<()> {
-        // Build a temporary context with the base cell for offset resolution
-        let shared_ctx = FormulaContext {
-            base_cell: Some((cell_row, cell_col)),
-            ..formula_ctx.clone()
-        };
-        let text = crate::biff::formula::decompile(shared_tokens, &shared_ctx);
+        let text =
+            crate::biff::formula::decompile_shared(shared_tokens, formula_ctx, (cell_row, cell_col));
         let formula_text = if text.is_empty() {
             String::new()
         } else {

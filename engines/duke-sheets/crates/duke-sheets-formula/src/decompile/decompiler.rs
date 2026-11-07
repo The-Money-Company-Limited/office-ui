@@ -175,6 +175,16 @@ fn format_number(val: f64) -> String {
 /// Returns the formula text (without leading `=`), or an empty string if
 /// decompilation fails.
 pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
+    decompile_at(tokens, ctx, ctx.base_cell)
+}
+
+/// `decompile` for a shared formula's cell at `base_cell`, whose tRefN/tAreaN are offsets from
+/// it: one context serves every cell of the formula.
+pub fn decompile_at(
+    tokens: &[ParsedToken],
+    ctx: &FormulaContext,
+    base_cell: Option<(u32, u16)>,
+) -> String {
     let mut stack: Vec<StackEntry> = Vec::new();
 
     for token in tokens {
@@ -307,8 +317,13 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 row_relative,
                 col_relative,
             } => {
-                let (row, col) =
-                    resolve_refn_offset(ctx, *row_offset, *col_offset, *row_relative, *col_relative);
+                let (row, col) = resolve_refn_offset(
+                    base_cell,
+                    *row_offset,
+                    *col_offset,
+                    *row_relative,
+                    *col_relative,
+                );
                 stack.push(StackEntry::atom(format_ref(
                     row,
                     col,
@@ -327,14 +342,14 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 last_col_rel,
             } => {
                 let (fr, fc) = resolve_refn_offset(
-                    ctx,
+                    base_cell,
                     *first_row_offset,
                     *first_col_offset,
                     *first_row_rel,
                     *first_col_rel,
                 );
                 let (lr, lc) = resolve_refn_offset(
-                    ctx,
+                    base_cell,
                     *last_row_offset,
                     *last_col_offset,
                     *last_row_rel,
@@ -729,17 +744,17 @@ fn nth_extern_name(ctx: &FormulaContext, supbook_idx: u16, name_idx: u32) -> Opt
 
 /// Resolve a tRefN/tAreaN reference to an absolute (row, col).
 ///
-/// If the context has a `base_cell`, a relative row or column is an offset added to it, and an
+/// Given the formula's `base_cell`, a relative row or column is an offset added to it, and an
 /// absolute one the row or column itself. Without a base cell (shouldn't happen for valid shared
 /// formulas), the offset is interpreted as an unsigned value (best effort).
 fn resolve_refn_offset(
-    ctx: &FormulaContext,
+    base_cell: Option<(u32, u16)>,
     row_off: i32,
     col_off: i16,
     row_rel: bool,
     col_rel: bool,
 ) -> (u32, u16) {
-    match ctx.base_cell {
+    match base_cell {
         Some((base_row, base_col)) => {
             let row = if row_rel {
                 ((base_row as i64) + (row_off as i64)) as u32

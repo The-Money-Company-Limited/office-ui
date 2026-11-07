@@ -15,6 +15,14 @@ pub fn decompile(data: &[u8], ctx: &FormulaContext) -> String {
     decompile_with_extra(data, &[], ctx)
 }
 
+/// Decompile a shared formula's tokens for its cell at `base_cell`.
+pub fn decompile_shared(data: &[u8], ctx: &FormulaContext, base_cell: (u32, u16)) -> String {
+    if data.is_empty() {
+        return String::new();
+    }
+    decompiler::decompile_at(&token_parser::parse_tokens(data), ctx, Some(base_cell))
+}
+
 /// Decompile formula tokens with an extra-data section for tArray constants.
 pub fn decompile_with_extra(data: &[u8], extra_data: &[u8], ctx: &FormulaContext) -> String {
     if data.is_empty() {

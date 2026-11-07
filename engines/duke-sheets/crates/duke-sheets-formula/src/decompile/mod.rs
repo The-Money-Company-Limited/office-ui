@@ -8,7 +8,7 @@ pub mod decompiler;
 pub mod function_table;
 pub mod parsed_token;
 
-pub use decompiler::decompile;
+pub use decompiler::{decompile, decompile_at};
 pub use function_table::{
     expr_calls_volatile_function, function_arg_class, function_argc, function_index,
     function_is_biff8_addin, function_is_fixed_arity, function_is_volatile, function_name,
@@ -92,7 +92,7 @@ pub const BUILTIN_NAMES: &[&str] = &[
 ];
 
 /// Context for formula decompilation, built from workbook globals.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FormulaContext {
     /// Sheet names from BOUNDSHEET records.
     pub sheet_names: Vec<String>,
@@ -112,12 +112,16 @@ pub struct FormulaContext {
     pub base_cell: Option<(u32, u16)>,
     /// The sheet's last row and column (0-based), when set: an area from the first to the last
     /// column is shown as whole rows (`1:1`), else one from the first to the last row as whole
-    /// columns (`A:A`), as Excel shows them. `BIFF8_LAST_CELL` for a .xls file.
+    /// columns (`A:A`), as Excel shows them. `BIFF8_LAST_CELL` for a .xls file, `BIFF12_LAST_CELL`
+    /// for a .xlsb one.
     pub last_cell: Option<(u32, u16)>,
 }
 
 /// A .xls sheet's last row and column: row 65536, column IV.
 pub const BIFF8_LAST_CELL: (u32, u16) = (0xFFFF, 0xFF);
+
+/// A .xlsb sheet's last row and column: row 1048576, column XFD.
+pub const BIFF12_LAST_CELL: (u32, u16) = (1_048_575, 16_383);
 
 impl FormulaContext {
     /// Create an empty context (no EXTERNSHEET/SUPBOOK/NAME data).

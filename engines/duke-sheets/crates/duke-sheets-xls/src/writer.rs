@@ -4333,9 +4333,9 @@ fn push_area_payload(
     let start = &range.start;
     let end = &range.end;
     let (last_row, last_col) = duke_sheets_formula::decompile::BIFF8_LAST_CELL;
-    // A range to the sheet's last column (`1:1`, which the parser ends at column XFD) ends at a
-    // .xls sheet's, column IV: the whole BIFF8 row.
-    let end_col = if end.col == duke_sheets_core::MAX_COLS - 1 {
+    // Whole rows (`1:1`, which the parser ends at column XFD) end at a .xls sheet's last column,
+    // IV. A range from another column to XFD can't be written.
+    let end_col = if start.col == 0 && end.col == duke_sheets_core::MAX_COLS - 1 {
         last_col
     } else {
         end.col

@@ -292,6 +292,25 @@ mod tests {
     }
 
     #[test]
+    fn whole_rows_columns_and_mixed_references_roundtrip() {
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        for (col, text) in ["=SUM(1:1)", "=SUM($C:$D)", "=$A2+B$2+SUM(B1:XFD1)"]
+            .into_iter()
+            .enumerate()
+        {
+            ws.set_formula_with_cached_value_at(4, col as u16, text, CellValue::Number(0.0))
+                .unwrap();
+        }
+
+        let wb2 = round_trip(&wb);
+        let ws2 = wb2.worksheet(0).unwrap();
+        assert_eq!(ws2.get_formula_at(4, 0), Some("=SUM(1:1)"));
+        assert_eq!(ws2.get_formula_at(4, 1), Some("=SUM($C:$D)"));
+        assert_eq!(ws2.get_formula_at(4, 2), Some("=$A2+B$2+SUM(B1:XFD1)"));
+    }
+
+    #[test]
     fn formula_cached_string_roundtrip() {
         let mut wb = Workbook::new();
         let ws = wb.worksheet_mut(0).unwrap();

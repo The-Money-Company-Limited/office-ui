@@ -185,6 +185,25 @@ fn full_row_ref_round_trips_with_biff8_col_extent() {
 }
 
 #[test]
+fn range_to_the_last_column_isnt_cut_to_biff8() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("B1", 10.0).expect("B1");
+    ws.set_cell_formula("A2", "=SUM(B1:XFD1)").expect("formula");
+    ws.set_formula_result(1, 0, CellValue::Number(10.0))
+        .expect("cached");
+
+    // Only whole rows end at column IV; `B1:XFD1` doesn't fit a .xls sheet, so it isn't
+    // written as `B1:IV1`.
+    let parsed = write_then_read(&wb);
+    let formula = parsed.worksheet(0).unwrap().get_formula_at(1, 0);
+    assert!(
+        formula.is_none_or(|f| !f.to_uppercase().contains("IV")),
+        "got {formula:?}"
+    );
+}
+
+#[test]
 fn absolute_cell_reference_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();

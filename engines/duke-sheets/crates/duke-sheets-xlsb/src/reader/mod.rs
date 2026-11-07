@@ -233,8 +233,15 @@ fn parse_print_area_formula(
     let trimmed = formula.trim().trim_start_matches('=');
     let range_part = trimmed.split('!').next_back()?.trim();
     let first_area = range_part.split(',').next()?.trim();
+    // Whole rows or columns (`$1:$5`, `A:C`) read as the parser reads them.
     let clean = first_area.replace('$', "");
-    duke_sheets_core::CellRange::parse(&clean).ok()
+    match duke_sheets_formula::parse_formula(&format!("={clean}")).ok()? {
+        duke_sheets_formula::FormulaExpr::RangeRef(r) => Some(r.range),
+        duke_sheets_formula::FormulaExpr::CellRef(c) => {
+            Some(duke_sheets_core::CellRange::single(c.address))
+        }
+        _ => None,
+    }
 }
 
 #[allow(clippy::type_complexity)]
