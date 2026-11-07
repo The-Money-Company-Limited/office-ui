@@ -2274,7 +2274,9 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     };
   }, [skipXmlParsing]);
 
-  const refreshWorkbookState = React.useCallback((targetWorkbook: Workbook) => {
+  // `edit: false` redraws without counting as an edit (editRevision): a regional format
+  // re-applied.
+  const refreshWorkbookState = React.useCallback((targetWorkbook: Workbook, { edit = true }: { edit?: boolean } = {}) => {
     const currentFormControls = imageAssetsRef.current?.formControlsByWorkbookSheetIndex ?? [];
     const nextFormControls = refreshWorkbookFormControls(
       targetWorkbook,
@@ -2303,7 +2305,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         showHiddenSheets
       )
     );
-    setRevision((current) => current + 1);
+    (edit ? setRevision : setDisplayRevision)((current) => current + 1);
   }, [setChartAssets, showHiddenSheets]);
 
   React.useEffect(() => () => {
@@ -2975,9 +2977,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     }
 
     return getWorkerClient().getRowsBatch(workbookSheetIndex, startRow, rowCount);
-    // A new function when the worker's cells change (a regional format), so the grid fetches
-    // its rows again.
-  }, [getWorkerClient, isWorkerBacked, workerCellSnapshotRevision]);
+  }, [getWorkerClient, isWorkerBacked]);
 
   const visibleSheetIndexByWorkbookSheetIndex = React.useMemo(
     () => new Map(sheets.map((sheet, index) => [sheet.workbookSheetIndex, index])),
@@ -3476,17 +3476,18 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     return () => {
       isCurrent = false;
     };
-  }, [deferredMetadataCell, deferredMetadataSheet, getCellSnapshotAsync, isWorkerBacked]);
+    // displayRevision: the worker's cells changed (a regional format re-applied).
+  }, [deferredMetadataCell, deferredMetadataSheet, displayRevision, getCellSnapshotAsync, isWorkerBacked]);
 
   const activeCellAddress = React.useMemo(() => (activeCell ? cellAddressToA1(activeCell) : null), [activeCell]);
   const selectedRangeAddress = React.useMemo(() => (selection ? rangeToA1(selection) : null), [selection]);
   const selectedValue = React.useMemo(
     () => getCellDisplayValue(deferredMetadataCell),
-    [deferredMetadataCell, getCellDisplayValue, revision, workerCellSnapshotRevision]
+    [deferredMetadataCell, displayRevision, getCellDisplayValue, revision, workerCellSnapshotRevision]
   );
   const selectedCellFormula = React.useMemo(
     () => getCellFormula(deferredMetadataCell),
-    [deferredMetadataCell, getCellFormula, revision, workerCellSnapshotRevision]
+    [deferredMetadataCell, displayRevision, getCellFormula, revision, workerCellSnapshotRevision]
   );
   const getChartSeriesFormula = React.useCallback((chartId: string, seriesIndex: number) => (
     buildChartSeriesFormula(getChartById(chartId), seriesIndex)
@@ -4160,15 +4161,26 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     setEngineRegionalFormat(regionalFormat);
     if (workbook) {
       workbook.setLocale(regionalFormat);
-      if (shouldAutoCalculate) tryRecalculate(workbook);
-      setDisplayRevision((current) => current + 1);
+      if (shouldAutoCalculate && !tryRecalculate(workbook).calculated) {
+        // A trap poisons the workbook, as in recalculate: don't read it.
+        setShouldAutoCalculate(false);
+        return;
+      }
+      refreshWorkbookState(workbook, { edit: false });
       return;
     }
-    void getWorkerClient().setRegionalFormat(regionalFormat).then(() => {
-      workerCellSnapshotCacheRef.current.clear();
-      setWorkerCellSnapshotRevision((current) => current + 1);
-    });
-  }, [getWorkerClient, isWorkerBacked, regionalFormat, shouldAutoCalculate, workbook]);
+    getWorkerClient().setRegionalFormat(regionalFormat).then(
+      () => {
+        workerCellSnapshotCacheRef.current.clear();
+        setDisplayRevision((current) => current + 1);
+      },
+      () => {
+        // A worker replaced by a new load opens in the format anyway; otherwise the next
+        // change tries again.
+        appliedRegionalFormatRef.current = "";
+      }
+    );
+  }, [getWorkerClient, isWorkerBacked, refreshWorkbookState, regionalFormat, shouldAutoCalculate, workbook]);
 
   const applyReadOnlyResizeOverride = React.useCallback((
     axis: "column" | "row",

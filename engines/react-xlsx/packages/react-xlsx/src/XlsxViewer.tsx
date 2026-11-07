@@ -17598,6 +17598,7 @@ export function useXlsxViewerThumbnails(
     getSheetFormControls,
     getSheetImages,
     getSheetShapes,
+    revision,
     workbook,
     sheets
   } = useXlsxViewer();
@@ -17625,6 +17626,14 @@ export function useXlsxViewerThumbnails(
       isMountedRef.current = false;
     };
   }, []);
+
+  // The worker's cells redisplay without new sheets (a regional format re-applied).
+  React.useEffect(() => {
+    if (workerThumbnailRowBatchCacheRef.current.size === 0) return;
+    workerThumbnailRowBatchCacheRef.current.clear();
+    workerThumbnailRowBatchRequestRef.current.clear();
+    setWorkerThumbnailRowBatchVersion((current) => current + 1);
+  }, [revision]);
 
   React.useEffect(() => {
     const currentSheets = new Set(sheets);

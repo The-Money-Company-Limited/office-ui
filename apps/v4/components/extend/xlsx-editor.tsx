@@ -2866,7 +2866,7 @@ function EditorSelectionStatus() {
     )
   }
   if (!statistics || statistics.count < 2) return null
-  // In the regional format the grid shows numbers in.
+  // In the regional format, as the grid shows numbers.
   const format = (value: number) =>
     value.toLocaleString(regionalFormat, { maximumFractionDigits: 10 })
   return (

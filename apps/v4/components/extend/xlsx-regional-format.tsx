@@ -1,7 +1,11 @@
 "use client"
 
 import * as React from "react"
-import { getRegionalFormatSamples, useXlsxViewer } from "@extend-ai/react-xlsx"
+import {
+  BROWSER_REGIONAL_FORMAT,
+  getRegionalFormatSamples,
+  useXlsxViewer,
+} from "@extend-ai/react-xlsx"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -44,10 +48,6 @@ const REGIONAL_FORMATS = [
   "ko-KR",
 ]
 
-function browserRegionalFormat() {
-  return (typeof navigator === "undefined" ? "" : navigator.language) || "en-US"
-}
-
 /**
  * The viewer's regional format: the one they picked (kept in this browser), or the browser's
  * language. Picking the browser's own forgets the choice, so it follows the browser again.
@@ -55,15 +55,15 @@ function browserRegionalFormat() {
 export function useRegionalFormat() {
   const [regionalFormat, setRegionalFormatState] = React.useState(() => {
     try {
-      return window.localStorage.getItem(STORAGE_KEY) ?? browserRegionalFormat()
+      return window.localStorage.getItem(STORAGE_KEY) ?? BROWSER_REGIONAL_FORMAT
     } catch {
-      return browserRegionalFormat()
+      return BROWSER_REGIONAL_FORMAT
     }
   })
   const setRegionalFormat = React.useCallback((tag: string) => {
     setRegionalFormatState(tag)
     try {
-      if (tag === browserRegionalFormat())
+      if (tag === BROWSER_REGIONAL_FORMAT)
         window.localStorage.removeItem(STORAGE_KEY)
       else window.localStorage.setItem(STORAGE_KEY, tag)
     } catch {
@@ -97,7 +97,7 @@ function regionalFormatName(tag: string) {
 export function EditorRegionalFormat() {
   const setRegionalFormat = React.useContext(RegionalFormatContext)
   const { readOnly, regionalFormat } = useXlsxViewer()
-  const browserFormat = browserRegionalFormat()
+  const browserFormat = BROWSER_REGIONAL_FORMAT
   const formats = React.useMemo(
     () =>
       // The browser's own first; one picked elsewhere (an older choice) last.
@@ -112,23 +112,25 @@ export function EditorRegionalFormat() {
   const [samples, setSamples] = React.useState<
     Record<string, [string, string]>
   >({})
+  // The samples come from the engine on this page, which a workbook held by the worker
+  // (read-only) loads only now. Started on hover or focus so they're there when the menu opens.
+  const loadSamples = () => {
+    if (formats.every((tag) => samples[tag])) return
+    void getRegionalFormatSamples(formats)
+      .then(setSamples)
+      .catch(() => {})
+  }
   if (!setRegionalFormat) return null
   const name = regionalFormatName(regionalFormat)
   return (
-    <DropdownMenu
-      onOpenChange={(open) => {
-        // The samples come from the engine, which a read-only workbook only runs in a worker.
-        if (open)
-          void getRegionalFormatSamples(formats)
-            .then(setSamples)
-            .catch(() => {})
-      }}
-    >
+    <DropdownMenu onOpenChange={(open) => open && loadSamples()}>
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
           variant="ghost"
           size="sm"
+          onPointerEnter={loadSamples}
+          onFocus={loadSamples}
           title="Regional format"
           aria-label={`Regional format: ${name}`}
           className="text-muted-foreground"
@@ -147,7 +149,8 @@ export function EditorRegionalFormat() {
       <DropdownMenuContent
         align="end"
         side="top"
-        className="z-40 max-h-80 w-80 overflow-y-auto"
+        // z-40, as the editor's other dropdowns (XLSX_DROPDOWN_Z_INDEX_CLASS).
+        className="z-40 max-h-80 w-88 overflow-y-auto"
       >
         <DropdownMenuGroup>
           <DropdownMenuLabel>
@@ -167,7 +170,7 @@ export function EditorRegionalFormat() {
                     <span className="text-muted-foreground"> · Browser</span>
                   ) : null}
                 </span>
-                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                <span className="w-36 shrink-0 text-end text-xs text-muted-foreground tabular-nums">
                   {samples[tag]?.join(" · ")}
                 </span>
               </DropdownMenuRadioItem>

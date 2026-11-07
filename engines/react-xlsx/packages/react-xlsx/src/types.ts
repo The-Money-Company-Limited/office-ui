@@ -1027,19 +1027,20 @@ export interface UseXlsxViewerControllerOptions {
    */
   maxFileSizeBytes?: number;
   /**
-   * Disables workbook edits, paste, fill, undo/redo, and other mutation actions.
-   *
-   * @default false
-   */
-  /**
    * The language tag (`en-GB`, `de-DE`) the workbook's regional settings come from, standing in
    * for the computer's regional settings Excel uses: the order of day and month in dates, the
    * separators and currency numbers are typed and shown with. Changing it re-applies it to the
-   * open workbook, which redisplays and recalculates without a reload.
+   * open workbook, which redisplays and recalculates without a reload. Like a computer's, it is
+   * one per page: viewers on one page should share it.
    *
    * @default the browser's language
    */
   regionalFormat?: string;
+  /**
+   * Disables workbook edits, paste, fill, undo/redo, and other mutation actions.
+   *
+   * @default false
+   */
   readOnly?: boolean;
   /**
    * Called with the active tab's name once a workbook loads and whenever the active tab changes, e.g. to mirror

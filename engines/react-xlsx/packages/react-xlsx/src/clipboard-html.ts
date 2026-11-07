@@ -1,3 +1,8 @@
+/** A tag's attributes, where a quoted value may hold a `>` (`x:fmla="=IF(A1>0,1)"`). */
+const ATTRIBUTES = `(?:[^>"']|"[^"]*"|'[^']*')*`;
+const ROW = new RegExp(`<tr\\b(${ATTRIBUTES})>([\\s\\S]*?)<\\/tr>`, "gi");
+const CELL = new RegExp(`<t[dh]\\b(${ATTRIBUTES})>`, "gi");
+
 /**
  * The numbers desktop Excel puts in the clipboard's HTML beside the text it shows. A number cell
  * carries its value as `x:num="46331"` (a date's serial, an amount without its currency sign),
@@ -11,11 +16,11 @@
 export function excelClipboardNumbers(html: string, grid: readonly (readonly string[])[]): (number | undefined)[][] | null {
   if (!/\bx:num\b/i.test(html)) return null;
   const rows: (number | undefined)[][] = [];
-  for (const [, rowAttributes, row] of html.matchAll(/<tr\b([^>]*)>([\s\S]*?)<\/tr>/gi)) {
+  for (const [, rowAttributes, row] of html.matchAll(ROW)) {
     // Excel ends the table with a hidden row of column widths.
     if (/display\s*:\s*none/i.test(rowAttributes)) continue;
     const cells: (number | undefined)[] = [];
-    for (const [, attributes] of row.matchAll(/<t[dh]\b([^>]*)>/gi)) {
+    for (const [, attributes] of row.matchAll(CELL)) {
       if (Number(attribute(attributes, "rowspan") ?? 1) > 1) return null;
       const raw = attribute(attributes, "x:num")?.trim();
       const number = raw ? Number(raw) : NaN;
@@ -29,10 +34,14 @@ export function excelClipboardNumbers(html: string, grid: readonly (readonly str
   return fits ? rows : null;
 }
 
+const ATTRIBUTE_PATTERNS = new Map<string, RegExp>();
+
 /** An HTML attribute's value, quoted or not; `undefined` when it is missing or has none. */
 function attribute(attributes: string, name: string): string | undefined {
-  return new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, "i")
-    .exec(attributes)
-    ?.slice(1)
-    .find((value) => value !== undefined);
+  let pattern = ATTRIBUTE_PATTERNS.get(name);
+  if (!pattern) {
+    pattern = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, "i");
+    ATTRIBUTE_PATTERNS.set(name, pattern);
+  }
+  return pattern.exec(attributes)?.slice(1).find((value) => value !== undefined);
 }

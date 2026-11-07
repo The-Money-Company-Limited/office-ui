@@ -218,6 +218,8 @@ describe("typed entries", () => {
     assert.equal(excelClipboardNumbers(html, [["5/11/2026"]]), null);
     assert.equal(excelClipboardNumbers("<table><tr><td>1</td></tr></table>", [["1"]]), null);
     assert.equal(excelClipboardNumbers('<table><tr><td rowspan=2 x:num="1">1</td></tr></table>', [["1"]]), null);
+    // A `>` in a quoted attribute stays inside the tag.
+    assert.deepEqual(excelClipboardNumbers('<table><tr><td x:fmla="=IF(A1>0,1)" x:num="1">1</td></tr></table>', [["1"]]), [[1]]);
     const sheet = sheetIn("en-GB");
     const paste = (row: number, text: string, number: number) => {
       enterPastedNumber(sheet, { row, col: 0 }, text, number);
