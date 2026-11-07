@@ -1896,11 +1896,11 @@ impl XlsxWriter {
     }
 
     /// How each formula is saved, worked out once per cell: its text without the `=`, and whether
-    /// it is a dynamic-array formula (`cm="1"`), as legacy::saved_formula decides or because it
+    /// it is a dynamic-array formula (`cm="1"`), as legacy::Saving decides or because it
     /// spills or is blocked from spilling. A Ctrl+Shift+Enter array formula and a data table's
     /// TABLE have no mark.
     fn saved_formulas(workbook: &Workbook) -> Vec<SavedFormulas> {
-        let names = duke_sheets_formula::legacy::Names::of(workbook);
+        let mut saving = duke_sheets_formula::legacy::Saving::of(workbook);
         workbook
             .worksheets()
             .map(|sheet| {
@@ -1909,14 +1909,10 @@ impl XlsxWriter {
                     .filter_map(|(row, col, text)| {
                         let formula = sheet.formula_data_at(row, col)?;
                         let (saved, dynamic) = match formula.kind {
-                            FormulaKind::Cse { .. } => (
-                                duke_sheets_formula::legacy::saved_array_formula(text),
-                                false,
-                            ),
+                            FormulaKind::Cse { .. } => (saving.array_formula(text), false),
                             FormulaKind::DataTable => (text.to_string(), false),
                             FormulaKind::Dynamic => {
-                                let (saved, dynamic) =
-                                    duke_sheets_formula::legacy::saved_formula(text, &names);
+                                let (saved, dynamic) = saving.formula(text);
                                 let spills = sheet.is_spill_source(row, col)
                                     || sheet.get_value_at(row, col)
                                         == duke_sheets_core::CellValue::Error(

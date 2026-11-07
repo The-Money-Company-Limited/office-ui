@@ -4387,14 +4387,21 @@ fn push_area_payload(
 ) -> Result<(), UnsupportedToken> {
     let start = &range.start;
     let end = &range.end;
-    if start.row > u16::MAX as u32 || start.col > 0xFF || end.col > 0xFF {
+    // A range to the sheet's last column (`1:1`, which the parser ends at column XFD) ends at a
+    // .xls sheet's, column IV: the whole BIFF8 row.
+    let end_col = if end.col == duke_sheets_core::MAX_COLS - 1 {
+        0xFF
+    } else {
+        end.col
+    };
+    if start.row > u16::MAX as u32 || start.col > 0xFF || end_col > 0xFF {
         return Err(UnsupportedToken);
     }
     // Clamp end.row to BIFF8's row limit. The XLSX-style parser
     // produces end.row = 1048575 for full-column refs like A:A;
     // BIFF8 can't represent rows beyond 65535, so the closest valid
     // expression is "from start.row through row 65535" - i.e. the
-    // entire BIFF8 column (or the entire BIFF8 row, for 1:1 refs).
+    // entire BIFF8 column.
     let end_row = end.row.min(u16::MAX as u32) as u16;
     out.extend_from_slice(&(start.row as u16).to_le_bytes());
     out.extend_from_slice(&end_row.to_le_bytes());
@@ -4403,7 +4410,7 @@ fn push_area_payload(
             .to_le_bytes(),
     );
     out.extend_from_slice(
-        &encode_col_with_relative_flags(end.col, end.row_absolute, end.col_absolute).to_le_bytes(),
+        &encode_col_with_relative_flags(end_col, end.row_absolute, end.col_absolute).to_le_bytes(),
     );
     Ok(())
 }

@@ -20,7 +20,8 @@ use duke_sheets_core::{
 
 use crate::biff::formula::token_parser::ParsedToken;
 use crate::biff::formula::{
-    ExternName, ExternSheetEntry, FormulaContext, NameRecord, SupBook, BUILTIN_NAMES,
+    ExternName, ExternSheetEntry, FormulaContext, NameRecord, SupBook, BIFF8_LAST_CELL,
+    BUILTIN_NAMES,
 };
 use crate::biff::parser::{read_f64, read_rk, read_u16, read_u32, read_u8};
 use crate::biff::records;
@@ -487,6 +488,7 @@ impl XlsReader {
             extern_names,
             extern_name_index_base: 1,
             base_cell: None,
+            last_cell: Some(BIFF8_LAST_CELL),
         };
 
         let mut filter_db_ranges: std::collections::HashMap<usize, CellRange> =
@@ -1466,6 +1468,7 @@ impl XlsReader {
                                 extern_names: formula_ctx.extern_names.clone(),
                                 extern_name_index_base: formula_ctx.extern_name_index_base,
                                 base_cell: Some((row, col)),
+                                last_cell: formula_ctx.last_cell,
                             };
                             let text = crate::biff::formula::decompile(shared_tokens, &shared_ctx);
                             if text.is_empty() {
@@ -1746,6 +1749,7 @@ impl XlsReader {
             extern_names: formula_ctx.extern_names.clone(),
             extern_name_index_base: formula_ctx.extern_name_index_base,
             base_cell: Some((cell_row, cell_col)),
+            last_cell: formula_ctx.last_cell,
         };
         let text = crate::biff::formula::decompile(shared_tokens, &shared_ctx);
         let formula_text = if text.is_empty() {
@@ -5776,6 +5780,7 @@ mod tests {
             extern_names: vec![],
             extern_name_index_base: 1,
             base_cell: None,
+            last_cell: Some(BIFF8_LAST_CELL),
         };
 
         let range = XlsReader::extract_filter_db_range(&body, &ctx).unwrap();

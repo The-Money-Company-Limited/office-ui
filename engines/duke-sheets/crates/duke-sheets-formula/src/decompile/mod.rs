@@ -110,7 +110,14 @@ pub struct FormulaContext {
     /// Base cell position for shared formula offset resolution.
     /// When set, tRefN/tAreaN offsets are adjusted relative to this cell.
     pub base_cell: Option<(u32, u16)>,
+    /// The sheet's last row and column (0-based), when an area that reaches from the first to
+    /// the last row or column is shown as whole columns or rows (`A:A`, `1:1`), as Excel shows
+    /// it: `BIFF8_LAST_CELL` for a .xls file.
+    pub last_cell: Option<(u32, u16)>,
 }
+
+/// A .xls sheet's last row and column: row 65536, column IV.
+pub const BIFF8_LAST_CELL: (u32, u16) = (0xFFFF, 0xFF);
 
 impl FormulaContext {
     /// Create an empty context (no EXTERNSHEET/SUPBOOK/NAME data).
@@ -123,6 +130,7 @@ impl FormulaContext {
             extern_names: Vec::new(),
             extern_name_index_base: 1,
             base_cell: None,
+            last_cell: None,
         }
     }
 

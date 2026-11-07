@@ -6,7 +6,8 @@ pub mod token_parser;
 pub use duke_sheets_formula::decompile::decompiler;
 pub use duke_sheets_formula::decompile::function_table;
 pub use duke_sheets_formula::decompile::{
-    ExternName, ExternSheetEntry, FormulaContext, NameRecord, SupBook, BUILTIN_NAMES,
+    ExternName, ExternSheetEntry, FormulaContext, NameRecord, SupBook, BIFF8_LAST_CELL,
+    BUILTIN_NAMES,
 };
 
 /// Decompile BIFF8 formula token bytes into a human-readable formula string.

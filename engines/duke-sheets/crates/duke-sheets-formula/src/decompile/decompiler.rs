@@ -85,8 +85,11 @@ fn format_ref(row: u32, col: u16, row_rel: bool, col_rel: bool) -> String {
     )
 }
 
-/// Format an area reference with optional `$` for absolute dimensions.
+/// Format an area reference with optional `$` for absolute dimensions. One from the sheet's first
+/// to its last row is whole columns (`A:B`), else one from its first to its last column whole
+/// rows (`1:3`), when the context knows the sheet's last cell.
 fn format_area(
+    ctx: &FormulaContext,
     first_row: u32,
     last_row: u32,
     first_col: u16,
@@ -96,6 +99,27 @@ fn format_area(
     last_row_rel: bool,
     last_col_rel: bool,
 ) -> String {
+    let dollar = |relative: bool| if relative { "" } else { "$" };
+    if let Some((end_row, end_col)) = ctx.last_cell {
+        if first_col == 0 && last_col == end_col {
+            return format!(
+                "{}{}:{}{}",
+                dollar(first_row_rel),
+                first_row + 1,
+                dollar(last_row_rel),
+                last_row + 1
+            );
+        }
+        if first_row == 0 && last_row == end_row {
+            return format!(
+                "{}{}:{}{}",
+                dollar(first_col_rel),
+                col_to_letter(first_col),
+                dollar(last_col_rel),
+                col_to_letter(last_col)
+            );
+        }
+    }
     // A degenerate area (H38:H38) keeps its colon form: Excel displays
     // tArea tokens as ranges, and collapsing to a bare ref would make
     // the text recompile to a PtgRef — formula bytes would mutate on
@@ -266,6 +290,7 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 last_col_rel,
             } => {
                 stack.push(StackEntry::atom(format_area(
+                    ctx,
                     *first_row,
                     *last_row,
                     *first_col,
@@ -303,6 +328,7 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 let (fr, fc) = resolve_refn_offset(ctx, *first_row_offset, *first_col_offset);
                 let (lr, lc) = resolve_refn_offset(ctx, *last_row_offset, *last_col_offset);
                 stack.push(StackEntry::atom(format_area(
+                    ctx,
                     fr,
                     lr,
                     fc,
@@ -412,6 +438,7 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 last_col_rel,
             } => {
                 let area_str = format_area(
+                    ctx,
                     *first_row,
                     *last_row,
                     *first_col,
@@ -714,7 +741,7 @@ fn strip_xlfn_prefix(name: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{ExternSheetEntry, NameRecord, SupBook};
+    use super::super::{ExternSheetEntry, NameRecord, SupBook, BIFF8_LAST_CELL};
     use super::*;
 
     /// Create an empty FormulaContext for tests that don't need sheet/name data.
@@ -748,6 +775,7 @@ mod tests {
             extern_names: Vec::new(),
             extern_name_index_base: 1,
             base_cell: None,
+            last_cell: None,
         }
     }
 
@@ -899,6 +927,30 @@ mod tests {
             last_col_rel: true,
         }];
         assert_eq!(decompile(&tokens, &ctx), "A1:C3");
+    }
+
+    #[test]
+    fn areas_to_the_sheets_end_are_whole_rows_or_columns() {
+        let area = |rows: (u32, u32), cols: (u16, u16), relative: bool| {
+            vec![ParsedToken::Area {
+                first_row: rows.0,
+                last_row: rows.1,
+                first_col: cols.0,
+                last_col: cols.1,
+                first_row_rel: relative,
+                first_col_rel: relative,
+                last_row_rel: relative,
+                last_col_rel: relative,
+            }]
+        };
+        let mut ctx = empty_ctx();
+        assert_eq!(decompile(&area((0, 65535), (0, 0), true), &ctx), "A1:A65536");
+        ctx.last_cell = Some(BIFF8_LAST_CELL);
+        assert_eq!(decompile(&area((0, 65535), (0, 1), true), &ctx), "A:B");
+        assert_eq!(decompile(&area((0, 65535), (2, 2), false), &ctx), "$C:$C");
+        assert_eq!(decompile(&area((0, 0), (0, 255), true), &ctx), "1:1");
+        assert_eq!(decompile(&area((4, 6), (0, 255), false), &ctx), "$5:$7");
+        assert_eq!(decompile(&area((0, 65534), (0, 0), true), &ctx), "A1:A65535");
     }
 
     #[test]
@@ -1184,6 +1236,7 @@ mod tests {
             }],
             names: Vec::new(),
             base_cell: None,
+            last_cell: None,
         };
         let tokens = vec![ParsedToken::Area3d {
             extern_sheet_idx: 0,
@@ -1215,6 +1268,7 @@ mod tests {
                 comment: None,
             }],
             base_cell: None,
+            last_cell: None,
         };
         // tName with name_idx=1 (1-based) → "MyRange"
         let tokens = vec![ParsedToken::Name { name_idx: 1 }];
@@ -1301,6 +1355,7 @@ mod tests {
                 comment: None,
             }],
             base_cell: None,
+            last_cell: None,
         };
         let tokens = vec![ParsedToken::NameX {
             extern_sheet_idx: 0,
@@ -1470,6 +1525,7 @@ mod tests {
             }],
             names: Vec::new(),
             base_cell: None,
+            last_cell: None,
         };
         let tokens = vec![ParsedToken::Ref3d {
             extern_sheet_idx: 0,
@@ -1502,6 +1558,7 @@ mod tests {
             }],
             names: Vec::new(),
             base_cell: None,
+            last_cell: None,
         };
         let tokens = vec![ParsedToken::Area3d {
             extern_sheet_idx: 0,

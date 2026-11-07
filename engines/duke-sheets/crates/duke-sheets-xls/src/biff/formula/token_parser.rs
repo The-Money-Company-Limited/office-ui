@@ -575,8 +575,9 @@ fn parse_ref_fields(data: &[u8]) -> (u16, u16, bool, bool) {
     let row = u16::from_le_bytes([data[0], data[1]]);
     let col_rw = u16::from_le_bytes([data[2], data[3]]);
     let col = col_rw & 0x00FF; // bits 0-7
-    let row_rel = (col_rw & 0x4000) != 0; // bit 14
-    let col_rel = (col_rw & 0x8000) != 0; // bit 15
+    // MS-XLS ColRelU: bit 14 is fColRel, bit 15 fRwRel.
+    let col_rel = (col_rw & 0x4000) != 0;
+    let row_rel = (col_rw & 0x8000) != 0;
     (row, col, row_rel, col_rel)
 }
 
@@ -591,8 +592,8 @@ fn parse_refn_fields(data: &[u8]) -> (i16, i16, bool, bool) {
     let col_rw = u16::from_le_bytes([data[2], data[3]]);
     // Column offset is an 8-bit signed value in bits 0-7
     let col_off = (col_rw & 0x00FF) as u8 as i8 as i16;
-    let row_rel = (col_rw & 0x4000) != 0;
-    let col_rel = (col_rw & 0x8000) != 0;
+    let col_rel = (col_rw & 0x4000) != 0;
+    let row_rel = (col_rw & 0x8000) != 0;
     (row_off, col_off, row_rel, col_rel)
 }
 
@@ -607,12 +608,12 @@ fn parse_arean_fields(data: &[u8]) -> (i16, i16, i16, i16, bool, bool, bool, boo
     let last_col_rw = u16::from_le_bytes([data[6], data[7]]);
 
     let first_col_off = (first_col_rw & 0x00FF) as u8 as i8 as i16;
-    let first_row_rel = (first_col_rw & 0x4000) != 0;
-    let first_col_rel = (first_col_rw & 0x8000) != 0;
+    let first_col_rel = (first_col_rw & 0x4000) != 0;
+    let first_row_rel = (first_col_rw & 0x8000) != 0;
 
     let last_col_off = (last_col_rw & 0x00FF) as u8 as i8 as i16;
-    let last_row_rel = (last_col_rw & 0x4000) != 0;
-    let last_col_rel = (last_col_rw & 0x8000) != 0;
+    let last_col_rel = (last_col_rw & 0x4000) != 0;
+    let last_row_rel = (last_col_rw & 0x8000) != 0;
 
     (
         first_row_off,
@@ -637,12 +638,12 @@ fn parse_area_fields(data: &[u8]) -> (u16, u16, u16, u16, bool, bool, bool, bool
     let last_col_rw = u16::from_le_bytes([data[6], data[7]]);
 
     let first_col = first_col_rw & 0x00FF;
-    let first_row_rel = (first_col_rw & 0x4000) != 0;
-    let first_col_rel = (first_col_rw & 0x8000) != 0;
+    let first_col_rel = (first_col_rw & 0x4000) != 0;
+    let first_row_rel = (first_col_rw & 0x8000) != 0;
 
     let last_col = last_col_rw & 0x00FF;
-    let last_row_rel = (last_col_rw & 0x4000) != 0;
-    let last_col_rel = (last_col_rw & 0x8000) != 0;
+    let last_col_rel = (last_col_rw & 0x4000) != 0;
+    let last_row_rel = (last_col_rw & 0x8000) != 0;
 
     (
         first_row,
@@ -734,7 +735,7 @@ mod tests {
 
     #[test]
     fn test_parse_ref_relative() {
-        // tRefV: row=4, col=2, both relative (bits 14+15 set)
+        // tRefV: row=4, col=2, both relative (fColRel bit 14, fRwRel bit 15)
         // col_rw = 2 | 0x4000 | 0x8000 = 0xC002
         let data = [0x44, 0x04, 0x00, 0x02, 0xC0];
         let tokens = parse_tokens(&data);
@@ -868,8 +869,8 @@ mod tests {
 
     #[test]
     fn test_parse_refn_positive_offsets() {
-        // tRefNV: row_off=3, col_off=5, row absolute, col relative
-        // col_rw = 5 | 0x8000 = 0x8005
+        // tRefNV: row_off=3, col_off=5, row relative, col absolute
+        // col_rw = 5 | 0x8000 (fRwRel) = 0x8005
         let data = [0x4C, 0x03, 0x00, 0x05, 0x80];
         let tokens = parse_tokens(&data);
         assert_eq!(
@@ -877,8 +878,8 @@ mod tests {
             vec![ParsedToken::RefN {
                 row_offset: 3,
                 col_offset: 5,
-                row_relative: false,
-                col_relative: true,
+                row_relative: true,
+                col_relative: false,
             }]
         );
     }
