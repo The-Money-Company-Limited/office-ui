@@ -785,6 +785,11 @@ mod tests {
         assert_eq!(money("de-DE", -1234.5, 8), "-1.234,50 €");
         assert_eq!(money("fr-FR", 1234.0, 6), "1\u{a0}234 €");
         assert_eq!(money("nl-NL", 1234.0, 5), "€ 1.234");
+        assert_eq!(money("nl-NL", -1234.0, 5), "€ -1.234");
+        assert_eq!(money("en-AU", -5.0, 7), "-$5.00");
+        // Accounting without a symbol (43) takes the regional negatives too.
+        assert!(money("de-DE", -1234.5, 43).contains("-"), "{}", money("de-DE", -1234.5, 43));
+        assert!(!money("de-DE", -1234.5, 43).contains("("), "{}", money("de-DE", -1234.5, 43));
         assert_eq!(money("de-CH", 1234.5, 7), "CHF 1'234.50");
         assert!(money("de-DE", 1234.5, 44).contains("1.234,50 €"), "{}", money("de-DE", 1234.5, 44));
         assert!(money("en-US", 1234.5, 44).contains("$"), "{}", money("en-US", 1234.5, 44));

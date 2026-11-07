@@ -58,10 +58,8 @@ fn read(text: &str) -> Option<(f64, Written)> {
 /// up (`15` is 15%). A duration typed into a date or time cell gets 46, which doesn't wrap.
 /// `None` when the text stays text: the cell's format is Text, the text isn't a number, or it is
 /// a date before the workbook's first day.
-pub fn typed_number(text: &str, settings: &WorkbookSettings, current: &NumberFormat) -> Option<(f64, Option<NumberFormat>)> {
-    let regional = &settings.regional;
-    let current_code = current.display_code(regional);
-    let current = current.kind();
+pub fn typed_number(text: &str, settings: &WorkbookSettings, current_format: &NumberFormat) -> Option<(f64, Option<NumberFormat>)> {
+    let current = current_format.kind();
     if current == FormatKind::Text {
         return None;
     }
@@ -70,10 +68,12 @@ pub fn typed_number(text: &str, settings: &WorkbookSettings, current: &NumberFor
         read(text)?
     };
     let (kind, format) = match written {
+        // `$5%` isn't an amount of money or a percent.
+        Written::Number { currency: true, percent: true, .. } => return None,
         Written::Number { currency: true, percent: false, decimals } => {
-            let in_currency = current == FormatKind::Number && (current_code.contains(regional.currency_symbol) || current_code.contains("[$"));
-            let format = NumberFormat::Custom(regional.typed_currency_code(decimals));
-            return Some((value, (!in_currency).then_some(format)));
+            let currency = settings.regional.currency;
+            let format = NumberFormat::Custom(currency.code(if decimals { "#,##0.00" } else { "#,##0" }));
+            return Some((value, (!current_format.is_currency(&settings.regional)).then_some(format)));
         }
         Written::Number { percent: true, decimals, .. } => (FormatKind::Percent, if decimals { NumberFormat::ID_PERCENT_DEC2 } else { NumberFormat::ID_PERCENT_INT }),
         Written::Number { .. } => {
@@ -129,8 +129,8 @@ fn plain_number(text: &str) -> Option<(f64, Written)> {
     // The regional currency symbol before the amount (`$5`), or after it where the region writes
     // it there (`5 €`); a minus sign may follow a symbol before (`€ -5`).
     let settings = crate::regional::current();
-    let symbol = settings.currency_symbol;
-    let after = settings.currency_position == CurrencyPosition::AfterWithSpace;
+    let symbol = settings.currency.symbol;
+    let after = settings.currency.position == CurrencyPosition::AfterWithSpace;
     let (currency, text) = match text.strip_prefix(symbol) {
         Some(rest) => (true, rest.trim_start()),
         None => match text.strip_suffix(symbol).filter(|_| after) {
@@ -521,8 +521,13 @@ mod tests {
         assert_eq!(typed("de-DE", "-5,5\u{a0}€"), money(-5.5, "#,##0.00 \"€\""));
         assert_eq!(typed("fr-FR", "1 234,50 €"), money(1234.5, "#,##0.00 \"€\""));
         assert_eq!(typed("nl-NL", "€ -5"), money(-5.0, "\"€\" #,##0"));
-        // Another region's symbol, or the symbol where the region doesn't write it, stays text.
-        for (tag, text) in [("en-US", "£5"), ("en-US", "5 €"), ("en-GB", "5£"), ("en-GB", "$5"), ("de-DE", "5 $"), ("en-US", "$"), ("en-US", "$$5")] {
+        // A symbol only counts as the cell's currency where it is one (`R` in en-ZA).
+        let za = WorkbookSettings { regional: RegionalSettings::from_tag("en-ZA"), ..Default::default() };
+        let red = NumberFormat::Custom("0;[Red]-0".into());
+        assert_eq!(typed_number("R5", &za, &red), money(5.0, "\"R\"#,##0"));
+        // Another region's symbol, or a symbol after the amount where the region writes it
+        // before, stays text.
+        for (tag, text) in [("en-US", "$5%"), ("en-US", "£5"), ("en-US", "5 €"), ("en-GB", "5£"), ("en-GB", "$5"), ("de-DE", "5 $"), ("en-US", "$"), ("en-US", "$$5")] {
             assert_eq!(typed(tag, text), None, "{tag} {text}");
         }
         // Text: lists and fractions aren't dates.
@@ -563,8 +568,11 @@ mod tests {
         // gets the currency one.
         assert_eq!(format("$5", NumberFormat::BuiltIn(7)), Some(None));
         assert_eq!(format("$5", custom("[$$-409]#,##0.00")), Some(None));
+        assert_eq!(format("$5", custom("$#,##0.00")), Some(None));
         assert_eq!(format("$5", custom("0.00")), Some(Some(custom("\"$\"#,##0"))));
-                // Text stays text; in a percent format a number from 1 up is a percent.
+        // A locale tag without a symbol isn't a currency.
+        assert_eq!(format("$5", custom("[$-409]#,##0")), Some(Some(custom("\"$\"#,##0"))));
+        // Text stays text; in a percent format a number from 1 up is a percent.
         assert_eq!(typed_number("5/11/2026", &settings, &NumberFormat::BuiltIn(49)), None);
         assert_eq!(typed_number("15", &settings, &NumberFormat::BuiltIn(9)), Some((0.15, None)));
         assert_eq!(typed_number("0.5", &settings, &NumberFormat::BuiltIn(9)), Some((0.5, None)));

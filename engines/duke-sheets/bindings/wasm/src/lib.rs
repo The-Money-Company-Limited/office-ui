@@ -978,13 +978,13 @@ impl Worksheet {
     #[wasm_bindgen(skip_typescript, js_name = readTypedNumberAt)]
     pub fn read_typed_number_at(&self, row: u32, col: u32, text: &str) -> Result<JsValue, JsError> {
         #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct TypedFormat {
-            format_type: &'static str,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            id: Option<u32>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            format_string: Option<String>,
+        #[serde(tag = "formatType", rename_all = "lowercase")]
+        enum TypedFormat {
+            Builtin { id: u32 },
+            Custom {
+                #[serde(rename = "formatString")]
+                format_string: String,
+            },
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -1001,10 +1001,10 @@ impl Worksheet {
         let typed = duke_sheets_formula::coerce::typed_number(text, wb.settings(), current.unwrap_or(&duke_sheets_core::NumberFormat::General));
         match typed {
             Some((value, format)) => {
+                // typed_number gives a built-in or a custom format, never General.
                 let number_format = format.map(|format| match format {
-                    duke_sheets_core::NumberFormat::BuiltIn(id) => TypedFormat { format_type: "builtin", id: Some(id), format_string: None },
-                    duke_sheets_core::NumberFormat::Custom(code) => TypedFormat { format_type: "custom", id: None, format_string: Some(code) },
-                    duke_sheets_core::NumberFormat::General => TypedFormat { format_type: "general", id: None, format_string: None },
+                    duke_sheets_core::NumberFormat::BuiltIn(id) => TypedFormat::Builtin { id },
+                    other => TypedFormat::Custom { format_string: other.format_string().to_string() },
                 });
                 to_js_value(&TypedNumber { value, number_format })
             }
@@ -1322,14 +1322,14 @@ pub fn shift_formula(formula: &str, rows: i32, cols: i32) -> String {
 }
 
 /// How a short date and a number show in the regional settings of a language tag, for a picker
-/// to show beside it: `05/11/2026 · 1,234.5` in en-GB, `05.11.2026 · 1.234,5` in de-DE.
+/// to show beside it: `["05/11/2026", "1,234.5"]` in en-GB, `["05.11.2026", "1.234,5"]` in de-DE.
 #[wasm_bindgen(js_name = regionalSample)]
-pub fn regional_sample(tag: &str) -> String {
+pub fn regional_sample(tag: &str) -> Vec<String> {
     use duke_sheets_core::{format_cell_value, CellValue, NumberFormat};
     let regional = duke_sheets_core::RegionalSettings::from_tag(tag);
     let date = format_cell_value(&CellValue::Number(46331.0), &NumberFormat::BuiltIn(NumberFormat::ID_DATE_SHORT), false, &regional);
     let number = format_cell_value(&CellValue::Number(1234.5), &NumberFormat::Custom("#,##0.0".into()), false, &regional);
-    format!("{date} · {number}")
+    vec![date, number]
 }
 
 fn with_regional_settings(mut wb: CoreWorkbook) -> Rc<RefCell<CoreWorkbook>> {

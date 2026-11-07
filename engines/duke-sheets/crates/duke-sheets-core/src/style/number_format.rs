@@ -2,7 +2,8 @@
 
 use std::borrow::Cow;
 
-use crate::RegionalSettings;
+use crate::{Currency, CurrencyPosition, RegionalSettings};
+use ssfmt::ast::{FormatPart, LocaleCode};
 
 /// What a number format shows a number as. A value typed into a cell keeps the cell's format
 /// when it is of the same kind.
@@ -18,6 +19,36 @@ pub enum FormatKind {
     Duration,
     /// `@`: what is typed stays text.
     Text,
+}
+
+/// Whether a built-in format is a currency (5-8) or accounting with a symbol (42, 44) one.
+fn is_currency_id(id: u32) -> bool {
+    matches!(id, 5..=8 | 42 | 44)
+}
+
+/// The code Excel shows a built-in currency (5-8) or accounting (41-44) format with for a
+/// currency other than en-US's: the symbol where the region puts it, and a minus sign for
+/// negatives instead of parentheses. `None` for another format.
+fn regional_currency_code(id: u32, currency: &Currency) -> Option<String> {
+    let number = if matches!(id, 7 | 8 | 43 | 44) { "#,##0.00" } else { "#,##0" };
+    match id {
+        5..=8 => {
+            let red = if matches!(id, 6 | 8) { "[Red]" } else { "" };
+            Some(format!("{};{red}{}", currency.code(number), currency.negative_code(number)))
+        }
+        41..=44 => {
+            // The fill (`* `) pads between the symbol and the number, as Excel's do.
+            let zero = if matches!(id, 43 | 44) { "\"-\"??" } else { "\"-\"" };
+            let symbol = matches!(id, 42 | 44).then(|| format!("\"{}\"", currency.symbol));
+            let filled = |number: &str| match (&symbol, currency.position) {
+                (None, _) => format!("* {number}"),
+                (Some(symbol), CurrencyPosition::AfterWithSpace) => format!("* {number} {symbol}"),
+                (Some(symbol), _) => format!("{symbol}* {number}"),
+            };
+            Some(format!("_-{}_-;\\-{}_-;_-{}_-;_-@_-", filled(number), filled(number), filled(zero)))
+        }
+        _ => None,
+    }
 }
 
 /// Number format for cell display
@@ -166,17 +197,30 @@ impl NumberFormat {
 
     /// The code a cell with this format displays with in `regional`: Excel shows the built-in
     /// short date (14) and date with time (22) in the computer's date order, and the built-in
-    /// currency formats (5-8, 42, 44) with its currency.
+    /// currency and accounting formats (5-8, 41-44) in its currency.
     pub fn display_code(&self, regional: &RegionalSettings) -> Cow<'_, str> {
         match self {
             NumberFormat::BuiltIn(Self::ID_DATE_SHORT) => regional.short_date.into(),
             NumberFormat::BuiltIn(Self::ID_DATETIME) => regional.date_time_code().into(),
-            NumberFormat::BuiltIn(id) => match regional.currency_code(*id) {
-                Some(code) => code.into(),
-                None => self.format_string().into(),
-            },
+            NumberFormat::BuiltIn(id) if !regional.currency.parenthesized_negatives => regional_currency_code(*id, &regional.currency)
+                .map_or_else(|| self.format_string().into(), Cow::Owned),
             _ => self.format_string().into(),
         }
+    }
+
+    /// Whether this format shows an amount of money: a built-in currency or accounting format
+    /// (5-8, 42, 44), or a code with the regional currency symbol (`"€"`, `$`) or a currency tag
+    /// (`[$€-407]`).
+    pub fn is_currency(&self, regional: &RegionalSettings) -> bool {
+        if let NumberFormat::BuiltIn(id) = self {
+            return is_currency_id(*id);
+        }
+        let Some(parsed) = self.parsed() else { return false };
+        parsed.sections().iter().flat_map(|section| &section.parts).any(|part| match part {
+            FormatPart::Locale(LocaleCode { currency: Some(_), .. }) => true,
+            FormatPart::Literal(text) | FormatPart::EscapedLiteral(text) => text.trim() == regional.currency.symbol,
+            _ => false,
+        })
     }
 
     /// What this format shows a number as.

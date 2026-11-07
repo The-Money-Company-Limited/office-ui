@@ -611,11 +611,7 @@ pub fn fn_text(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     let Ok(format) = ssfmt::NumberFormat::parse(&crate::regional::format_code(&format_code)) else {
         return Ok(FormulaValue::Error(CellError::Value));
     };
-    // A TEXT format is written in the regional language, so a `/` in it is a slash, not the
-    // date separator a `/` in a cell's (language-neutral) format stands for: Excel in sv-SE
-    // gives 31/12/2025 for TEXT(date,"dd/mm/yyyy").
-    let locale = ssfmt::Locale { date_separator: '/', ..crate::regional::current().format_locale() };
-    let options = ssfmt::FormatOptions { locale, ..Default::default() };
+    let options = ssfmt::FormatOptions { locale: crate::regional::current().text_function_locale(), ..Default::default() };
     let text = match value {
         FormulaValue::String(text) => match value.as_number() {
             Some(number) => format.format(number, &options),
@@ -761,10 +757,11 @@ pub fn fn_dollar(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         }
     };
 
-    // The amount with the regional currency symbol where the region puts it (`1.234,50 €`).
-    let amount = crate::regional::current().currency_text(&format_fixed_number(number.abs(), decimals, true));
-    let sign = if number < 0.0 { "-" } else { "" };
-    Ok(FormulaValue::String(format!("{sign}{amount}")))
+    // The amount with the regional currency symbol and minus sign where the region puts them
+    // (`-1.234,50 €`, `€ -5,00`). en-US writes `-$5.00`, as Windows' en-US currency format has
+    // since 2018.
+    let amount = format_fixed_number(number.abs(), decimals, true);
+    Ok(FormulaValue::String(crate::regional::current().currency.write(&amount, number < 0.0)))
 }
 
 pub fn fn_numbervalue(

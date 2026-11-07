@@ -80,7 +80,7 @@ pub use form_control::{
 pub use hyperlink::Hyperlink;
 pub use protection::{hash_legacy_protection_password, ProtectedRange, WorkbookProtection};
 pub use number_text::{number_text, round_15, with_decimal_separator};
-pub use regional::{CurrencyPosition, DateOrder, Language, RegionalSettings};
+pub use regional::{Currency, CurrencyPosition, DateOrder, Language, RegionalSettings};
 pub use rich_text::{rich_text_to_plain, RichTextRun, RunFont};
 pub use table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};
 pub use validation::{DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType};
