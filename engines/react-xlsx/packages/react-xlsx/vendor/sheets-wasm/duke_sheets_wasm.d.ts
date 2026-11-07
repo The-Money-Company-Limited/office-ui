@@ -934,6 +934,13 @@ export function init(): void;
  */
 export function setLocale(tag: string): void;
 
+/**
+ * A formula copied `rows` down and `cols` right of its cell, as a paste or fill writes it: its
+ * references without `$` move by as much (`=A1` copied from B1 to B2 is `=A2`), and one that
+ * would leave the sheet is #REF!. The rest of the text stays as written.
+ */
+export function shiftFormula(formula: string, rows: number, cols: number): string;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -973,6 +980,7 @@ export interface InitOutput {
     readonly cellvalue_toString: (a: number) => [number, number];
     readonly init: () => void;
     readonly setLocale: (a: number, b: number) => void;
+    readonly shiftFormula: (a: number, b: number, c: number, d: number) => [number, number];
     readonly workbook_addSheet: (a: number, b: number, c: number) => [number, number, number];
     readonly workbook_calculate: (a: number, b: number) => [number, number, number];
     readonly workbook_defineName: (a: number, b: number, c: number, d: number, e: number) => [number, number];

@@ -1913,6 +1913,30 @@ export function setLocale(tag) {
     wasm.setLocale(ptr0, len0);
 }
 
+/**
+ * A formula copied `rows` down and `cols` right of its cell, as a paste or fill writes it: its
+ * references without `$` move by as much (`=A1` copied from B1 to B2 is `=A2`), and one that
+ * would leave the sheet is #REF!. The rest of the text stays as written.
+ * @param {string} formula
+ * @param {number} rows
+ * @param {number} cols
+ * @returns {string}
+ */
+export function shiftFormula(formula, rows, cols) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(formula, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.shiftFormula(ptr0, len0, rows, cols);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
