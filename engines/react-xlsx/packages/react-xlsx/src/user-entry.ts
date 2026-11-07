@@ -68,26 +68,46 @@ function numericDateSerials(text: string): number[] {
   });
 }
 
+/** Days from the 1900 date system's day 0 to the 1904 system's. */
+const DAYS_TO_1904 = 1462;
+
 /**
  * Stores a cell pasted from desktop Excel, whose HTML carried its value (`number`, see
  * excelClipboardNumbers) beside the text it shows. The value wins over the text, which Excel
  * wrote in its computer's regional settings. The text gives the cell its format as typing it
  * would (a currency, a percent, a date) when it reads as that value, and the short date when it
  * is that date written in another order of day and month than the editor's. A Text-formatted
- * cell keeps the text.
+ * cell keeps the text. A date's serial is taken as the 1900 system's, Excel's default, which the
+ * clipboard doesn't name, and moves to the 1904 system's in a `date1904` workbook.
  */
-export function enterPastedNumber(worksheet: Worksheet, cell: XlsxCellAddress, text: string, number: number, baseStyle: StyleInput = {}): void {
+export function enterPastedNumber(
+  worksheet: Worksheet,
+  cell: XlsxCellAddress,
+  text: string,
+  number: number,
+  { baseStyle = {}, date1904 = false }: { baseStyle?: StyleInput; date1904?: boolean } = {}
+): void {
   if (hasTextFormat(worksheet.getCellStyleAt(cell.row, cell.col))) {
     enterUserText(worksheet, cell, text, baseStyle);
     return;
   }
   const address = cellAddressToA1(cell);
   const entry = readUserEntry(text, worksheet, cell);
-  const readsAsNumber = typeof entry.value === "number" && Math.abs(entry.value - number) <= 1e-9 * Math.max(1, Math.abs(number));
-  const numberFormat: NumberFormatInput | undefined = readsAsNumber
-    ? entry.numberFormat
-    : numericDateSerials(text).includes(number) ? { formatType: "builtin", id: 14 } : undefined;
-  worksheet.setCell(address, number);
+  const same = (value: unknown, expected: number) =>
+    typeof value === "number" && Math.abs(value - expected) <= 1e-9 * Math.max(1, Math.abs(expected));
+  let value = number;
+  let numberFormat: NumberFormatInput | undefined;
+  if (same(entry.value, number)) {
+    numberFormat = entry.numberFormat;
+  } else if (date1904 && same(entry.value, number - DAYS_TO_1904)) {
+    // A date the workbook reads from the text, in its own system.
+    value = number - DAYS_TO_1904;
+    numberFormat = entry.numberFormat;
+  } else if (numericDateSerials(text).includes(number)) {
+    value = date1904 ? number - DAYS_TO_1904 : number;
+    numberFormat = { formatType: "builtin", id: 14 };
+  }
+  worksheet.setCell(address, value);
   if (numberFormat) {
     worksheet.setCellStyle(address, { ...baseStyle, numberFormat });
   }

@@ -1,5 +1,5 @@
 import type { XlsxChart, XlsxChartsheet, XlsxFormControl, XlsxSheetData, XlsxTable, XlsxWorkbookTab } from "./types";
-import { getConfiguredWorkerWasmSource, getRegionalFormat, type WorkerWasmSource } from "./wasm";
+import { getConfiguredWorkerWasmSource, type WorkerWasmSource } from "./wasm";
 
 type WorkerMessage =
   | {
@@ -140,7 +140,7 @@ export class XlsxWorkerClient {
     this.pendingRequests.clear();
   }
 
-  loadWorkbook(buffer: ArrayBuffer, skipXmlParsing = false, showHiddenSheets = false) {
+  loadWorkbook(buffer: ArrayBuffer, regionalFormat: string, skipXmlParsing = false, showHiddenSheets = false) {
     const workerBuffer = cloneArrayBufferForTransfer(buffer);
     return this.request<{
       chartsByWorkbookSheetIndex: XlsxChart[][];
@@ -156,7 +156,7 @@ export class XlsxWorkerClient {
         showHiddenSheets,
         skipXmlParsing,
         wasmSource: getConfiguredWorkerWasmSource(),
-        regionalFormat: getRegionalFormat()
+        regionalFormat
       },
       type: "load"
     }, [workerBuffer]);
@@ -173,7 +173,7 @@ export class XlsxWorkerClient {
     });
   }
 
-  parseCharts(buffer: ArrayBuffer, skipXmlParsing = false, showHiddenSheets = false) {
+  parseCharts(buffer: ArrayBuffer, regionalFormat: string, skipXmlParsing = false, showHiddenSheets = false) {
     const workerBuffer = cloneArrayBufferForTransfer(buffer);
     return this.request<{
       chartsByWorkbookSheetIndex: XlsxChart[][];
@@ -186,13 +186,17 @@ export class XlsxWorkerClient {
         showHiddenSheets,
         skipXmlParsing,
         wasmSource: getConfiguredWorkerWasmSource(),
-        regionalFormat: getRegionalFormat()
+        regionalFormat
       },
       type: "parseCharts"
     }, [workerBuffer]);
   }
 
-  /** Re-applies a regional format to the workbook the worker holds, and recalculates it. */
+  /**
+   * Re-applies a regional format to the workbook the worker holds. It recalculates only a workbook
+   * it calculated when it loaded (under the formula-count threshold, without falling back to the
+   * saved values); others keep their saved values in the new format.
+   */
   setRegionalFormat(regionalFormat: string) {
     return this.request<null>({
       id: 0,

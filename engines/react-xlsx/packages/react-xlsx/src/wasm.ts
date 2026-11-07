@@ -76,11 +76,6 @@ export const BROWSER_REGIONAL_FORMAT = globalThis.navigator?.language || "en-US"
 let regionalFormat = BROWSER_REGIONAL_FORMAT;
 let loadedModule: SheetsWasmModule | null = null;
 
-/** The language tag the next workbook opened takes its regional settings from. */
-export function getRegionalFormat(): string {
-  return regionalFormat;
-}
-
 /** Sets the language tag (`en-GB`) the next workbook opened takes its regional settings from. */
 export function setRegionalFormat(tag: string): void {
   regionalFormat = tag;

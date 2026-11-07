@@ -1,11 +1,7 @@
 "use client"
 
 import * as React from "react"
-import {
-  BROWSER_REGIONAL_FORMAT,
-  getRegionalFormatSamples,
-  useXlsxViewer,
-} from "@extend-ai/react-xlsx"
+import { getRegionalFormatSamples, useXlsxViewer } from "@extend-ai/react-xlsx"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -48,27 +44,54 @@ const REGIONAL_FORMATS = [
   "ko-KR",
 ]
 
+/** The browser's language now; en-US where there is no browser (the server's render). */
+function browserRegionalFormat() {
+  return (typeof navigator === "undefined" ? "" : navigator.language) || "en-US"
+}
+
+// The choice where storage is blocked, for as long as the page is open.
+let unstoredChoice: string | null = null
+
+function storedRegionalFormat() {
+  try {
+    return window.localStorage.getItem(STORAGE_KEY) ?? unstoredChoice
+  } catch {
+    return unstoredChoice
+  }
+}
+
+const listeners = new Set<() => void>()
+function subscribe(listener: () => void) {
+  listeners.add(listener)
+  // A choice made in another tab.
+  window.addEventListener("storage", listener)
+  return () => {
+    listeners.delete(listener)
+    window.removeEventListener("storage", listener)
+  }
+}
+
 /**
  * The viewer's regional format: the one they picked (kept in this browser), or the browser's
- * language. Picking the browser's own forgets the choice, so it follows the browser again.
+ * language. Picking the browser's own forgets the choice, so it follows the browser again. The
+ * server, and the first render on the page, use en-US, so the two agree.
  */
 export function useRegionalFormat() {
-  const [regionalFormat, setRegionalFormatState] = React.useState(() => {
-    try {
-      return window.localStorage.getItem(STORAGE_KEY) ?? BROWSER_REGIONAL_FORMAT
-    } catch {
-      return BROWSER_REGIONAL_FORMAT
-    }
-  })
+  const regionalFormat = React.useSyncExternalStore(
+    subscribe,
+    () => storedRegionalFormat() ?? browserRegionalFormat(),
+    () => "en-US"
+  )
   const setRegionalFormat = React.useCallback((tag: string) => {
-    setRegionalFormatState(tag)
+    unstoredChoice = tag === browserRegionalFormat() ? null : tag
     try {
-      if (tag === BROWSER_REGIONAL_FORMAT)
+      if (tag === browserRegionalFormat())
         window.localStorage.removeItem(STORAGE_KEY)
       else window.localStorage.setItem(STORAGE_KEY, tag)
     } catch {
-      // Without storage the choice lasts until the page closes.
+      // Without storage the choice lasts until the page closes (unstoredChoice).
     }
+    listeners.forEach((listener) => listener())
   }, [])
   return [regionalFormat, setRegionalFormat] as const
 }
@@ -97,7 +120,7 @@ function regionalFormatName(tag: string) {
 export function EditorRegionalFormat() {
   const setRegionalFormat = React.useContext(RegionalFormatContext)
   const { readOnly, regionalFormat } = useXlsxViewer()
-  const browserFormat = BROWSER_REGIONAL_FORMAT
+  const browserFormat = browserRegionalFormat()
   const formats = React.useMemo(
     () =>
       // The browser's own first; one picked elsewhere (an older choice) last.

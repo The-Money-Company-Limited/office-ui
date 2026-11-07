@@ -1467,11 +1467,13 @@ async function resolveWorkbookBuffer(
   return buffer;
 }
 
-async function parseWorkbookBuffer(buffer: ArrayBuffer): Promise<{
+async function parseWorkbookBuffer(buffer: ArrayBuffer, regionalFormat: string): Promise<{
   shouldAutoCalculate: boolean;
   workbook: Workbook;
 }> {
   const wasmModule = await getSheetsWasmModule();
+  // Set with nothing awaited before the workbooks open, so another viewer can't change it between.
+  setEngineRegionalFormat(regionalFormat);
   const initialWorkbook = wasmModule.Workbook.fromBytes(new Uint8Array(buffer));
   let totalFormulas = 0;
 
@@ -2231,7 +2233,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       return;
     }
 
-    void getWorkerClient().parseCharts(buffer, effectiveSkipXmlParsing, showHiddenSheets)
+    void getWorkerClient().parseCharts(buffer, regionalFormatRef.current, effectiveSkipXmlParsing, showHiddenSheets)
       .then((result) => {
         if (workerTimeoutHandle !== null) {
           window.clearTimeout(workerTimeoutHandle);
@@ -2261,7 +2263,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
   }, [getWorkerClient, hasIncompleteWorkerChartSnapshot, setChartAssets, showHiddenSheets, skipXmlParsing, workerSupported]);
 
   const loadWorkbookOnMainThread = React.useCallback(async (buffer: ArrayBuffer) => {
-    const nextParsedWorkbook = await parseWorkbookBuffer(buffer);
+    const nextParsedWorkbook = await parseWorkbookBuffer(buffer, regionalFormatRef.current);
     const bytes = new Uint8Array(buffer);
     const nextImageAssets = loadWorkbookImageAssets(
       bytes,
@@ -2420,7 +2422,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
 
         if (shouldUseWorkerForLoad) {
           try {
-            const snapshot = await getWorkerClient().loadWorkbook(buffer, effectiveSkipXmlParsing, showHiddenSheets);
+            const snapshot = await getWorkerClient().loadWorkbook(buffer, regionalFormatRef.current, effectiveSkipXmlParsing, showHiddenSheets);
             if (!isCurrent || abortController.signal.aborted) {
               return;
             }
@@ -2783,7 +2785,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     const effectiveSkipXmlParsing = shouldSkipXmlParsingForWorkbook(new Uint8Array(deferredBuffer), skipXmlParsing);
 
     if (shouldUseWorkerForLoad) {
-      void getWorkerClient().loadWorkbook(deferredBuffer, effectiveSkipXmlParsing, showHiddenSheets)
+      void getWorkerClient().loadWorkbook(deferredBuffer, regionalFormatRef.current, effectiveSkipXmlParsing, showHiddenSheets)
         .then((snapshot) => {
           if (!effectiveSkipXmlParsing && hasIncompleteWorkerChartSnapshot(snapshot)) {
             throw new Error("Worker chart payload incomplete");
@@ -2859,7 +2861,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       return;
     }
 
-    void parseWorkbookBuffer(deferredBuffer)
+    void parseWorkbookBuffer(deferredBuffer, regionalFormatRef.current)
       .then((nextParsedWorkbook) => {
         const bytes = new Uint8Array(deferredBuffer);
         const nextImageAssets = loadWorkbookImageAssets(
@@ -5072,6 +5074,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
     }
 
     const numbers = html ? excelClipboardNumbers(html, grid) : null;
+    const date1904 = Boolean(workbook.settings?.date1904);
     const blocks: ArrayFormulaBlocks = new Map();
     const mutations: RangeCellMutation[] = [];
     for (let rowIndex = 0; rowIndex < grid.length; rowIndex += 1) {
@@ -5091,7 +5094,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         if (number === undefined) {
           enterUserText(worksheet, nextCell, rawValue, baseStyle);
         } else {
-          enterPastedNumber(worksheet, nextCell, rawValue, number, baseStyle);
+          enterPastedNumber(worksheet, nextCell, rawValue, number, { baseStyle, date1904 });
         }
         const after = captureCellMutationState(nextCell, blocks);
         if (!after) {

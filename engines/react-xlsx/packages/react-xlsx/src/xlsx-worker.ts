@@ -12,7 +12,7 @@ import {
   resolveWorksheetMergeMetadata
 } from "./images";
 import type { WorkbookStructureAssets } from "./images";
-import { safeCalculate, tryRecalculate } from "./safe-calculate";
+import { safeCalculate } from "./safe-calculate";
 import { getXlsxInitialActiveCell } from "./selection-tools";
 import { getWorksheetRowsBatch } from "./worksheet-batch";
 import { getSheetsWasmModule, setRegionalFormat, setWasmSource, type WorkerWasmSource } from "./wasm";
@@ -145,8 +145,12 @@ type WorkerErrorResponse = {
 type WorkerResponse = WorkerSuccessResponse | WorkerErrorResponse;
 
 let workbook: Workbook | null = null;
-/** Whether the workbook is small enough to calculate here, as it was when loaded. */
+/**
+ * Whether the workbook calculates here: it was small enough and calculated cleanly when it
+ * loaded (safeCalculate didn't fall back to its saved values). `workbookBytes` reopens it.
+ */
 let shouldCalculate = false;
+let workbookBytes: Uint8Array | null = null;
 let chartsByWorkbookSheetIndex: XlsxChart[][] = [];
 let chartsheets: XlsxChartsheet[] = [];
 let formControlsByWorkbookSheetIndex: XlsxFormControl[][] = [];
@@ -818,11 +822,13 @@ async function loadWorkbook(buffer: ArrayBuffer, skipXmlParsing = false, showHid
     totalFormulas += activeWorkbook.getSheet(index).formulaCount;
   }
 
+  let calculated = false;
   if (totalFormulas <= FORMULA_COUNT_THRESHOLD) {
     const result = safeCalculate(activeWorkbook, {
       reparse: () => wasmModule.Workbook.fromBytes(bytes)
     });
     activeWorkbook = result.workbook;
+    calculated = result.calculated;
   }
 
   const nextWorkbook = activeWorkbook;
@@ -847,7 +853,8 @@ async function loadWorkbook(buffer: ArrayBuffer, skipXmlParsing = false, showHid
   );
   const sheetLayoutStates = structureAssets ? undefined : parseWorkerSheetLayoutAssets(bytes, nextWorkbook.sheetCount);
   workbook = nextWorkbook;
-  shouldCalculate = totalFormulas <= FORMULA_COUNT_THRESHOLD;
+  shouldCalculate = calculated;
+  workbookBytes = bytes;
   sheets = buildSheetList(nextWorkbook, themePalette, structureAssets, sheetLayoutStates, showHiddenSheets);
   tablesByWorkbookSheetIndex = Array.from({ length: nextWorkbook.sheetCount }, (_, workbookSheetIndex) =>
     mapWorksheetTables(
@@ -942,9 +949,18 @@ async function handleMessage(message: WorkerRequest) {
     }
     case "setRegionalFormat": {
       setRegionalFormat(message.payload.regionalFormat);
-      if (workbook) {
-        workbook.setLocale(message.payload.regionalFormat);
-        if (shouldCalculate) tryRecalculate(workbook);
+      if (!workbook) {
+        return null;
+      }
+      workbook.setLocale(message.payload.regionalFormat);
+      if (shouldCalculate && workbookBytes) {
+        // As at load: a calculation that traps or turns saved values into errors reopens the
+        // file (in the new format) with its saved values, and stops calculating.
+        const wasmModule = await getSheetsWasmModule();
+        const bytes = workbookBytes;
+        const result = safeCalculate(workbook, { reparse: () => wasmModule.Workbook.fromBytes(bytes) });
+        workbook = result.workbook;
+        shouldCalculate = result.calculated;
       }
       return null;
     }

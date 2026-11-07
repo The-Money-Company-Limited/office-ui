@@ -218,6 +218,8 @@ describe("typed entries", () => {
     assert.equal(excelClipboardNumbers(html, [["5/11/2026"]]), null);
     assert.equal(excelClipboardNumbers("<table><tr><td>1</td></tr></table>", [["1"]]), null);
     assert.equal(excelClipboardNumbers('<table><tr><td rowspan=2 x:num="1">1</td></tr></table>', [["1"]]), null);
+    // A span wider than the text's row doesn't line up, however wide.
+    assert.equal(excelClipboardNumbers('<table><tr><td colspan=999999999 x:num="1">1</td></tr></table>', [["1"]]), null);
     // A `>` in a quoted attribute stays inside the tag.
     assert.deepEqual(excelClipboardNumbers('<table><tr><td x:fmla="=IF(A1>0,1)" x:num="1">1</td></tr></table>', [["1"]]), [[1]]);
     const sheet = sheetIn("en-GB");
@@ -232,6 +234,9 @@ describe("typed entries", () => {
     assert.equal(paste(3, "1/2", 0.5), "0.5");
     assert.equal(paste(4, "123-45-6789", 123456789), "123456789");
     assert.equal(paste(5, "$1,234.50", 1234.5), "1234.5");
+    // Into a 1904-system workbook a pasted date keeps its day (Excel's serial is the 1900 one).
+    enterPastedNumber(sheet, { row: 6, col: 0 }, "11/13/2026", 46339, { date1904: true });
+    assert.equal(sheet.getCellAt(6, 0).asNumber(), 46339 - 1462);
   });
 
   it("a cell a dynamic array spills into edits as the value it shows", () => {

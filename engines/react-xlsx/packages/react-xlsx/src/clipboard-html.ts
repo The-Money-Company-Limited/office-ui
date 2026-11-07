@@ -25,8 +25,11 @@ export function excelClipboardNumbers(html: string, grid: readonly (readonly str
       const raw = attribute(attributes, "x:num")?.trim();
       const number = raw ? Number(raw) : NaN;
       cells.push(Number.isFinite(number) ? number : undefined);
-      // A merged cell is one cell in the HTML and several in the text.
-      for (let extra = 1; extra < Number(attribute(attributes, "colspan") ?? 1); extra += 1) cells.push(undefined);
+      // A merged cell is one cell in the HTML and several in the text; a span wider than the
+      // text's row can't line up (and isn't expanded).
+      const span = Number(attribute(attributes, "colspan") ?? 1);
+      if (!Number.isInteger(span) || span < 1 || cells.length - 1 + span > (grid[rows.length]?.length ?? 0)) return null;
+      for (let extra = 1; extra < span; extra += 1) cells.push(undefined);
     }
     rows.push(cells);
   }
