@@ -787,6 +787,9 @@ mod tests {
         assert_eq!(money("nl-NL", 1234.0, 5), "€ 1.234");
         assert_eq!(money("nl-NL", -1234.0, 5), "€ -1.234");
         assert_eq!(money("en-AU", -5.0, 7), "-$5.00");
+        // A typed amount's format keeps the minus after a spaced symbol.
+        let nl = RegionalSettings::from_tag("nl-NL").currency.typed_code("#,##0");
+        assert_eq!(fmt_in("nl-NL", -5.0, NumberFormat::Custom(nl)), "€ -5");
         // Accounting puts the minus after a spaced symbol too.
         assert!(money("nl-NL", -1234.0, 42).contains("-1.234"), "{}", money("nl-NL", -1234.0, 42));
         assert!(!money("nl-NL", -1234.0, 42).contains("-€"), "{}", money("nl-NL", -1234.0, 42));

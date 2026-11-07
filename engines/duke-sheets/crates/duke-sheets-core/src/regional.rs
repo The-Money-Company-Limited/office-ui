@@ -68,11 +68,20 @@ impl Currency {
         self.arrange(self.symbol, amount, if negative { "-" } else { "" })
     }
 
-    /// A number code with the symbol, quoted, where the region puts it: `"£"#,##0.00`, the
-    /// format a typed amount gets; `negative`, a negative section with the minus sign where the
-    /// region writes it (`\-"£"#,##0.00`, `"€" \-#,##0`).
+    /// A number code with the symbol, quoted, where the region puts it (`"£"#,##0.00`);
+    /// `negative`, a negative section with the minus sign where the region writes it
+    /// (`\-"£"#,##0.00`, `"€" \-#,##0`).
     pub fn code(&self, number: &str, negative: bool) -> String {
         self.arrange(&format!("\"{}\"", self.symbol), number, if negative { "\\-" } else { "" })
+    }
+
+    /// The format a typed amount gets, as Excel gives it: `"£"#,##0.00`. With the symbol before
+    /// the amount and a space, a negative section keeps the minus after the symbol (`€ -5`).
+    pub fn typed_code(&self, number: &str) -> String {
+        match self.position {
+            CurrencyPosition::BeforeWithSpace => format!("{};{}", self.code(number, false), self.code(number, true)),
+            _ => self.code(number, false),
+        }
     }
 
     fn arrange(&self, symbol: &str, amount: &str, minus: &str) -> String {
@@ -297,8 +306,9 @@ fn currency(language: &str, region: &str) -> Currency {
         ("fr", "CA") => ("$", AfterWithSpace),
         // The euro: before the amount in Ireland, Malta, the Netherlands and Austria, after it in
         // the rest of the euro area.
-        ("en", "IE" | "MT") => ("€", Before),
-        ("nl", "NL" | "") | ("de", "AT") => ("€", BeforeWithSpace),
+        // The region decides, whatever the language (en-NL, fr-IE).
+        (_, "IE" | "MT") => ("€", Before),
+        (_, "NL" | "AT") | ("nl", "") => ("€", BeforeWithSpace),
         (_, "DE" | "AT" | "FR" | "ES" | "IT" | "PT" | "BE" | "LU" | "FI" | "GR" | "SK" | "SI" | "EE" | "LV" | "LT" | "HR" | "CY")
         | ("de" | "fr" | "es" | "it" | "pt" | "fi" | "el" | "sk" | "sl" | "et" | "lv" | "lt" | "hr", "") => ("€", AfterWithSpace),
         _ => ("$", Before),
@@ -351,6 +361,9 @@ mod tests {
         assert_eq!(currency("fr-FR"), ("€", AfterWithSpace));
         assert_eq!(currency("nl-NL"), ("€", BeforeWithSpace));
         assert_eq!(currency("en-IE"), ("€", Before));
+        assert_eq!(currency("fr-IE"), ("€", Before));
+        assert_eq!(currency("en-NL"), ("€", BeforeWithSpace));
+        assert_eq!(currency("en-MT"), ("€", Before));
         assert_eq!(currency("de-CH"), ("CHF", BeforeWithSpace));
         assert_eq!(currency("ja-JP"), ("¥", Before));
         assert_eq!(currency("sv-SE"), ("kr", AfterWithSpace));

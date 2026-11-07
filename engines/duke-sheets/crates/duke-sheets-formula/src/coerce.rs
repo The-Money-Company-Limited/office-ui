@@ -72,7 +72,7 @@ pub fn typed_number(text: &str, settings: &WorkbookSettings, current_format: &Nu
         Written::Number { currency: true, percent: true, .. } => return None,
         Written::Number { currency: true, percent: false, decimals } => {
             let currency = settings.regional.currency;
-            let format = NumberFormat::Custom(currency.code(if decimals { "#,##0.00" } else { "#,##0" }, false));
+            let format = NumberFormat::Custom(currency.typed_code(if decimals { "#,##0.00" } else { "#,##0" }));
             return Some((value, (!current_format.is_currency(&settings.regional)).then_some(format)));
         }
         Written::Number { percent: true, decimals, .. } => (FormatKind::Percent, if decimals { NumberFormat::ID_PERCENT_DEC2 } else { NumberFormat::ID_PERCENT_INT }),
@@ -520,7 +520,7 @@ mod tests {
         assert_eq!(typed("de-DE", "1.234,00 €"), money(1234.0, "#,##0.00 \"€\""));
         assert_eq!(typed("de-DE", "-5,5\u{a0}€"), money(-5.5, "#,##0.00 \"€\""));
         assert_eq!(typed("fr-FR", "1 234,50 €"), money(1234.5, "#,##0.00 \"€\""));
-        assert_eq!(typed("nl-NL", "€ -5"), money(-5.0, "\"€\" #,##0"));
+        assert_eq!(typed("nl-NL", "€ -5"), money(-5.0, "\"€\" #,##0;\"€\" \\-#,##0"));
         // A symbol only counts as the cell's currency where it is one (`R` in en-ZA).
         let za = WorkbookSettings { regional: RegionalSettings::from_tag("en-ZA"), ..Default::default() };
         let red = NumberFormat::Custom("0;[Red]-0".into());
