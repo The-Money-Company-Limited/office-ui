@@ -935,9 +935,7 @@ export function init(): void;
 export function setLocale(tag: string): void;
 
 /**
- * A formula copied `rows` down and `cols` right of its cell, as a paste or fill writes it: its
- * references without `$` move by as much (`=A1` copied from B1 to B2 is `=A2`), and one that
- * would leave the sheet is #REF!. The rest of the text stays as written.
+ * A formula copied `rows` down and `cols` right of its cell (duke_sheets_core::shift_formula).
  */
 export function shiftFormula(formula: string, rows: number, cols: number): string;
 
