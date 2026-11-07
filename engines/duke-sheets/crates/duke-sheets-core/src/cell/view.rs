@@ -787,6 +787,9 @@ mod tests {
         assert_eq!(money("nl-NL", 1234.0, 5), "€ 1.234");
         assert_eq!(money("nl-NL", -1234.0, 5), "€ -1.234");
         assert_eq!(money("en-AU", -5.0, 7), "-$5.00");
+        // Accounting puts the minus after a spaced symbol too.
+        assert!(money("nl-NL", -1234.0, 42).contains("-1.234"), "{}", money("nl-NL", -1234.0, 42));
+        assert!(!money("nl-NL", -1234.0, 42).contains("-€"), "{}", money("nl-NL", -1234.0, 42));
         // Accounting without a symbol (43) takes the regional negatives too.
         assert!(money("de-DE", -1234.5, 43).contains("-"), "{}", money("de-DE", -1234.5, 43));
         assert!(!money("de-DE", -1234.5, 43).contains("("), "{}", money("de-DE", -1234.5, 43));

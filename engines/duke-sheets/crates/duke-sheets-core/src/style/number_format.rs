@@ -21,11 +21,6 @@ pub enum FormatKind {
     Text,
 }
 
-/// Whether a built-in format is a currency (5-8) or accounting with a symbol (42, 44) one.
-fn is_currency_id(id: u32) -> bool {
-    matches!(id, 5..=8 | 42 | 44)
-}
-
 /// The code Excel shows a built-in currency (5-8) or accounting (41-44) format with for a
 /// currency other than en-US's: the symbol where the region puts it, and a minus sign for
 /// negatives instead of parentheses. `None` for another format.
@@ -34,18 +29,22 @@ fn regional_currency_code(id: u32, currency: &Currency) -> Option<String> {
     match id {
         5..=8 => {
             let red = if matches!(id, 6 | 8) { "[Red]" } else { "" };
-            Some(format!("{};{red}{}", currency.code(number), currency.negative_code(number)))
+            Some(format!("{};{red}{}", currency.code(number, false), currency.code(number, true)))
         }
         41..=44 => {
             // The fill (`* `) pads between the symbol and the number, as Excel's do.
             let zero = if matches!(id, 43 | 44) { "\"-\"??" } else { "\"-\"" };
             let symbol = matches!(id, 42 | 44).then(|| format!("\"{}\"", currency.symbol));
-            let filled = |number: &str| match (&symbol, currency.position) {
-                (None, _) => format!("* {number}"),
-                (Some(symbol), CurrencyPosition::AfterWithSpace) => format!("* {number} {symbol}"),
-                (Some(symbol), _) => format!("{symbol}* {number}"),
+            // The minus sign goes where the region writes it: after a symbol it is spaced from
+            // (`€ -1.234`), otherwise first (`-£1,234`, `-1.234 €`).
+            let filled = |number: &str, minus: &str| match (&symbol, currency.position) {
+                (None, _) => format!("{minus}* {number}"),
+                (Some(symbol), CurrencyPosition::AfterWithSpace) => format!("{minus}* {number} {symbol}"),
+                (Some(symbol), CurrencyPosition::BeforeWithSpace) => format!("{symbol}* {minus}{number}"),
+                (Some(symbol), CurrencyPosition::Before) => format!("{minus}{symbol}* {number}"),
             };
-            Some(format!("_-{}_-;\\-{}_-;_-{}_-;_-@_-", filled(number), filled(number), filled(zero)))
+            let (positive, negative, zero) = (filled(number, ""), filled(number, "\\-"), filled(zero, ""));
+            Some(format!("_-{positive}_-;{negative}_-;_-{zero}_-;_-@_-"))
         }
         _ => None,
     }
@@ -213,7 +212,7 @@ impl NumberFormat {
     /// (`[$€-407]`).
     pub fn is_currency(&self, regional: &RegionalSettings) -> bool {
         if let NumberFormat::BuiltIn(id) = self {
-            return is_currency_id(*id);
+            return matches!(id, 5..=8 | 42 | 44);
         }
         let Some(parsed) = self.parsed() else { return false };
         parsed.sections().iter().flat_map(|section| &section.parts).any(|part| match part {

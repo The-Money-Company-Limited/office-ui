@@ -69,14 +69,10 @@ impl Currency {
     }
 
     /// A number code with the symbol, quoted, where the region puts it: `"£"#,##0.00`, the
-    /// format a typed amount gets.
-    pub fn code(&self, number: &str) -> String {
-        self.arrange(&format!("\"{}\"", self.symbol), number, "")
-    }
-
-    /// The negative section of a currency code: `\-"£"#,##0.00`, `"€" \-#,##0`.
-    pub fn negative_code(&self, number: &str) -> String {
-        self.arrange(&format!("\"{}\"", self.symbol), number, "\\-")
+    /// format a typed amount gets; `negative`, a negative section with the minus sign where the
+    /// region writes it (`\-"£"#,##0.00`, `"€" \-#,##0`).
+    pub fn code(&self, number: &str, negative: bool) -> String {
+        self.arrange(&format!("\"{}\"", self.symbol), number, if negative { "\\-" } else { "" })
     }
 
     fn arrange(&self, symbol: &str, amount: &str, minus: &str) -> String {
@@ -360,11 +356,11 @@ mod tests {
         assert_eq!(currency("sv-SE"), ("kr", AfterWithSpace));
         assert_eq!(currency("fr-CA"), ("$", AfterWithSpace));
         let gb = RegionalSettings::from_tag("en-GB").currency;
-        assert_eq!(gb.code("#,##0"), "\"£\"#,##0");
+        assert_eq!(gb.code("#,##0", false), "\"£\"#,##0");
         assert_eq!(gb.write("5.00", true), "-£5.00");
-        assert_eq!(gb.negative_code("#,##0"), "\\-\"£\"#,##0");
+        assert_eq!(gb.code("#,##0", true), "\\-\"£\"#,##0");
         assert_eq!(RegionalSettings::from_tag("nl-NL").currency.write("5,00", true), "€ -5,00");
-        assert_eq!(RegionalSettings::from_tag("de-DE").currency.code("#,##0.00"), "#,##0.00 \"€\"");
+        assert_eq!(RegionalSettings::from_tag("de-DE").currency.code("#,##0.00", false), "#,##0.00 \"€\"");
         assert_eq!(RegionalSettings::from_tag("de-DE").currency.write("5,00", false), "5,00 €");
     }
 

@@ -72,7 +72,7 @@ pub fn typed_number(text: &str, settings: &WorkbookSettings, current_format: &Nu
         Written::Number { currency: true, percent: true, .. } => return None,
         Written::Number { currency: true, percent: false, decimals } => {
             let currency = settings.regional.currency;
-            let format = NumberFormat::Custom(currency.code(if decimals { "#,##0.00" } else { "#,##0" }));
+            let format = NumberFormat::Custom(currency.code(if decimals { "#,##0.00" } else { "#,##0" }, false));
             return Some((value, (!current_format.is_currency(&settings.regional)).then_some(format)));
         }
         Written::Number { percent: true, decimals, .. } => (FormatKind::Percent, if decimals { NumberFormat::ID_PERCENT_DEC2 } else { NumberFormat::ID_PERCENT_INT }),
