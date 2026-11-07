@@ -559,3 +559,44 @@ fn test_xls_formula_shared_formula() {
 
     cleanup_fixture(&path);
 }
+
+/// LibreOffice writes `$` and whole rows and columns as Excel does (MS-XLS ColRelU: fColRel is
+/// bit 14, fRwRel bit 15), and a formula filled down may be one shared formula, whose absolute
+/// parts are the row or column itself.
+#[test]
+fn test_xls_formula_mixed_references_and_whole_lines() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        for i in 1..=6 {
+            wb.set_cell_value(&format!("A{i}"), i as f64).await.unwrap();
+            wb.set_cell_formula(&format!("B{i}"), &format!("=$A$1*A{i}+$A{i}+A$2"))
+                .await
+                .unwrap();
+        }
+        wb.set_cell_formula("C1", "=SUM(A:A)").await.unwrap();
+        // LibreOffice's own `2:2` runs past column IV, which it saves as #REF!.
+        wb.set_cell_formula("C8", "=SUM(A2:IV2)").await.unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+
+    for i in 1..=6u32 {
+        assert_eq!(
+            formula_text(sheet, i - 1, 1),
+            format!("=$A$1*A{i}+$A{i}+A$2"),
+            "B{i}"
+        );
+    }
+    assert_eq!(formula_text(sheet, 0, 2), "=SUM(A:A)");
+    assert_eq!(formula_text(sheet, 7, 2), "=SUM(2:2)");
+
+    cleanup_fixture(&path);
+}

@@ -6,7 +6,8 @@ import path from "node:path"
 const [dir, top, runs, ...builds] = process.argv.slice(2)
 const engines = []
 for (const build of builds) {
-  const [label, d] = build.split("=")
+  const at = build.indexOf("=")
+  const [label, d] = [build.slice(0, at), build.slice(at + 1)]
   const wasm = await import(path.resolve(d, "duke_sheets_wasm.js"))
   wasm.initSync({ module: await readFile(path.resolve(d, "duke_sheets_wasm_bg.wasm")) })
   engines.push({ label, wasm })
@@ -19,6 +20,7 @@ async function* walk(d) {
   }
 }
 const files = []
+let unreadable = 0
 for await (const file of walk(dir)) {
   const bytes = new Uint8Array(await readFile(file))
   try {
@@ -27,8 +29,11 @@ for await (const file of walk(dir)) {
     for (let s = 0; s < wb.sheetCount; s++) n += wb.getSheet(s).formulaCount
     wb.free()
     files.push({ file: path.relative(dir, file), bytes, n })
-  } catch {}
+  } catch {
+    unreadable++
+  }
 }
+if (unreadable) console.log(`${unreadable} workbooks didn't open and are left out`)
 files.sort((a, b) => b.n - a.n)
 const median = (xs) => xs.sort((a, b) => a - b)[xs.length >> 1].toFixed(0)
 console.log(`file | formulas | ${engines.map((e) => `load ${e.label}`).join(" | ")} | ${engines.map((e) => `save ${e.label}`).join(" | ")}`)

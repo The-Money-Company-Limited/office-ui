@@ -92,7 +92,7 @@ pub const BUILTIN_NAMES: &[&str] = &[
 ];
 
 /// Context for formula decompilation, built from workbook globals.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FormulaContext {
     /// Sheet names from BOUNDSHEET records.
     pub sheet_names: Vec<String>,
@@ -110,9 +110,9 @@ pub struct FormulaContext {
     /// Base cell position for shared formula offset resolution.
     /// When set, tRefN/tAreaN offsets are adjusted relative to this cell.
     pub base_cell: Option<(u32, u16)>,
-    /// The sheet's last row and column (0-based), when an area that reaches from the first to
-    /// the last row or column is shown as whole columns or rows (`A:A`, `1:1`), as Excel shows
-    /// it: `BIFF8_LAST_CELL` for a .xls file.
+    /// The sheet's last row and column (0-based), when set: an area from the first to the last
+    /// column is shown as whole rows (`1:1`), else one from the first to the last row as whole
+    /// columns (`A:A`), as Excel shows them. `BIFF8_LAST_CELL` for a .xls file.
     pub last_cell: Option<(u32, u16)>,
 }
 

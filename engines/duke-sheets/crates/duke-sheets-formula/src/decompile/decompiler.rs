@@ -85,9 +85,9 @@ fn format_ref(row: u32, col: u16, row_rel: bool, col_rel: bool) -> String {
     )
 }
 
-/// Format an area reference with optional `$` for absolute dimensions. One from the sheet's first
-/// to its last row is whole columns (`A:B`), else one from its first to its last column whole
-/// rows (`1:3`), when the context knows the sheet's last cell.
+/// Format an area reference with optional `$` for absolute dimensions. When the context knows the
+/// sheet's last cell, one from its first to its last column is whole rows (`1:3`), else one from
+/// its first to its last row whole columns (`A:B`).
 fn format_area(
     ctx: &FormulaContext,
     first_row: u32,
@@ -307,7 +307,8 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 row_relative,
                 col_relative,
             } => {
-                let (row, col) = resolve_refn_offset(ctx, *row_offset, *col_offset);
+                let (row, col) =
+                    resolve_refn_offset(ctx, *row_offset, *col_offset, *row_relative, *col_relative);
                 stack.push(StackEntry::atom(format_ref(
                     row,
                     col,
@@ -325,8 +326,20 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 last_row_rel,
                 last_col_rel,
             } => {
-                let (fr, fc) = resolve_refn_offset(ctx, *first_row_offset, *first_col_offset);
-                let (lr, lc) = resolve_refn_offset(ctx, *last_row_offset, *last_col_offset);
+                let (fr, fc) = resolve_refn_offset(
+                    ctx,
+                    *first_row_offset,
+                    *first_col_offset,
+                    *first_row_rel,
+                    *first_col_rel,
+                );
+                let (lr, lc) = resolve_refn_offset(
+                    ctx,
+                    *last_row_offset,
+                    *last_col_offset,
+                    *last_row_rel,
+                    *last_col_rel,
+                );
                 stack.push(StackEntry::atom(format_area(
                     ctx,
                     fr,
@@ -714,16 +727,30 @@ fn nth_extern_name(ctx: &FormulaContext, supbook_idx: u16, name_idx: u32) -> Opt
     }
 }
 
-/// Resolve a tRefN/tAreaN signed offset to an absolute (row, col).
+/// Resolve a tRefN/tAreaN reference to an absolute (row, col).
 ///
-/// If the context has a `base_cell`, the offset is added to it.
-/// Without a base cell (shouldn't happen for valid shared formulas), the offset
-/// is interpreted as an unsigned value (best effort).
-fn resolve_refn_offset(ctx: &FormulaContext, row_off: i32, col_off: i16) -> (u32, u16) {
+/// If the context has a `base_cell`, a relative row or column is an offset added to it, and an
+/// absolute one the row or column itself. Without a base cell (shouldn't happen for valid shared
+/// formulas), the offset is interpreted as an unsigned value (best effort).
+fn resolve_refn_offset(
+    ctx: &FormulaContext,
+    row_off: i32,
+    col_off: i16,
+    row_rel: bool,
+    col_rel: bool,
+) -> (u32, u16) {
     match ctx.base_cell {
         Some((base_row, base_col)) => {
-            let row = ((base_row as i64) + (row_off as i64)) as u32;
-            let col = ((base_col as i32) + (col_off as i32)) as u16 & 0x3FFF;
+            let row = if row_rel {
+                ((base_row as i64) + (row_off as i64)) as u32
+            } else {
+                row_off as u32
+            };
+            let col = if col_rel {
+                ((base_col as i32) + (col_off as i32)) as u16 & 0x3FFF
+            } else {
+                col_off as u16
+            };
             (row, col)
         }
         None => {
@@ -1394,13 +1421,13 @@ mod tests {
 
     #[test]
     fn test_refn_mixed_absolute() {
-        // Base cell at C3 (row=2, col=2). RefN offset (-2, 0) with absolute col.
-        // Row: 2 + (-2) = 0, Col: 2 + 0 = 2 → $C1
+        // Base cell at E3 (row=2, col=4). RefN row offset -2, absolute column C (2): an
+        // absolute part is the column itself, not an offset. Row: 2 + (-2) = 0 → $C1
         let mut ctx = empty_ctx();
-        ctx.base_cell = Some((2, 2));
+        ctx.base_cell = Some((2, 4));
         let tokens = vec![ParsedToken::RefN {
             row_offset: -2,
-            col_offset: 0,
+            col_offset: 2,
             row_relative: true,
             col_relative: false,
         }];

@@ -29,13 +29,13 @@ use duke_sheets_core::{CellAddress, CellRange, FormulaKind, Workbook};
 /// array, a calculation), or one (a cell, a constant). `=TaxRate*A1` needs no `@`; LET and LAMBDA
 /// names, and names in other workbooks, are neither, so nothing is assumed about them.
 #[derive(Default)]
-pub struct Names {
+pub(crate) struct Names {
     many: HashSet<String>,
     one: HashSet<String>,
 }
 
 impl Names {
-    pub fn of(workbook: &Workbook) -> Self {
+    fn of(workbook: &Workbook) -> Self {
         let mut names = Names::default();
         for name in workbook.named_ranges().iter() {
             let one = match parse_formula(&format!("={}", name.refers_to.trim_start_matches('='))) {
@@ -82,8 +82,6 @@ pub struct FileFormula {
     pub col: u16,
     /// Saved with the dynamic-array mark (`cm="1"`).
     pub dynamic: bool,
-    /// The shared formula it belongs to (`si`): its cells' formulas have the same shape.
-    pub shared: Option<u32>,
 }
 
 /// Spells the formulas a file holds as the editor shows them, after the workbook's names are read.
@@ -92,10 +90,8 @@ pub struct FileFormula {
 /// formula, evaluated as an array, and a data table's TABLE get no `@`.
 pub fn read_formulas(workbook: &mut Workbook, cells: &[FileFormula]) {
     let names = Names::of(workbook);
-    // What was worked out for each shape of formula, dynamic-array ones and legacy ones apart.
-    let mut shapes: [Shapes; 2] = Default::default();
-    // A legacy shared formula whose first cell reads the same needs nothing in its other cells.
-    let mut unchanged: HashSet<(usize, u32)> = HashSet::new();
+    // What was worked out for each shape of formula (a shared formula's cells are one shape).
+    let (mut legacy_shapes, mut dynamic_shapes) = (Shapes::new(), Shapes::new());
     for cell in cells {
         let Some(formula) = workbook
             .worksheet_mut(cell.sheet)
@@ -107,17 +103,13 @@ pub fn read_formulas(workbook: &mut Workbook, cells: &[FileFormula]) {
             continue;
         }
         let legacy = !cell.dynamic && formula.kind == FormulaKind::Dynamic;
-        let group = cell.shared.filter(|_| legacy).map(|si| (cell.sheet, si));
-        if group.is_some_and(|group| unchanged.contains(&group)) {
-            continue;
-        }
-        match shown(&formula.text, legacy, &names, &mut shapes[legacy as usize]) {
-            Some(text) => formula.text = text,
-            None => {
-                if let Some(group) = group {
-                    unchanged.insert(group);
-                }
-            }
+        let shapes = if legacy {
+            &mut legacy_shapes
+        } else {
+            &mut dynamic_shapes
+        };
+        if let Some(text) = shown(&formula.text, legacy, &names, shapes) {
+            formula.text = text;
         }
     }
 }
@@ -134,7 +126,6 @@ pub fn read_all_formulas(workbook: &mut Workbook, dynamic: bool) {
                     row,
                     col,
                     dynamic,
-                    shared: None,
                 })
                 .collect::<Vec<_>>()
         })
@@ -189,8 +180,12 @@ pub struct Saving {
 
 impl Saving {
     pub fn of(workbook: &Workbook) -> Self {
+        Self::with_names(Names::of(workbook))
+    }
+
+    fn with_names(names: Names) -> Self {
         Saving {
-            names: Names::of(workbook),
+            names,
             shapes: Shapes::new(),
             arrays: Shapes::new(),
         }
@@ -279,31 +274,38 @@ fn per_shape(
         }
     }
     let (change, dynamic) = work();
-    let alike = matches!(change, Change::Same | Change::At(_));
-    let new = match change {
-        Change::Same => None,
-        Change::At(new) | Change::Text(new) => Some(new).filter(|new| new != text),
+    let (new, alike) = match change {
+        Change::Same => (None, true),
+        Change::At(new) => (Some(new).filter(|new| new != text), true),
+        Change::Text(new) => (Some(new).filter(|new| new != text), false),
     };
-    if let (true, Some((key, cells))) = (alike, known) {
-        let new_shape = match &new {
-            None => Some(None),
-            Some(new) => shape(new)
-                .filter(|(_, new_cells)| new_cells.len() == cells.len())
-                .map(|(new_shape, _)| Some(new_shape)),
-        };
-        if let Some(new_shape) = new_shape {
-            shapes.insert(key, (new_shape, dynamic));
+    let Some((key, cells)) = known.filter(|_| alike) else {
+        return (new, dynamic);
+    };
+    let new_shape = match new.as_deref().map(|new| (new, shape(new))) {
+        None => None,
+        // Putting in or taking out `@` keeps the text's cells as they are.
+        Some((new, Some((new_shape, new_cells))))
+            if new_cells.iter().map(|at| &new[at.clone()]).eq(cells.iter().map(|at| &text[at.clone()])) =>
+        {
+            Some(new_shape)
         }
-    }
+        Some(_) => {
+            debug_assert!(false, "{text} respelled with other cells: {new:?}");
+            return (new, dynamic);
+        }
+    };
+    shapes.insert(key, (new_shape, dynamic));
     (new, dynamic)
 }
 
 /// A formula's shape: its text with each cell reference left out, and for each after the first
 /// whether a range from the one before it to it is one cell (`A1:A1`); with where the references
 /// are. Formulas of one shape (a shared formula's cells, a formula filled down) differ only in
-/// which cells they name, which doesn't move their `@`. A reference here is any run of a name's
-/// characters that reads as a cell (`$B$2`) and isn't a call, table or sheet name: in a string or
-/// a quoted sheet name its text doesn't matter either. `None` for a formula holding the marks.
+/// which cells they name, which doesn't move their `@`. A reference here is a run of a name's
+/// characters that reads as a cell (`$B$2`), as the parser reads one: not a call, a table, a sheet
+/// (`A1!`, `A1:B2!`) or an error, and not in a string, a quoted sheet name or brackets, which stay
+/// as written. `None` for a text holding the characters the shape marks cells with.
 fn shape(text: &str) -> Option<(String, Vec<Range<usize>>)> {
     if text.contains(['\0', '\u{1}', '\u{2}']) {
         return None;
@@ -315,15 +317,57 @@ fn shape(text: &str) -> Option<(String, Vec<Range<usize>>)> {
     let mut previous: Option<CellAddress> = None;
     let (mut copied, mut i) = (0, 0);
     while i < bytes.len() {
-        if !name_char(bytes[i]) {
-            i += 1;
-            continue;
+        match bytes[i] {
+            // A doubled quote inside is one quote: the text goes on to the next lone one.
+            quote @ (b'"' | b'\'') => {
+                i += 1;
+                while i < bytes.len() {
+                    i += 1;
+                    if bytes[i - 1] == quote {
+                        if bytes.get(i) != Some(&quote) {
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+            b'[' => {
+                let mut depth = 0;
+                while i < bytes.len() {
+                    depth += match bytes[i] {
+                        b'[' => 1,
+                        b']' => -1,
+                        _ => 0,
+                    };
+                    i += 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                continue;
+            }
+            b if !name_char(b) => {
+                i += 1;
+                continue;
+            }
+            _ => {}
         }
         let start = i;
         while i < bytes.len() && name_char(bytes[i]) {
             i += 1;
         }
-        if matches!(bytes.get(i), Some(b'(' | b'[' | b'!')) {
+        let sheet_span = bytes.get(i) == Some(&b':') && {
+            let span = bytes[i + 1..]
+                .iter()
+                .take_while(|&&b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
+                .count();
+            span > 0 && bytes.get(i + 1 + span) == Some(&b'!')
+        };
+        if sheet_span
+            || matches!(bytes.get(i), Some(b'(' | b'[' | b'!'))
+            || (start > 0 && bytes[start - 1] == b'#')
+        {
             continue;
         }
         let Some(cell) = cell_reference(&text[start..i]) else {
@@ -343,7 +387,8 @@ fn shape(text: &str) -> Option<(String, Vec<Range<usize>>)> {
     Some((shape, cells))
 }
 
-/// `run` as a cell reference, `[$]letters[$]digits` as the parser reads one.
+/// `run` as a cell reference, `[$]letters[$]digits` as the parser reads one (checked before
+/// parsing it, so that a name is turned down without building an error).
 fn cell_reference(run: &str) -> Option<CellAddress> {
     let rest = run.strip_prefix('$').unwrap_or(run);
     let letters = rest.bytes().take_while(u8::is_ascii_alphabetic).count();
@@ -712,11 +757,7 @@ mod tests {
     }
 
     fn saving() -> Saving {
-        Saving {
-            names: names(),
-            shapes: Shapes::new(),
-            arrays: Shapes::new(),
-        }
+        Saving::with_names(names())
     }
 
     #[test]
@@ -888,6 +929,12 @@ mod tests {
         // Text that reads as a cell, in a string or a sheet's name, is left as it is.
         assert_eq!(read("=\"A1\"&B1:B3").as_deref(), Some("=\"A1\"&@B1:B3"));
         assert_eq!(read("=\"Q9\"&C1:C3").as_deref(), Some("=\"Q9\"&@C1:C3"));
+        // A sheet's name between a range's two cells doesn't stand for a cell.
+        let fresh = |text: &str| shown(text, true, &self::names(), &mut Shapes::new());
+        assert!(fresh("=C1:'B2'!A1+1").is_some());
+        for text in ["=A1:'B2'!A1+1", "=C1:'B2'!A1+1", "=A1:Q1:Q4!A1+1", "=C1:Q1:Q4!A1+1"] {
+            assert_eq!(read(text), fresh(text), "{text}");
+        }
         assert_eq!(
             read("='Q1 A1'!B1:B3*2").as_deref(),
             Some("=@'Q1 A1'!B1:B3*2")
@@ -915,6 +962,30 @@ mod tests {
                 saving.formula("=SUM(@A2:A4)"),
                 ("=SUM(_xlfn.SINGLE(A2:A4))".to_string(), false)
             );
+        }
+    }
+
+    #[test]
+    fn shapes_find_the_cells_the_parser_reads() {
+        for text in [
+            "=SUM(A1:B2,$C$3)*LOG10(D4)+LOG10 (E5)",
+            "=A1:Sheet2!B2+Sheet1:Sheet3!C1+Q1:Q4!A1",
+            "=IF(x1>0,A1#,#N/A)+#REF!+R1C1+TRUE",
+            "=[1]Sheet1!A1+Table1[[#This Row],[B2]]+'Q1 A1'!C3&\"D4\"",
+            "=1E5+.5+A1048576+XFE1",
+        ] {
+            let (_, cells) = shape(text).unwrap();
+            let read: Vec<_> = tokens(text)
+                .unwrap()
+                .into_iter()
+                .filter(|(_, token)| matches!(token, Token::CellRef(_)))
+                .map(|(at, _)| at)
+                .collect();
+            let valid: Vec<_> = read
+                .into_iter()
+                .filter(|at| CellAddress::parse(&text[at.clone()]).is_ok())
+                .collect();
+            assert_eq!(cells, valid, "{text}");
         }
     }
 }

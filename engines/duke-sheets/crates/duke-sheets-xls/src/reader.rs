@@ -1461,14 +1461,8 @@ impl XlsReader {
                         {
                             // Shared formula found - decompile with base cell
                             let shared_ctx = FormulaContext {
-                                sheet_names: formula_ctx.sheet_names.clone(),
-                                extern_sheet: formula_ctx.extern_sheet.clone(),
-                                supbooks: formula_ctx.supbooks.clone(),
-                                names: formula_ctx.names.clone(),
-                                extern_names: formula_ctx.extern_names.clone(),
-                                extern_name_index_base: formula_ctx.extern_name_index_base,
                                 base_cell: Some((row, col)),
-                                last_cell: formula_ctx.last_cell,
+                                ..formula_ctx.clone()
                             };
                             let text = crate::biff::formula::decompile(shared_tokens, &shared_ctx);
                             if text.is_empty() {
@@ -1742,14 +1736,8 @@ impl XlsReader {
     ) -> XlsResult<()> {
         // Build a temporary context with the base cell for offset resolution
         let shared_ctx = FormulaContext {
-            sheet_names: formula_ctx.sheet_names.clone(),
-            extern_sheet: formula_ctx.extern_sheet.clone(),
-            supbooks: formula_ctx.supbooks.clone(),
-            names: formula_ctx.names.clone(),
-            extern_names: formula_ctx.extern_names.clone(),
-            extern_name_index_base: formula_ctx.extern_name_index_base,
             base_cell: Some((cell_row, cell_col)),
-            last_cell: formula_ctx.last_cell,
+            ..formula_ctx.clone()
         };
         let text = crate::biff::formula::decompile(shared_tokens, &shared_ctx);
         let formula_text = if text.is_empty() {
