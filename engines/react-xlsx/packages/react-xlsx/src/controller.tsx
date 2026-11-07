@@ -61,7 +61,7 @@ import {
   setCommentThreadResolved,
   type XlsxCommentThread
 } from "./comments";
-import { applyXlsxCut, captureXlsxCut, getXlsxInitialActiveCell } from "./selection-tools";
+import { applyXlsxCut, captureXlsxCut, getXlsxInitialActiveCell, pasteMerge, writeCopiedFormula } from "./selection-tools";
 import {
   applyCellMutationState,
   applyCellMutationStates,
@@ -428,6 +428,11 @@ type ClipboardPayload = {
   /** The copied workbook's date system (missing in a copy from an older build). */
   date1904?: boolean;
   merges: ClipboardMerge[];
+  /**
+   * The copied range's top-left cell: a formula pastes with its references moved as far as it
+   * is pasted from its cell. A copy from an older build has none, and its formulas paste as they are.
+   */
+  origin?: XlsxCellAddress;
   rows: number;
 };
 
@@ -3296,6 +3301,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       cols: normalized.end.col - normalized.start.col + 1,
       date1904: Boolean(workbook?.settings?.date1904),
       merges: [],
+      origin: normalized.start,
       rows: normalized.end.row - normalized.start.row + 1
     };
 
@@ -3385,8 +3391,11 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         const colSpan = Math.min(merge?.colSpan ?? 1, normalized.end.col - col + 1);
 
         const formatKind = (rawStyle?.numberFormat as { kind?: string } | undefined)?.kind;
+        // A cell a copied formula spills into, or a cell of its Ctrl+Shift+Enter block, pastes
+        // blank, for the pasted formula to spill there again.
+        const spillSource = worksheet.getSpillSource(row, col) as XlsxCellAddress | null;
         payload.cells.push({
-          cellValue: worksheet.getCellAt(row, col).toJs(),
+          cellValue: spillSource && rangeContainsCell(normalized, spillSource) ? null : worksheet.getCellAt(row, col).toJs(),
           colOffset: col - normalized.start.col,
           formula,
           isDate: formatKind === "date" || formatKind === "time" || formatKind === "datetime",
@@ -4832,7 +4841,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
         const sourceStyle = cloneCellStyle(worksheet.getCellStyleAt(sourceRow, sourceCol));
 
         if (sourceFormula) {
-          worksheet.setFormula(cellAddressToA1(targetCell), sourceFormula);
+          writeCopiedFormula(worksheet, sourceFormula, { row: sourceRow, col: sourceCol }, targetCell);
         } else {
           const sourceValue = normalizeCellValue(worksheet.getCellAt(sourceRow, sourceCol).toJs());
           worksheet.setCell(cellAddressToA1(targetCell), sourceValue);
@@ -5093,7 +5102,10 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
       const before = hasMergeOperations ? null : captureCellMutationState(nextCell, blocks);
 
       if (cell.formula) {
-        worksheet.setFormula(cellAddressToA1(nextCell), cell.formula);
+        const from = payload.origin
+          ? { col: payload.origin.col + cell.colOffset, row: payload.origin.row + cell.rowOffset }
+          : nextCell;
+        writeCopiedFormula(worksheet, cell.formula, from, nextCell);
       } else if (typeof cell.cellValue === "number") {
         // A date keeps the day it shows when the workbooks count days from different years.
         const crossesSystems = cell.isDate && cell.cellValue >= 1 && payload.date1904 !== undefined && payload.date1904 !== targetDate1904;
@@ -5135,7 +5147,7 @@ export function useXlsxViewerController(options: UseXlsxViewerControllerOptions)
             row: targetCell.row + merge.rowOffset + merge.rowSpan - 1
           }
         });
-        worksheet.mergeCells(rangeToA1(mergeRange));
+        pasteMerge(worksheet, mergeRange);
       }
     }
 

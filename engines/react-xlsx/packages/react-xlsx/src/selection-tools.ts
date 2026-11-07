@@ -1,4 +1,4 @@
-import type { Worksheet } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
+import { shiftFormula, type Worksheet } from "../vendor/sheets-wasm/duke_sheets_wasm.js";
 import type { XlsxCellAddress, XlsxCellRange, XlsxSheetData } from "./types";
 import { parseXlsxRange } from "./range-reference.ts";
 
@@ -74,6 +74,24 @@ function cellReference(row: number, col: number) {
     column = String.fromCharCode(65 + (value - 1) % 26) + column;
   }
   return `${column}${row + 1}`;
+}
+
+/**
+ * Writes `formula`, copied from the cell `from`, into `to`, as Excel pastes and fills it: its
+ * references without `$` move as far as the cell did, and one that would leave the sheet is #REF!.
+ */
+export function writeCopiedFormula(worksheet: Worksheet, formula: string, from: XlsxCellAddress, to: XlsxCellAddress) {
+  worksheet.setFormula(cellReference(to.row, to.col), shiftFormula(formula, to.row - from.row, to.col - from.col));
+}
+
+/** Merges `range` as Excel pastes a merged cell: the cells it covers after its first are cleared. */
+export function pasteMerge(worksheet: Worksheet, range: XlsxCellRange) {
+  for (let row = range.start.row; row <= range.end.row; row += 1) {
+    for (let col = range.start.col; col <= range.end.col; col += 1) {
+      if (row !== range.start.row || col !== range.start.col) worksheet.setCell(cellReference(row, col), null);
+    }
+  }
+  worksheet.mergeCells(`${cellReference(range.start.row, range.start.col)}:${cellReference(range.end.row, range.end.col)}`);
 }
 
 export function captureXlsxCut(worksheet: Worksheet, range: XlsxCellRange) {

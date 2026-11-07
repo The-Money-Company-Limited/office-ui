@@ -171,3 +171,32 @@ test("cut moves formulas and merged cells between sheets", () => {
   assert.equal(target.getFormulaAt(2, 2), "=1+2");
   assert.equal(target.isMergedSecondary(2, 3), true);
 });
+
+test("pasted and filled formulas move their relative references as in Excel", () => {
+  const workbook = new Workbook();
+  const sheet = workbook.getSheet(0);
+  const b1 = { row: 0, col: 1 };
+  tools.writeCopiedFormula(sheet, "=A1+$A$1+Sheet1!A$1+SUM(A:A)", b1, { row: 1, col: 1 });
+  assert.equal(sheet.getFormulaAt(1, 1), "=A2+$A$1+Sheet1!A$1+SUM(A:A)");
+  tools.writeCopiedFormula(sheet, "= SUM( A1:A3 ) & \"A1\" + [@Qty]", b1, { row: 4, col: 3 });
+  assert.equal(sheet.getFormulaAt(4, 3), "= SUM( C5:C7 ) & \"A1\" + [@Qty]");
+  tools.writeCopiedFormula(sheet, "=A2", { row: 1, col: 1 }, b1);
+  assert.equal(sheet.getFormulaAt(0, 1), "=A1");
+  tools.writeCopiedFormula(sheet, "=A1", { row: 1, col: 1 }, b1);
+  assert.equal(sheet.getFormulaAt(0, 1), "=#REF!");
+  workbook.free();
+});
+
+test("a pasted merge clears the cells it covers", () => {
+  const workbook = new Workbook();
+  const sheet = workbook.getSheet(0);
+  sheet.setCell("A1", "kept");
+  sheet.setCell("B1", "covered");
+  sheet.setFormula("A2", "=1");
+  tools.pasteMerge(sheet, { start: { row: 0, col: 0 }, end: { row: 1, col: 1 } });
+  assert.equal(sheet.getCell("A1").asText(), "kept");
+  assert.equal(sheet.getCell("B1").is_empty, true);
+  assert.equal(sheet.getFormulaAt(1, 0), undefined);
+  assert.equal(sheet.isMergedSecondary(1, 1), true);
+  workbook.free();
+});
