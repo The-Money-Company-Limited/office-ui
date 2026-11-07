@@ -30,6 +30,69 @@ pub enum DateOrder {
     YearFirst,
 }
 
+/// Where the currency symbol goes in an amount.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CurrencyPosition {
+    /// $1,234 (United States, United Kingdom).
+    #[default]
+    Before,
+    /// € 1.234 (Netherlands, Switzerland).
+    BeforeWithSpace,
+    /// 1.234 € (Germany, France, Spain).
+    AfterWithSpace,
+}
+
+/// The computer's currency, which the built-in currency formats (5-8, 42 and 44) show and
+/// typed amounts may carry. The default is en-US's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Currency {
+    /// `$`, `£`, `€`, `kr`.
+    pub symbol: &'static str,
+    pub position: CurrencyPosition,
+    /// The built-in currency formats show negative amounts in parentheses, `($5.00)`, with the
+    /// codes ECMA-376 lists, as in en-US; elsewhere with a minus sign, `-£5.00`.
+    pub parenthesized_negatives: bool,
+}
+
+impl Default for Currency {
+    fn default() -> Self {
+        Self { symbol: "$", position: CurrencyPosition::Before, parenthesized_negatives: true }
+    }
+}
+
+impl Currency {
+    /// An amount written out with the symbol where the region puts it, and for a negative one a
+    /// minus sign where the region writes it (`-£5.00`, `€ -5,00`, `-5,00 €`), as DOLLAR writes
+    /// it.
+    pub fn write(&self, amount: &str, negative: bool) -> String {
+        self.arrange(self.symbol, amount, if negative { "-" } else { "" })
+    }
+
+    /// A number code with the symbol, quoted, where the region puts it (`"£"#,##0.00`);
+    /// `negative`, a negative section with the minus sign where the region writes it
+    /// (`\-"£"#,##0.00`, `"€" \-#,##0`).
+    pub fn code(&self, number: &str, negative: bool) -> String {
+        self.arrange(&format!("\"{}\"", self.symbol), number, if negative { "\\-" } else { "" })
+    }
+
+    /// The format a typed amount gets, as Excel gives it: `"£"#,##0.00`. With the symbol before
+    /// the amount and a space, a negative section keeps the minus after the symbol (`€ -5`).
+    pub fn typed_code(&self, number: &str) -> String {
+        match self.position {
+            CurrencyPosition::BeforeWithSpace => format!("{};{}", self.code(number, false), self.code(number, true)),
+            _ => self.code(number, false),
+        }
+    }
+
+    fn arrange(&self, symbol: &str, amount: &str, minus: &str) -> String {
+        match self.position {
+            CurrencyPosition::Before => format!("{minus}{symbol}{amount}"),
+            CurrencyPosition::BeforeWithSpace => format!("{symbol} {minus}{amount}"),
+            CurrencyPosition::AfterWithSpace => format!("{minus}{amount} {symbol}"),
+        }
+    }
+}
+
 /// Regional settings. The default is en-US.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegionalSettings {
@@ -45,6 +108,7 @@ pub struct RegionalSettings {
     pub short_date: &'static str,
     /// The hour code of the computer's short time, `h` (9:30) or `hh` (09:30).
     pub short_hour: &'static str,
+    pub currency: Currency,
 }
 
 impl Default for RegionalSettings {
@@ -57,6 +121,7 @@ impl Default for RegionalSettings {
             thousands_separator: ',',
             short_date: "m/d/yyyy",
             short_hour: "h",
+            currency: Currency::default(),
         }
     }
 }
@@ -125,7 +190,16 @@ impl RegionalSettings {
                 (DateOrder::YearFirst, _) => ("yyyy-mm-dd", "hh"),
             },
         };
-        Self { language, date_order, date_separator, decimal_separator, thousands_separator, short_date, short_hour }
+        Self {
+            language,
+            date_order,
+            date_separator,
+            decimal_separator,
+            thousands_separator,
+            short_date,
+            short_hour,
+            currency: currency(&language_code, &region),
+        }
     }
 
     /// The number-format engine's locale: these separators, and month and day names as Excel
@@ -184,13 +258,62 @@ impl RegionalSettings {
                 ["sön", "mån", "tis", "ons", "tor", "fre", "lör"],
             ),
         };
-        ssfmt::Locale { decimal_separator: self.decimal_separator, thousands_separator: self.thousands_separator, ..named }
+        ssfmt::Locale {
+            decimal_separator: self.decimal_separator,
+            thousands_separator: self.thousands_separator,
+            date_separator: self.date_separator,
+            ..named
+        }
+    }
+
+    /// The number-format engine's locale for TEXT. Its format is written in the regional
+    /// language, so a `/` in it is a slash, not the date separator a `/` in a cell's
+    /// (language-neutral) format stands for: Excel in sv-SE gives 31/12/2025 for
+    /// TEXT(date,"dd/mm/yyyy").
+    pub fn text_function_locale(&self) -> ssfmt::Locale {
+        ssfmt::Locale { date_separator: '/', ..self.format_locale() }
     }
 
     /// The short date with the short time, which Excel shows its built-in date with time (22) with.
     pub fn date_time_code(&self) -> String {
         format!("{} {}:mm", self.short_date, self.short_hour)
     }
+}
+
+/// The currency for a language and region from a tag (`en`, `GB`): without a region, the
+/// language's main one; `$` before the amount where neither is known. Only the United States
+/// (and a tag without a region in English) shows negative amounts in parentheses.
+fn currency(language: &str, region: &str) -> Currency {
+    use CurrencyPosition::*;
+    if matches!((language, region), ("en", "" | "US") | (_, "US")) {
+        return Currency::default();
+    }
+    let (symbol, position) = match (language, region) {
+        (_, "GB") => ("£", Before),
+        (_, "CH" | "LI") => ("CHF", BeforeWithSpace),
+        (_, "IN") => ("₹", Before),
+        (_, "JP" | "CN") | ("ja" | "zh", "") => ("¥", Before),
+        (_, "KR") | ("ko", "") => ("₩", Before),
+        (_, "BR") => ("R$", BeforeWithSpace),
+        (_, "ZA") => ("R", Before),
+        (_, "SE") | ("sv", "") => ("kr", AfterWithSpace),
+        (_, "NO") | ("nb" | "no", "") => ("kr", BeforeWithSpace),
+        (_, "DK") | ("da", "") => ("kr.", AfterWithSpace),
+        (_, "PL") | ("pl", "") => ("zł", AfterWithSpace),
+        (_, "CZ") | ("cs", "") => ("Kč", AfterWithSpace),
+        (_, "RU") | ("ru", "") => ("₽", AfterWithSpace),
+        (_, "TR") | ("tr", "") => ("₺", Before),
+        ("fr", "CA") => ("$", AfterWithSpace),
+        // The euro: before the amount in Ireland, Malta, the Netherlands and Austria, after it in
+        // the rest of the euro area.
+        // The region decides, whatever the language (en-NL, fr-IE).
+        (_, "IE" | "MT") => ("€", Before),
+        (_, "NL" | "AT") | ("nl", "") => ("€", BeforeWithSpace),
+        (_, "DE" | "AT" | "FR" | "ES" | "IT" | "PT" | "BE" | "LU" | "FI" | "GR" | "SK" | "SI" | "EE" | "LV" | "LT" | "HR" | "CY")
+        | ("de" | "fr" | "es" | "it" | "pt" | "fi" | "el" | "sk" | "sl" | "et" | "lv" | "lt" | "hr", "") => ("€", AfterWithSpace),
+        _ => ("$", Before),
+    };
+    Currency { symbol, position, parenthesized_negatives: false }
 }
 
 #[cfg(test)]
@@ -220,6 +343,38 @@ mod tests {
         assert_eq!(RegionalSettings::from_tag("cs-CZ").decimal_separator, ',');
         assert_eq!(RegionalSettings::from_tag("es-ES").format_locale().month_names_full[0], "enero");
         assert_eq!(RegionalSettings::from_tag("zh-Hans-CN").date_order, DateOrder::YearFirst);
+    }
+
+    #[test]
+    fn knows_the_regional_currency() {
+        let currency = |tag: &str| {
+            let currency = RegionalSettings::from_tag(tag).currency;
+            (currency.symbol, currency.position)
+        };
+        use CurrencyPosition::*;
+        assert_eq!(RegionalSettings::from_tag("en-US").currency, Currency::default());
+        assert_eq!(RegionalSettings::from_tag("en").currency, Currency::default());
+        assert!(!RegionalSettings::from_tag("en-AU").currency.parenthesized_negatives);
+        assert_eq!(currency("en-GB"), ("£", Before));
+        assert_eq!(currency("de-DE"), ("€", AfterWithSpace));
+        assert_eq!(currency("de"), ("€", AfterWithSpace));
+        assert_eq!(currency("fr-FR"), ("€", AfterWithSpace));
+        assert_eq!(currency("nl-NL"), ("€", BeforeWithSpace));
+        assert_eq!(currency("en-IE"), ("€", Before));
+        assert_eq!(currency("fr-IE"), ("€", Before));
+        assert_eq!(currency("en-NL"), ("€", BeforeWithSpace));
+        assert_eq!(currency("en-MT"), ("€", Before));
+        assert_eq!(currency("de-CH"), ("CHF", BeforeWithSpace));
+        assert_eq!(currency("ja-JP"), ("¥", Before));
+        assert_eq!(currency("sv-SE"), ("kr", AfterWithSpace));
+        assert_eq!(currency("fr-CA"), ("$", AfterWithSpace));
+        let gb = RegionalSettings::from_tag("en-GB").currency;
+        assert_eq!(gb.code("#,##0", false), "\"£\"#,##0");
+        assert_eq!(gb.write("5.00", true), "-£5.00");
+        assert_eq!(gb.code("#,##0", true), "\\-\"£\"#,##0");
+        assert_eq!(RegionalSettings::from_tag("nl-NL").currency.write("5,00", true), "€ -5,00");
+        assert_eq!(RegionalSettings::from_tag("de-DE").currency.code("#,##0.00", false), "#,##0.00 \"€\"");
+        assert_eq!(RegionalSettings::from_tag("de-DE").currency.write("5,00", false), "5,00 €");
     }
 
     #[test]

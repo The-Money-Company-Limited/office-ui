@@ -978,17 +978,20 @@ impl Worksheet {
     #[wasm_bindgen(skip_typescript, js_name = readTypedNumberAt)]
     pub fn read_typed_number_at(&self, row: u32, col: u32, text: &str) -> Result<JsValue, JsError> {
         #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct BuiltInFormat {
-            format_type: &'static str,
-            id: u32,
+        #[serde(tag = "formatType", rename_all = "lowercase")]
+        enum TypedFormat {
+            Builtin { id: u32 },
+            Custom {
+                #[serde(rename = "formatString")]
+                format_string: String,
+            },
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct TypedNumber {
             value: f64,
             #[serde(skip_serializing_if = "Option::is_none")]
-            number_format: Option<BuiltInFormat>,
+            number_format: Option<TypedFormat>,
         }
         let wb = self.workbook.borrow();
         let ws = wb
@@ -998,7 +1001,11 @@ impl Worksheet {
         let typed = duke_sheets_formula::coerce::typed_number(text, wb.settings(), current.unwrap_or(&duke_sheets_core::NumberFormat::General));
         match typed {
             Some((value, format)) => {
-                let number_format = format.map(|id| BuiltInFormat { format_type: "builtin", id });
+                // typed_number gives a built-in or a custom format, never General.
+                let number_format = format.map(|format| match format {
+                    duke_sheets_core::NumberFormat::BuiltIn(id) => TypedFormat::Builtin { id },
+                    other => TypedFormat::Custom { format_string: other.format_string().to_string() },
+                });
                 to_js_value(&TypedNumber { value, number_format })
             }
             None => Ok(JsValue::UNDEFINED),
@@ -1314,6 +1321,17 @@ pub fn shift_formula(formula: &str, rows: i32, cols: i32) -> String {
     duke_sheets_core::shift_formula(formula, rows, cols)
 }
 
+/// How a short date and a number show in the regional settings of a language tag, for a picker
+/// to show beside it: `["05/11/2026", "1,234.5"]` in en-GB, `["05.11.2026", "1.234,5"]` in de-DE.
+#[wasm_bindgen(js_name = regionalSample)]
+pub fn regional_sample(tag: &str) -> Vec<String> {
+    use duke_sheets_core::{format_cell_value, CellValue, NumberFormat};
+    let regional = duke_sheets_core::RegionalSettings::from_tag(tag);
+    let date = format_cell_value(&CellValue::Number(46331.0), &NumberFormat::BuiltIn(NumberFormat::ID_DATE_SHORT), false, &regional);
+    let number = format_cell_value(&CellValue::Number(1234.5), &NumberFormat::Custom("#,##0.0".into()), false, &regional);
+    vec![date, number]
+}
+
 fn with_regional_settings(mut wb: CoreWorkbook) -> Rc<RefCell<CoreWorkbook>> {
     wb.settings_mut().regional = REGIONAL.with(|r| r.get());
     Rc::new(RefCell::new(wb))
@@ -1326,6 +1344,14 @@ impl Workbook {
         Self {
             inner: with_regional_settings(CoreWorkbook::new()),
         }
+    }
+
+    /// Changes this workbook's regional settings to those of a language tag, as `setLocale` sets
+    /// them for workbooks opened from now on. Cells show, and typed entries read, in them at
+    /// once; calculate to bring formulas that depend on them (TEXT, DATEVALUE) up to date.
+    #[wasm_bindgen(js_name = setLocale)]
+    pub fn set_locale(&self, tag: &str) {
+        self.inner.borrow_mut().settings_mut().regional = duke_sheets_core::RegionalSettings::from_tag(tag);
     }
 
     #[wasm_bindgen(js_name = loadCsvString)]

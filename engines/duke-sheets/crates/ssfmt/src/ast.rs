@@ -215,6 +215,9 @@ pub enum FormatPart {
     Literal(String),
     /// Escaped literal character (e.g., `\r`, `\#`) - does not get minus sign for negative values
     EscapedLiteral(String),
+    /// An unquoted `/` in a date section (`dd/mm/yyyy`), which shows as the locale's date
+    /// separator (`05.11.2026` in de-DE). Elsewhere a `/` is `Literal("/")`.
+    DateSeparator,
     /// Digit placeholder (0, #, or ?)
     Digit(DigitPlaceholder),
     /// Decimal point separator

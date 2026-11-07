@@ -234,9 +234,10 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                 }
 
-                // Fraction
+                // The date separator in a date section; a fraction bar or the character elsewhere
+                // (SectionBuilder::build).
                 Token::Slash => {
-                    builder.add_part(FormatPart::Literal("/".to_string()));
+                    builder.add_part(FormatPart::DateSeparator);
                     self.advance()?;
                 }
 
@@ -629,6 +630,15 @@ impl SectionBuilder {
     }
 
     fn build(mut self) -> Section {
+        // A `/` is the date separator only in a section with date or time codes.
+        if !self.parts.iter().any(FormatPart::is_date_part) {
+            for part in &mut self.parts {
+                if *part == FormatPart::DateSeparator {
+                    *part = FormatPart::Literal("/".to_string());
+                }
+            }
+        }
+
         // Post-process to detect fraction patterns
         self.detect_fractions();
 

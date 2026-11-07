@@ -152,6 +152,7 @@ pub fn format_date(
             FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => {
                 result.push_str(s);
             }
+            FormatPart::DateSeparator => result.push(opts.locale.date_separator),
             FormatPart::Skip(_) => {
                 // Skip width of character - add a space for alignment
                 result.push(' ');

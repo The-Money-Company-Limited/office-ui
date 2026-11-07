@@ -1027,6 +1027,16 @@ export interface UseXlsxViewerControllerOptions {
    */
   maxFileSizeBytes?: number;
   /**
+   * The language tag (`en-GB`, `de-DE`) the workbook's regional settings come from, standing in
+   * for the computer's regional settings Excel uses: the order of day and month in dates, the
+   * separators and currency numbers are typed and shown with. Changing it re-applies it to the
+   * open workbook, which redisplays and recalculates without a reload. Like a computer's, it is
+   * one per page: viewers on one page should share it.
+   *
+   * @default the browser's language
+   */
+  regionalFormat?: string;
+  /**
    * Disables workbook edits, paste, fill, undo/redo, and other mutation actions.
    *
    * @default false
@@ -1174,7 +1184,12 @@ export interface XlsxViewerController {
   removeFormControl: (controlIndex: number, sheetIndex?: number) => boolean;
   readOnly: boolean;
   recalculate: () => void;
+  /** The language tag (`en-GB`) the workbook's regional settings come from: how dates and numbers are typed and shown. */
+  regionalFormat: string;
+  /** Changes whenever the grid redraws: an edit, an undo, a load, a regional format re-applied. */
   revision: number;
+  /** Changes when the workbook's content changes (an edit, an undo, a load), not when it only redisplays: what a host saves on. */
+  editRevision: number;
   resetZoom: () => void;
   resizeChartBy: (
     id: string,
@@ -1193,7 +1208,8 @@ export interface XlsxViewerController {
   redo: () => void;
   pasteFromClipboard: () => Promise<boolean>;
   pasteStructuredClipboardData: (payload: string) => boolean;
-  pasteText: (text: string) => boolean;
+  /** Pastes tab-separated text; `html`, the clipboard's HTML, gives desktop Excel's cell values. */
+  pasteText: (text: string, html?: string) => boolean;
   selectedRangeAddress: string | null;
   selectedValue: string;
   selectedFormula: string;
@@ -1370,7 +1386,8 @@ export interface XlsxViewerEditing {
   mergeSelection: () => void;
   pasteFromClipboard: () => Promise<boolean>;
   pasteStructuredClipboardData: (payload: string) => boolean;
-  pasteText: (text: string) => boolean;
+  /** Pastes tab-separated text; `html`, the clipboard's HTML, gives desktop Excel's cell values. */
+  pasteText: (text: string, html?: string) => boolean;
   removeActiveSheet: () => void;
   removeFormControl: (controlIndex: number, sheetIndex?: number) => boolean;
   readOnly: boolean;

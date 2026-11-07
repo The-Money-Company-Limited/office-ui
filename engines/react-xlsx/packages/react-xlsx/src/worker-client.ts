@@ -10,6 +10,8 @@ type WorkerMessage =
         showHiddenSheets?: boolean;
         skipXmlParsing?: boolean;
         wasmSource?: WorkerWasmSource;
+        /** The language tag the workbook's regional settings come from. */
+        regionalFormat: string;
       };
     }
   | {
@@ -20,6 +22,8 @@ type WorkerMessage =
         showHiddenSheets?: boolean;
         skipXmlParsing?: boolean;
         wasmSource?: WorkerWasmSource;
+        /** The language tag the workbook's regional settings come from. */
+        regionalFormat: string;
       };
     }
   | {
@@ -30,6 +34,11 @@ type WorkerMessage =
         row: number;
         col: number;
       };
+    }
+  | {
+      id: number;
+      type: "setRegionalFormat";
+      payload: { regionalFormat: string };
     }
   | {
       id: number;
@@ -131,7 +140,7 @@ export class XlsxWorkerClient {
     this.pendingRequests.clear();
   }
 
-  loadWorkbook(buffer: ArrayBuffer, skipXmlParsing = false, showHiddenSheets = false) {
+  loadWorkbook(buffer: ArrayBuffer, regionalFormat: string, skipXmlParsing = false, showHiddenSheets = false) {
     const workerBuffer = cloneArrayBufferForTransfer(buffer);
     return this.request<{
       chartsByWorkbookSheetIndex: XlsxChart[][];
@@ -146,7 +155,8 @@ export class XlsxWorkerClient {
         buffer: workerBuffer,
         showHiddenSheets,
         skipXmlParsing,
-        wasmSource: getConfiguredWorkerWasmSource()
+        wasmSource: getConfiguredWorkerWasmSource(),
+        regionalFormat
       },
       type: "load"
     }, [workerBuffer]);
@@ -163,7 +173,7 @@ export class XlsxWorkerClient {
     });
   }
 
-  parseCharts(buffer: ArrayBuffer, skipXmlParsing = false, showHiddenSheets = false) {
+  parseCharts(buffer: ArrayBuffer, regionalFormat: string, skipXmlParsing = false, showHiddenSheets = false) {
     const workerBuffer = cloneArrayBufferForTransfer(buffer);
     return this.request<{
       chartsByWorkbookSheetIndex: XlsxChart[][];
@@ -175,10 +185,24 @@ export class XlsxWorkerClient {
         buffer: workerBuffer,
         showHiddenSheets,
         skipXmlParsing,
-        wasmSource: getConfiguredWorkerWasmSource()
+        wasmSource: getConfiguredWorkerWasmSource(),
+        regionalFormat
       },
       type: "parseCharts"
     }, [workerBuffer]);
+  }
+
+  /**
+   * Re-applies a regional format to the workbook the worker holds. It recalculates only a workbook
+   * it calculated when it loaded (under the formula-count threshold, without falling back to the
+   * saved values); others keep their saved values in the new format.
+   */
+  setRegionalFormat(regionalFormat: string) {
+    return this.request<null>({
+      id: 0,
+      payload: { regionalFormat },
+      type: "setRegionalFormat"
+    });
   }
 
   getRowsBatch(workbookSheetIndex: number, startRow: number, rowCount: number) {

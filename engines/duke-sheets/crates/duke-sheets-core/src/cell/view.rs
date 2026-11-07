@@ -763,6 +763,47 @@ mod tests {
     }
 
     #[test]
+    fn a_slash_in_a_custom_date_format_is_the_regional_date_separator() {
+        let date = |tag: &str, code: &str| fmt_in(tag, 46331.0, NumberFormat::Custom(code.into()));
+        assert_eq!(date("de-DE", "dd/mm/yyyy"), "05.11.2026");
+        assert_eq!(date("nl-NL", "d/m/yyyy"), "5-11-2026");
+        assert_eq!(date("en-GB", "dd/mm/yyyy"), "05/11/2026");
+        assert_eq!(date("en-US", "m/d/yyyy"), "11/5/2026");
+        assert_eq!(date("de-DE", r"dd\/mm\/yyyy"), "05/11/2026");
+        // A fraction keeps its bar.
+        assert_eq!(fmt_in("de-DE", 1.5, NumberFormat::BuiltIn(12)), "1 1/2");
+    }
+
+    #[test]
+    fn built_in_currency_formats_show_the_regional_currency() {
+        let money = |tag: &str, value: f64, id: u32| fmt_in(tag, value, NumberFormat::BuiltIn(id));
+        assert_eq!(money("en-US", 1234.5, 7), "$1,234.50 ");
+        assert_eq!(money("en-US", -1234.5, 7), "($1,234.50)");
+        assert_eq!(money("en-GB", 1234.5, 7), "£1,234.50");
+        assert_eq!(money("en-GB", -1234.0, 5), "-£1,234");
+        assert_eq!(money("de-DE", 1234.5, 7), "1.234,50 €");
+        assert_eq!(money("de-DE", -1234.5, 8), "-1.234,50 €");
+        assert_eq!(money("fr-FR", 1234.0, 6), "1\u{a0}234 €");
+        assert_eq!(money("nl-NL", 1234.0, 5), "€ 1.234");
+        assert_eq!(money("nl-NL", -1234.0, 5), "€ -1.234");
+        assert_eq!(money("en-AU", -5.0, 7), "-$5.00");
+        // A typed amount's format keeps the minus after a spaced symbol.
+        let nl = RegionalSettings::from_tag("nl-NL").currency.typed_code("#,##0");
+        assert_eq!(fmt_in("nl-NL", -5.0, NumberFormat::Custom(nl)), "€ -5");
+        // Accounting puts the minus after a spaced symbol too.
+        assert!(money("nl-NL", -1234.0, 42).contains("-1.234"), "{}", money("nl-NL", -1234.0, 42));
+        assert!(!money("nl-NL", -1234.0, 42).contains("-€"), "{}", money("nl-NL", -1234.0, 42));
+        // Accounting without a symbol (43) takes the regional negatives too.
+        assert!(money("de-DE", -1234.5, 43).contains("-"), "{}", money("de-DE", -1234.5, 43));
+        assert!(!money("de-DE", -1234.5, 43).contains("("), "{}", money("de-DE", -1234.5, 43));
+        assert_eq!(money("de-CH", 1234.5, 7), "CHF 1'234.50");
+        assert!(money("de-DE", 1234.5, 44).contains("1.234,50 €"), "{}", money("de-DE", 1234.5, 44));
+        assert!(money("en-US", 1234.5, 44).contains("$"), "{}", money("en-US", 1234.5, 44));
+        // A code the file wrote out stays as written.
+        assert_eq!(fmt_in("de-DE", 5.0, NumberFormat::Custom("$#,##0".into())), "$5");
+    }
+
+    #[test]
     fn input_text_reads_back_in_the_regional_settings() {
         let input = |tag: &str, value: f64, format: NumberFormat| {
             let style = Style { number_format: format, ..Default::default() };

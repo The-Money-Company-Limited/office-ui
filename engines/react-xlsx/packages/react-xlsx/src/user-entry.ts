@@ -46,6 +46,74 @@ export function enterUserText(worksheet: Worksheet, cell: XlsxCellAddress, text:
 }
 
 /**
+ * The 1900-system serials a date written as three numbers (`13/11/2026`, `5.11.26`) stands for,
+ * in each order of day, month and year it is valid in.
+ */
+function numericDateSerials(text: string): number[] {
+  const match = /^(\d{1,4})([./-])(\d{1,2})\2(\d{1,4})\.?$/.exec(text.trim());
+  if (!match) return [];
+  const [a, b, c] = [match[1], match[3], match[4]].map(Number);
+  // Two-digit years are 1930-2029, as Excel reads them.
+  const fullYear = (year: number, digits: number) => (digits > 2 ? year : year < 30 ? 2000 + year : 1900 + year);
+  const orders = [
+    [fullYear(c, match[4].length), a, b],
+    [fullYear(c, match[4].length), b, a],
+    [fullYear(a, match[1].length), b, c]
+  ];
+  return orders.flatMap(([year, month, day]) => {
+    const time = Date.UTC(year, month - 1, day);
+    const date = new Date(time);
+    const valid = date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+    return valid ? [(time - Date.UTC(1899, 11, 30)) / 86_400_000] : [];
+  });
+}
+
+/** Days from the 1900 date system's day 0 to the 1904 system's. */
+const DAYS_TO_1904 = 1462;
+
+/**
+ * Stores a cell pasted from desktop Excel, whose HTML carried its value (`number`, see
+ * excelClipboardNumbers) beside the text it shows. The value wins over the text, which Excel
+ * wrote in its computer's regional settings. The text gives the cell its format as typing it
+ * would (a currency, a percent, a date) when it reads as that value, and the short date when it
+ * is that date written in another order of day and month than the editor's. A Text-formatted
+ * cell keeps the text. A date's serial is taken as the 1900 system's, Excel's default, which the
+ * clipboard doesn't name, and moves to the 1904 system's in a `date1904` workbook.
+ */
+export function enterPastedNumber(
+  worksheet: Worksheet,
+  cell: XlsxCellAddress,
+  text: string,
+  number: number,
+  { baseStyle = {}, date1904 = false }: { baseStyle?: StyleInput; date1904?: boolean } = {}
+): void {
+  if (hasTextFormat(worksheet.getCellStyleAt(cell.row, cell.col))) {
+    enterUserText(worksheet, cell, text, baseStyle);
+    return;
+  }
+  const address = cellAddressToA1(cell);
+  const entry = readUserEntry(text, worksheet, cell);
+  const same = (value: unknown, expected: number) =>
+    typeof value === "number" && Math.abs(value - expected) <= 1e-9 * Math.max(1, Math.abs(expected));
+  let value = number;
+  let numberFormat: NumberFormatInput | undefined;
+  if (same(entry.value, number)) {
+    numberFormat = entry.numberFormat;
+  } else if (date1904 && same(entry.value, number - DAYS_TO_1904)) {
+    // A date the workbook reads from the text, in its own system.
+    value = number - DAYS_TO_1904;
+    numberFormat = entry.numberFormat;
+  } else if (numericDateSerials(text).includes(number)) {
+    value = date1904 ? number - DAYS_TO_1904 : number;
+    numberFormat = { formatType: "builtin", id: 14 };
+  }
+  worksheet.setCell(address, value);
+  if (numberFormat) {
+    worksheet.setCellStyle(address, { ...baseStyle, numberFormat });
+  }
+}
+
+/**
  * The cell's value as text to edit, which committed unchanged gives back the same value: text
  * that would read as something else (a number, a date, a formula) starts with an apostrophe,
  * except in a Text-formatted cell, which keeps whatever is typed.

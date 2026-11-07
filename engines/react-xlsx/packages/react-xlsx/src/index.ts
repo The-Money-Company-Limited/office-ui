@@ -12,7 +12,7 @@ export type {
   XlsxSuggestionValue
 } from "./comments";
 export { useXlsxFormulaAssist, XlsxFormulaAssistPopup, type XlsxFormulaAssistState } from "./FormulaAssist";
-export { initWasm, setWasmSource, type XlsxWasmSource } from "./wasm";
+export { getRegionalFormatSamples, initWasm, setWasmSource, type XlsxWasmSource } from "./wasm";
 export {
   DefaultXlsxToolbar,
   useXlsxViewerCharts,

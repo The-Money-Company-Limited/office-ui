@@ -73,6 +73,11 @@ import {
 } from "@/components/ui/tooltip"
 import { ToolbarOverflow } from "@/components/extend/toolbar-overflow"
 import {
+  EditorRegionalFormat,
+  RegionalFormatProvider,
+  useRegionalFormat,
+} from "@/components/extend/xlsx-regional-format"
+import {
   renderXlsxScroller,
   WorkbookSheetTabs,
   WorkbookTableHeaderMenu,
@@ -2825,7 +2830,7 @@ function XlsxCommentPopover({
 }
 
 function EditorSelectionStatus() {
-  const { getActiveWorksheet, revision } = useXlsxViewer()
+  const { getActiveWorksheet, regionalFormat, revision } = useXlsxViewer()
   const { selection } = useXlsxViewerSelection()
   const startRow = selection?.start.row
   const startCol = selection?.start.col
@@ -2861,8 +2866,9 @@ function EditorSelectionStatus() {
     )
   }
   if (!statistics || statistics.count < 2) return null
+  // In the regional format, as the grid shows numbers.
   const format = (value: number) =>
-    value.toLocaleString(undefined, { maximumFractionDigits: 10 })
+    value.toLocaleString(regionalFormat, { maximumFractionDigits: 10 })
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -3188,7 +3194,12 @@ export function XlsxEditorSurface({
   const sheetTabs = (
     <WorkbookSheetTabs
       onAddSheet={readOnly ? undefined : () => addSheet()}
-      status={<EditorSelectionStatus />}
+      status={
+        <div className="flex items-center">
+          <EditorSelectionStatus />
+          <EditorRegionalFormat />
+        </div>
+      }
       workbookIdentity={workbookIdentity}
     />
   )
@@ -3682,6 +3693,7 @@ function XlsxWorkbookLoadedEditor({
   workbookIdentity: string
 }) {
   const { canSave } = useSaveState()
+  const [regionalFormat, setRegionalFormat] = useRegionalFormat()
   const controller = useXlsxViewerController(
     React.useMemo(
       () => ({
@@ -3690,9 +3702,10 @@ function XlsxWorkbookLoadedEditor({
         fileName,
         readOnly: defaultReadOnly || !canSave,
         readOnlyAboveBytes: XLSX_EDITOR_READ_ONLY_THRESHOLD_BYTES,
+        regionalFormat,
         useWorker: true,
       }),
-      [canSave, defaultReadOnly, fileName, workbookBuffer]
+      [canSave, defaultReadOnly, fileName, regionalFormat, workbookBuffer]
     )
   )
   useDocumentAdapter({
@@ -3701,7 +3714,11 @@ function XlsxWorkbookLoadedEditor({
     }),
     download: controller.exportXlsx,
   })
-  useDocumentRevision(controller.revision, !controller.isLoading && controller.canExport)
+  // A regional format changes what the viewer sees, not the file.
+  useDocumentRevision(
+    controller.editRevision,
+    !controller.isLoading && controller.canExport
+  )
   const { activeSheetName, setActiveSheetByName } = controller
   const hasRestoredSheetRef = React.useRef(false)
 
@@ -3731,18 +3748,20 @@ function XlsxWorkbookLoadedEditor({
 
   return (
     <XlsxViewerProvider controller={controller} isDark={isDark}>
-      <XlsxEditorSurface
-        author={author}
-        cellAnchorIdPrefix={cellAnchorIdPrefix}
-        fileName={fileName}
-        isDark={isDark}
-        onIsDarkChange={onIsDarkChange}
-        onUploadClick={onUploadClick}
-        renderTableHeaderMenu={renderTableHeaderMenu}
-        scrollsWindow={scrollsWindow}
-        showNightRenderToggle={showNightRenderToggle}
-        workbookIdentity={workbookIdentity}
-      />
+      <RegionalFormatProvider value={setRegionalFormat}>
+        <XlsxEditorSurface
+          author={author}
+          cellAnchorIdPrefix={cellAnchorIdPrefix}
+          fileName={fileName}
+          isDark={isDark}
+          onIsDarkChange={onIsDarkChange}
+          onUploadClick={onUploadClick}
+          renderTableHeaderMenu={renderTableHeaderMenu}
+          scrollsWindow={scrollsWindow}
+          showNightRenderToggle={showNightRenderToggle}
+          workbookIdentity={workbookIdentity}
+        />
+      </RegionalFormatProvider>
     </XlsxViewerProvider>
   )
 }

@@ -15,7 +15,7 @@ import type { WorkbookStructureAssets } from "./images";
 import { safeCalculate } from "./safe-calculate";
 import { getXlsxInitialActiveCell } from "./selection-tools";
 import { getWorksheetRowsBatch } from "./worksheet-batch";
-import { getSheetsWasmModule, setWasmSource, type WorkerWasmSource } from "./wasm";
+import { getSheetsWasmModule, setRegionalFormat, setWasmSource, type WorkerWasmSource } from "./wasm";
 import type {
   XlsxChart,
   XlsxChartsheet,
@@ -71,6 +71,8 @@ type WorkerRequest =
         showHiddenSheets?: boolean;
         skipXmlParsing?: boolean;
         wasmSource?: WorkerWasmSource;
+        /** The language tag the workbook's regional settings come from. */
+        regionalFormat: string;
       };
     }
   | {
@@ -81,7 +83,14 @@ type WorkerRequest =
         showHiddenSheets?: boolean;
         skipXmlParsing?: boolean;
         wasmSource?: WorkerWasmSource;
+        /** The language tag the workbook's regional settings come from. */
+        regionalFormat: string;
       };
+    }
+  | {
+      id: number;
+      type: "setRegionalFormat";
+      payload: { regionalFormat: string };
     }
   | {
       id: number;
@@ -136,6 +145,12 @@ type WorkerErrorResponse = {
 type WorkerResponse = WorkerSuccessResponse | WorkerErrorResponse;
 
 let workbook: Workbook | null = null;
+/**
+ * Whether the workbook calculates here: it was small enough and calculated cleanly when it
+ * loaded (safeCalculate didn't fall back to its saved values). `workbookBytes` reopens it.
+ */
+let shouldCalculate = false;
+let workbookBytes: Uint8Array | null = null;
 let chartsByWorkbookSheetIndex: XlsxChart[][] = [];
 let chartsheets: XlsxChartsheet[] = [];
 let formControlsByWorkbookSheetIndex: XlsxFormControl[][] = [];
@@ -807,11 +822,13 @@ async function loadWorkbook(buffer: ArrayBuffer, skipXmlParsing = false, showHid
     totalFormulas += activeWorkbook.getSheet(index).formulaCount;
   }
 
+  let calculated = false;
   if (totalFormulas <= FORMULA_COUNT_THRESHOLD) {
     const result = safeCalculate(activeWorkbook, {
       reparse: () => wasmModule.Workbook.fromBytes(bytes)
     });
     activeWorkbook = result.workbook;
+    calculated = result.calculated;
   }
 
   const nextWorkbook = activeWorkbook;
@@ -836,6 +853,8 @@ async function loadWorkbook(buffer: ArrayBuffer, skipXmlParsing = false, showHid
   );
   const sheetLayoutStates = structureAssets ? undefined : parseWorkerSheetLayoutAssets(bytes, nextWorkbook.sheetCount);
   workbook = nextWorkbook;
+  shouldCalculate = calculated;
+  workbookBytes = bytes;
   sheets = buildSheetList(nextWorkbook, themePalette, structureAssets, sheetLayoutStates, showHiddenSheets);
   tablesByWorkbookSheetIndex = Array.from({ length: nextWorkbook.sheetCount }, (_, workbookSheetIndex) =>
     mapWorksheetTables(
@@ -910,19 +929,40 @@ function respond(message: WorkerResponse) {
   self.postMessage(message);
 }
 
+/** The engine source and regional format a load request carries. */
+function applyLoadEnvironment(payload: { regionalFormat: string; wasmSource?: WorkerWasmSource }) {
+  if (payload.wasmSource !== undefined) {
+    setWasmSource(payload.wasmSource);
+  }
+  setRegionalFormat(payload.regionalFormat);
+}
+
 async function handleMessage(message: WorkerRequest) {
   switch (message.type) {
     case "load": {
-      if (message.payload.wasmSource !== undefined) {
-        setWasmSource(message.payload.wasmSource);
-      }
+      applyLoadEnvironment(message.payload);
       return loadWorkbook(message.payload.buffer, message.payload.skipXmlParsing, message.payload.showHiddenSheets);
     }
     case "parseCharts": {
-      if (message.payload.wasmSource !== undefined) {
-        setWasmSource(message.payload.wasmSource);
-      }
+      applyLoadEnvironment(message.payload);
       return parseCharts(message.payload.buffer, message.payload.skipXmlParsing, message.payload.showHiddenSheets);
+    }
+    case "setRegionalFormat": {
+      setRegionalFormat(message.payload.regionalFormat);
+      if (!workbook) {
+        return null;
+      }
+      workbook.setLocale(message.payload.regionalFormat);
+      if (shouldCalculate && workbookBytes) {
+        // As at load: a calculation that traps or turns saved values into errors reopens the
+        // file (in the new format) with its saved values, and stops calculating.
+        const wasmModule = await getSheetsWasmModule();
+        const bytes = workbookBytes;
+        const result = safeCalculate(workbook, { reparse: () => wasmModule.Workbook.fromBytes(bytes) });
+        workbook = result.workbook;
+        shouldCalculate = result.calculated;
+      }
+      return null;
     }
     case "getCellSnapshot": {
       if (!workbook) {

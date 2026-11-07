@@ -528,6 +528,17 @@ export class Workbook {
         return v3;
     }
     /**
+     * Changes this workbook's regional settings to those of a language tag, as `setLocale` sets
+     * them for workbooks opened from now on. Cells show, and typed entries read, in them at
+     * once; calculate to bring formulas that depend on them (TEXT, DATEVALUE) up to date.
+     * @param {string} tag
+     */
+    setLocale(tag) {
+        const ptr0 = passStringToWasm0(tag, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.workbook_setLocale(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
      * @param {any} protection
      */
     setWorkbookProtection(protection) {
@@ -1898,6 +1909,21 @@ if (Symbol.dispose) Worksheet.prototype[Symbol.dispose] = Worksheet.prototype.fr
 
 export function init() {
     wasm.init();
+}
+
+/**
+ * How a short date and a number show in the regional settings of a language tag, for a picker
+ * to show beside it: `["05/11/2026", "1,234.5"]` in en-GB, `["05.11.2026", "1.234,5"]` in de-DE.
+ * @param {string} tag
+ * @returns {string[]}
+ */
+export function regionalSample(tag) {
+    const ptr0 = passStringToWasm0(tag, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.regionalSample(ptr0, len0);
+    var v2 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+    return v2;
 }
 
 /**

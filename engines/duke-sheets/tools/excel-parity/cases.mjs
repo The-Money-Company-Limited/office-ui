@@ -1,7 +1,7 @@
 // Formulas with the result Excel (Microsoft 365) gives. Each case is a fresh workbook:
 // `cells` fills Sheet1 (a string starting with "=" is a formula, ["text"] is a text cell that looks like a number),
 // `f` goes in Z1 (or `at`), and `want` is Excel's value; an error is its code, e.g. "#VALUE!".
-// `fmt` checks the formatted text of Z1 instead, with that number format. `locale` is the computer's
+// `fmt` checks the formatted text of Z1 instead, with that number format (a code, or a built-in format's id). `locale` is the computer's
 // language tag (en-US when left out): Excel takes regional settings from the computer.
 const xs = { A1: "x", A2: "y", A3: "x", A4: "y", A5: "z", B1: 1, B2: 2, B3: 3, B4: 4, B5: 5 }
 const n3 = { A1: 1, A2: 2, A3: 3 }
@@ -463,4 +463,24 @@ export const cases = [
   ["de-DE format month name", { Z1: d(2026, 3, 5) }, null, "5. März 2026", "Z1", "d. mmmm yyyy", "de-DE"],
   ["de-DE format fractional seconds", { Z1: 90.5 / 86400 }, null, "01:30,5", "Z1", "mm:ss.0", "de-DE"],
   inLocale("de-DE", "de-DE TEXT fractional seconds", '=TEXT(90.5/86400,"mm:ss,0")', "01:30,5"),
+  // A slash in a date format is the computer's date separator; built-in currency formats and
+  // amounts typed or written as text take the computer's currency (COD-1805)
+  ["de-DE format slashes in a date", { Z1: d(2026, 11, 5) }, null, "05.11.2026", "Z1", "dd/mm/yyyy", "de-DE"],
+  ["de-DE format escaped slashes in a date", { Z1: d(2026, 11, 5) }, null, "05/11/2026", "Z1", "dd\\/mm\\/yyyy", "de-DE"],
+  ["en-GB format slashes in a date", { Z1: d(2026, 11, 5) }, null, "05/11/2026", "Z1", "dd/mm/yyyy", "en-GB"],
+  ["de-DE format fraction keeps its bar", { Z1: 1.5 }, null, "1 1/2", "Z1", "# ?/?", "de-DE"],
+  // TEXT's format is in the computer's language, where a slash is a slash (sv-SE Excel saved
+  // 31/12/2025 for TEXT(date,"dd/mm/yyyy") in SpreadsheetBench 45896).
+  inLocale("de-DE", "de-DE TEXT keeps slashes in a date", '=TEXT(DATE(2026,11,5),"TT/MM/JJJJ")', "05/11/2026"),
+  ["en-US built-in currency", { Z1: 1234.5 }, null, "$1,234.50 ", "Z1", 7],
+  ["en-US built-in currency negative", { Z1: -1234.5 }, null, "($1,234.50)", "Z1", 7],
+  ["en-GB built-in currency", { Z1: 1234.5 }, null, "£1,234.50", "Z1", 7, "en-GB"],
+  ["en-GB built-in currency negative", { Z1: -1234 }, null, "-£1,234", "Z1", 5, "en-GB"],
+  ["de-DE built-in currency", { Z1: 1234.5 }, null, "1.234,50 €", "Z1", 7, "de-DE"],
+  ["fr-FR built-in currency", { Z1: 1234 }, null, "1\u00a0234 €", "Z1", 5, "fr-FR"],
+  inLocale("en-GB", "en-GB VALUE of an amount in pounds", '=VALUE("£5.25")', 5.25),
+  inLocale("de-DE", "de-DE VALUE of an amount in euros", '=VALUE("1.234,50 €")', 1234.5),
+  inLocale("de-DE", "de-DE amount in euros in +", '="5 €"+1', 6),
+  inLocale("de-DE", "de-DE DOLLAR writes euros", "=DOLLAR(1234.5)", "1.234,50 €"),
+  inLocale("en-GB", "en-GB VALUE of DOLLAR", "=VALUE(DOLLAR(-5))", -5),
 ]
