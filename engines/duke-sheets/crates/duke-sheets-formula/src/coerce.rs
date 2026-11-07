@@ -7,7 +7,7 @@
 use std::borrow::Cow;
 
 use chrono::{Datelike, NaiveDate};
-use duke_sheets_core::{DateOrder, FormatKind, NumberFormat, WorkbookSettings};
+use duke_sheets_core::{CurrencyPosition, DateOrder, FormatKind, NumberFormat, WorkbookSettings};
 
 use crate::regional::month_named;
 
@@ -46,17 +46,21 @@ fn read(text: &str) -> Option<(f64, Written)> {
 }
 
 /// What text typed into a cell with the format `current` stands for, as Excel reads it in the
-/// workbook's settings: the number, and the built-in format the cell gets when it should change. Each
+/// workbook's settings: the number, and the format the cell gets when it should change. Each
 /// entry has a kind and a format Excel gives it: a percent `0%` or `0.00%` (9, 10) as decimals
-/// were typed; a date the short date (14), or d-mmm-yy (15) or mmm-yy (17) when it names the
-/// month; a time h:mm or h:mm:ss (20, 21; 18, 19 with AM/PM); a duration of 24 hours or more
-/// [h]:mm:ss (46); a date with a time 22. The cell keeps its format for an entry of the same kind,
-/// counting dates, times and dates with times as one kind (as LibreOffice does) and a time in a
-/// duration format as a duration, and for a plain number, which in a percent format is a percent
-/// from 1 up (`15` is 15%). A duration typed into a date or time cell gets 46, which doesn't wrap. `None` when the text stays text: the cell's format is Text,
-/// the text isn't a number, it has a currency sign (no currency format yet), or it is a date
-/// before the workbook's first day.
-pub fn typed_number(text: &str, settings: &WorkbookSettings, current: &NumberFormat) -> Option<(f64, Option<u32>)> {
+/// were typed; an amount with the regional currency symbol (`$1,234`, `5,00 €`) the symbol with
+/// `#,##0` or `#,##0.00` as decimals were typed; a date the short date (14), or d-mmm-yy (15) or
+/// mmm-yy (17) when it names the month; a time h:mm or h:mm:ss (20, 21; 18, 19 with AM/PM); a
+/// duration of 24 hours or more [h]:mm:ss (46); a date with a time 22. The cell keeps its format
+/// for an entry of the same kind, counting dates, times and dates with times as one kind (as
+/// LibreOffice does), a time in a duration format as a duration and an amount in a currency
+/// format as a currency, and for a plain number, which in a percent format is a percent from 1
+/// up (`15` is 15%). A duration typed into a date or time cell gets 46, which doesn't wrap.
+/// `None` when the text stays text: the cell's format is Text, the text isn't a number, or it is
+/// a date before the workbook's first day.
+pub fn typed_number(text: &str, settings: &WorkbookSettings, current: &NumberFormat) -> Option<(f64, Option<NumberFormat>)> {
+    let regional = &settings.regional;
+    let current_code = current.display_code(regional);
     let current = current.kind();
     if current == FormatKind::Text {
         return None;
@@ -66,7 +70,11 @@ pub fn typed_number(text: &str, settings: &WorkbookSettings, current: &NumberFor
         read(text)?
     };
     let (kind, format) = match written {
-        Written::Number { currency: true, .. } => return None,
+        Written::Number { currency: true, percent: false, decimals } => {
+            let in_currency = current == FormatKind::Number && (current_code.contains(regional.currency_symbol) || current_code.contains("[$"));
+            let format = NumberFormat::Custom(regional.typed_currency_code(decimals));
+            return Some((value, (!in_currency).then_some(format)));
+        }
         Written::Number { percent: true, decimals, .. } => (FormatKind::Percent, if decimals { NumberFormat::ID_PERCENT_DEC2 } else { NumberFormat::ID_PERCENT_INT }),
         Written::Number { .. } => {
             if current == FormatKind::Percent && value.abs() >= 1.0 {
@@ -100,10 +108,10 @@ pub fn typed_number(text: &str, settings: &WorkbookSettings, current: &NumberFor
     let keeps = current == kind
         || (current == FormatKind::Duration && kind == FormatKind::Time)
         || (date_or_time(current) && date_or_time(kind));
-    Some((value, (!keeps).then_some(format)))
+    Some((value, (!keeps).then_some(NumberFormat::BuiltIn(format))))
 }
 
-/// `1234`, `-1,234.5`, `1.2E+3`, `$1,234`, `(5)`, `12%`, `+3`.
+/// `1234`, `-1,234.5`, `1.2E+3`, `$1,234` (`5 €` in de-DE), `(5)`, `12%`, `+3`.
 fn plain_number(text: &str) -> Option<(f64, Written)> {
     let (negated, text) = match text.strip_prefix('(').and_then(|t| t.strip_suffix(')')) {
         Some(inner) => (true, inner.trim()),
@@ -118,13 +126,24 @@ fn plain_number(text: &str) -> Option<(f64, Written)> {
         Some(b'+') => (1.0, text[1..].trim_start()),
         _ => (1.0, text),
     };
-    let (currency, text) = match text.strip_prefix('$') {
+    // The regional currency symbol before the amount (`$5`), or after it where the region writes
+    // it there (`5 €`); a minus sign may follow a symbol before (`€ -5`).
+    let settings = crate::regional::current();
+    let symbol = settings.currency_symbol;
+    let after = settings.currency_position == CurrencyPosition::AfterWithSpace;
+    let (currency, text) = match text.strip_prefix(symbol) {
         Some(rest) => (true, rest.trim_start()),
-        None => (false, text),
+        None => match text.strip_suffix(symbol).filter(|_| after) {
+            Some(rest) => (true, rest.trim_end()),
+            None => (false, text),
+        },
+    };
+    let (sign, text) = match text.strip_prefix('-') {
+        Some(rest) if currency && sign > 0.0 && !negated => (-1.0, rest.trim_start()),
+        _ => (sign, text),
     };
     // Text written with the regional separators (1.234,5 or 1'234.5), read as 1,234.5. The other
     // separator in it, where it isn't one of the regional ones, makes it not a number.
-    let settings = crate::regional::current();
     let text: Cow<str> = if (settings.decimal_separator, settings.thousands_separator) == ('.', ',') {
         text.into()
     } else {
@@ -450,7 +469,7 @@ mod tests {
             let settings = WorkbookSettings { regional: RegionalSettings::from_tag(tag), ..Default::default() };
             typed_number(text, &settings, &NumberFormat::General)
         };
-        let with = |value: f64, id: u32| Some((value, Some(id)));
+        let with = |value: f64, id: u32| Some((value, Some(NumberFormat::BuiltIn(id))));
         // 46331 is 5 November 2026, 46153 is 11 May 2026.
         assert_eq!(typed("en-GB", "5/11/2026"), with(46331.0, 14));
         assert_eq!(typed("en-US", "5/11/2026"), with(46153.0, 14));
@@ -465,15 +484,15 @@ mod tests {
         // A day and month is this year's, shown d-mmm (16).
         assert_eq!(
             typed("en-US", "Feb 22").and_then(|(_, format)| format),
-            Some(16)
+            Some(NumberFormat::BuiltIn(16))
         );
         assert_eq!(
             typed("en-GB", "22 Feb").and_then(|(_, format)| format),
-            Some(16)
+            Some(NumberFormat::BuiltIn(16))
         );
         assert_eq!(
             typed("en-US", "Feb 30").and_then(|(_, format)| format),
-            Some(17)
+            Some(NumberFormat::BuiltIn(17))
         );
         assert_eq!(typed("en-US", "13:30"), with(0.5625, 20));
         assert_eq!(typed("en-US", "13:30:00"), with(0.5625, 21));
@@ -490,8 +509,24 @@ mod tests {
         assert_eq!(typed("en-US", " 1,234.5 "), Some((1234.5, None)));
         assert_eq!(typed("en-US", "-2e3"), Some((-2000.0, None)));
         assert_eq!(typed("en-US", "(5)"), Some((-5.0, None)));
-        // Text: lists and fractions aren't dates, and there's no currency format to give $.
-        for text in ["1,5", "text", "$1,234", "3 1/4", "5 3/8", "1,2,3", "10, 20, 30", "5 10 15", "5/11-2026"] {
+        // An amount with the regional currency symbol gets a currency format.
+        let money = |value: f64, code: &str| Some((value, Some(NumberFormat::Custom(code.into()))));
+        assert_eq!(typed("en-US", "$1,234"), money(1234.0, "\"$\"#,##0"));
+        assert_eq!(typed("en-US", "-$1,234.50"), money(-1234.5, "\"$\"#,##0.00"));
+        assert_eq!(typed("en-US", "($5)"), money(-5.0, "\"$\"#,##0"));
+        assert_eq!(typed("en-GB", "£5"), money(5.0, "\"£\"#,##0"));
+        assert_eq!(typed("en-GB", "-£5.25"), money(-5.25, "\"£\"#,##0.00"));
+        assert_eq!(typed("de-DE", "5 €"), money(5.0, "#,##0 \"€\""));
+        assert_eq!(typed("de-DE", "1.234,00 €"), money(1234.0, "#,##0.00 \"€\""));
+        assert_eq!(typed("de-DE", "-5,5\u{a0}€"), money(-5.5, "#,##0.00 \"€\""));
+        assert_eq!(typed("fr-FR", "1 234,50 €"), money(1234.5, "#,##0.00 \"€\""));
+        assert_eq!(typed("nl-NL", "€ -5"), money(-5.0, "\"€\" #,##0"));
+        // Another region's symbol, or the symbol where the region doesn't write it, stays text.
+        for (tag, text) in [("en-US", "£5"), ("en-US", "5 €"), ("en-GB", "5£"), ("en-GB", "$5"), ("de-DE", "5 $"), ("en-US", "$"), ("en-US", "$$5")] {
+            assert_eq!(typed(tag, text), None, "{tag} {text}");
+        }
+        // Text: lists and fractions aren't dates.
+        for text in ["1,5", "text", "3 1/4", "5 3/8", "1,2,3", "10, 20, 30", "5 10 15", "5/11-2026"] {
             assert_eq!(typed("en-US", text), None, "{text}");
         }
         // The settings are current only while the text is read.
@@ -521,10 +556,15 @@ mod tests {
         // A date cell below day 1 edits as a time, and keeps its format typed back.
         assert_eq!(format("12:00:00", NumberFormat::BuiltIn(14)), Some(None));
         // Another kind: the entry's format. A duration doesn't fit a time format, which wraps.
-        assert_eq!(format("5/11/2026", custom("0.00")), Some(Some(14)));
-        assert_eq!(format("25:30", NumberFormat::BuiltIn(20)), Some(Some(46)));
-        assert_eq!(format("5/11/2026", NumberFormat::BuiltIn(46)), Some(Some(14)));
-        // Text stays text; in a percent format a number from 1 up is a percent.
+        assert_eq!(format("5/11/2026", custom("0.00")), Some(Some(NumberFormat::BuiltIn(14))));
+        assert_eq!(format("25:30", NumberFormat::BuiltIn(20)), Some(Some(NumberFormat::BuiltIn(46))));
+        assert_eq!(format("5/11/2026", NumberFormat::BuiltIn(46)), Some(Some(NumberFormat::BuiltIn(14))));
+        // An amount typed into a currency cell keeps its format; into another number format it
+        // gets the currency one.
+        assert_eq!(format("$5", NumberFormat::BuiltIn(7)), Some(None));
+        assert_eq!(format("$5", custom("[$$-409]#,##0.00")), Some(None));
+        assert_eq!(format("$5", custom("0.00")), Some(Some(custom("\"$\"#,##0"))));
+                // Text stays text; in a percent format a number from 1 up is a percent.
         assert_eq!(typed_number("5/11/2026", &settings, &NumberFormat::BuiltIn(49)), None);
         assert_eq!(typed_number("15", &settings, &NumberFormat::BuiltIn(9)), Some((0.15, None)));
         assert_eq!(typed_number("0.5", &settings, &NumberFormat::BuiltIn(9)), Some((0.5, None)));

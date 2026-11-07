@@ -5,6 +5,8 @@
 pub struct Locale {
     pub decimal_separator: char,
     pub thousands_separator: char,
+    /// What an unquoted `/` in a date format shows as (`.` in de-DE).
+    pub date_separator: char,
     pub currency_symbol: &'static str,
     pub am_string: &'static str,
     pub pm_string: &'static str,
@@ -26,6 +28,7 @@ impl Locale {
         Locale {
             decimal_separator: '.',
             thousands_separator: ',',
+            date_separator: '/',
             currency_symbol: "$",
             am_string: "AM",
             pm_string: "PM",

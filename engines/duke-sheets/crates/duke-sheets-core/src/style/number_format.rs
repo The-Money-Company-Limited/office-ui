@@ -165,11 +165,16 @@ impl NumberFormat {
     }
 
     /// The code a cell with this format displays with in `regional`: Excel shows the built-in
-    /// short date (14) and date with time (22) in the computer's date order.
+    /// short date (14) and date with time (22) in the computer's date order, and the built-in
+    /// currency formats (5-8, 42, 44) with its currency.
     pub fn display_code(&self, regional: &RegionalSettings) -> Cow<'_, str> {
         match self {
             NumberFormat::BuiltIn(Self::ID_DATE_SHORT) => regional.short_date.into(),
             NumberFormat::BuiltIn(Self::ID_DATETIME) => regional.date_time_code().into(),
+            NumberFormat::BuiltIn(id) => match regional.currency_code(*id) {
+                Some(code) => code.into(),
+                None => self.format_string().into(),
+            },
             _ => self.format_string().into(),
         }
     }
@@ -208,7 +213,8 @@ impl NumberFormat {
         }
     }
 
-    /// Get built-in format string by ID (14 and 22 as Excel writes them in en-US)
+    /// Get built-in format string by ID (14, 22 and the currency formats as Excel writes them in
+    /// en-US)
     ///
     /// Reference: ECMA-376 Section 18.8.30 (numFmt), plus the implicit
     /// built-in formats defined by the spec and Microsoft documentation.
@@ -241,6 +247,10 @@ impl NumberFormat {
             38 => "#,##0_);[Red](#,##0)",
             39 => "#,##0.00_);(#,##0.00)",
             40 => "#,##0.00_);[Red](#,##0.00)",
+            41 => r#"_(* #,##0_);_(* \(#,##0\);_(* "-"_);_(@_)"#,
+            42 => r#"_("$"* #,##0_);_("$"* \(#,##0\);_("$"* "-"_);_(@_)"#,
+            43 => r#"_(* #,##0.00_);_(* \(#,##0.00\);_(* "-"??_);_(@_)"#,
+            44 => r#"_("$"* #,##0.00_);_("$"* \(#,##0.00\);_("$"* "-"??_);_(@_)"#,
             45 => "mm:ss",
             46 => "[h]:mm:ss",
             47 => "mm:ss.0",

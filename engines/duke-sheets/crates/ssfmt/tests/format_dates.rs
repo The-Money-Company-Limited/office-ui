@@ -61,3 +61,19 @@ fn test_date_skip_char_emits_space_not_literal() {
     // _) means "skip width of ')'", should produce a space, not a literal ')'
     assert_eq!(fmt.format(46022.0, &opts), "12/31/2025 ");
 }
+
+#[test]
+fn a_slash_in_a_date_format_is_the_locale_date_separator() {
+    let opts = FormatOptions { locale: ssfmt::Locale { date_separator: '.', ..ssfmt::Locale::en_us() }, ..Default::default() };
+    let show = |code: &str, value: f64| NumberFormat::parse(code).unwrap().format(value, &opts);
+    // 46331 is 5 November 2026.
+    assert_eq!(show("dd/mm/yyyy", 46331.0), "05.11.2026");
+    assert_eq!(show("d/m/yy h:mm", 46331.5), "5.11.26 12:00");
+    // Written as the character itself, escaped or quoted, it stays a slash.
+    assert_eq!(show(r"dd\/mm\/yyyy", 46331.0), "05/11/2026");
+    assert_eq!(show(r#"dd"/"mm"/"yyyy"#, 46331.0), "05/11/2026");
+    // AM/PM, and a fraction or a slash in a number format, aren't date separators.
+    assert_eq!(show("h:mm AM/PM", 0.75), "6:00 PM");
+    assert_eq!(show("# ?/?", 1.5), "1 1/2");
+    assert_eq!(NumberFormat::parse("dd/mm/yyyy").unwrap().format(46331.0, &FormatOptions::default()), "05/11/2026");
+}

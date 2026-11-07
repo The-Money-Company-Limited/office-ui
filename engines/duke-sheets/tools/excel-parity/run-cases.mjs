@@ -33,9 +33,12 @@ for (const [name, cells, f, want, at = "Z1", fmt, locale = "en-US"] of cases) {
     }
     const ws = wb.getSheet(0)
     if (f) ws.setFormula(at, f)
-    if (fmt) ws.setCellStyle(at, { numberFormat: { formatType: "custom", formatString: fmt } })
+    if (fmt !== undefined) {
+      const numberFormat = typeof fmt === "number" ? { formatType: "builtin", id: fmt } : { formatType: "custom", formatString: fmt }
+      ws.setCellStyle(at, { numberFormat })
+    }
     wb.calculate()
-    r.got = fmt ? ws.getFormattedValue(at) : value(ws.getCalculatedValue(at))
+    r.got = fmt !== undefined ? ws.getFormattedValue(at) : value(ws.getCalculatedValue(at))
     wb.free()
   } catch (error) {
     r.got = "THREW: " + String(error).slice(0, 200)

@@ -757,12 +757,10 @@ pub fn fn_dollar(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         }
     };
 
-    let abs_formatted = format_fixed_number(number.abs(), decimals, true);
-    if number < 0.0 {
-        Ok(FormulaValue::String(format!("-${}", abs_formatted)))
-    } else {
-        Ok(FormulaValue::String(format!("${}", abs_formatted)))
-    }
+    // The amount with the regional currency symbol where the region puts it (`1.234,50 €`).
+    let amount = crate::regional::current().currency_text(&format_fixed_number(number.abs(), decimals, true));
+    let sign = if number < 0.0 { "-" } else { "" };
+    Ok(FormulaValue::String(format!("{sign}{amount}")))
 }
 
 pub fn fn_numbervalue(
