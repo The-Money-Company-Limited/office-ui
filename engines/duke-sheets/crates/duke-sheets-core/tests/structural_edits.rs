@@ -425,6 +425,7 @@ fn copied_formulas_move_their_relative_references() {
         ("=[@Qty]*Table1[Price]+[1]Sheet1!A1+'[Book.xlsx]Q 1'!$A1", 1, 1, "=[@Qty]*Table1[Price]+[1]Sheet1!B2+'[Book.xlsx]Q 1'!$A2"),
         ("=[@Qty]>Sheet2!A1&\"Hi!\"&A1&\" B2\"&[1]!Total", 1, 0, "=[@Qty]>Sheet2!A2&\"Hi!\"&A2&\" B2\"&[1]!Total"),
         ("=SUM(B2:INDEX(B:B,ROW()))+A1:Total", 1, 0, "=SUM(B3:INDEX(B:B,ROW()))+A2:Total"),
+        ("=SUM(A : A)+SUM(1 :1)+SUM(A1: B2)", 1, 1, "=SUM(B : B)+SUM(2 :2)+SUM(B2: C3)"),
         ("=A2+SUM(A1:B2)", -1, 0, "=A1+SUM(#REF!)"),
         ("=XFD1+A1048576", 1, 1, "=#REF!+#REF!"),
         ("=a1", 0, 0, "=a1"),
@@ -432,4 +433,18 @@ fn copied_formulas_move_their_relative_references() {
     for (text, rows, cols, expected) in cases {
         assert_eq!(shift_formula(text, rows, cols), expected, "{text}");
     }
+}
+
+#[test]
+fn ranges_with_spaces_around_the_colon_move_whole() {
+    let mut wb = workbook();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_formula("Z1", "=SUM(A : A)+SUM(1 : 2)+SUM(A1 : B3)")
+        .unwrap();
+    wb.insert_columns(0, 0, 1).unwrap();
+    wb.delete_rows(0, 1, 1).unwrap();
+    assert_eq!(
+        wb.worksheet(0).unwrap().get_formula_at(0, 26),
+        Some("=SUM(B : B)+SUM(1 : 1)+SUM(B1 : C2)")
+    );
 }

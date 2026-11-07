@@ -349,28 +349,29 @@ pub(crate) fn rewrite_references(text: &str, context: &str, change: &ReferenceEd
                 .is_some_and(|ch| name_char(ch) || matches!(ch, '(' | '[' | '!'))
         };
         let parsed = endpoint(text, pos).and_then(|(a, first_end)| {
+            // The `:` and the second sheet's prefix, spaces around the `:` as written (`A : A`).
             let range = || {
-                if !text[first_end..].starts_with(':') {
+                let colon = text.len() - text[first_end..].trim_start().len();
+                if !text[colon..].starts_with(':') {
                     return None;
                 }
-                let second_start = first_end + 1;
-                let (second_prefix, second_pos) =
-                    if let Some((name, end)) = sheet_prefix(text, second_start) {
+                let second_start = text.len() - text[colon + 1..].trim_start().len();
+                let mut separator = text[first_end..second_start].to_string();
+                let second_pos = match sheet_prefix(text, second_start) {
+                    Some((name, end)) => {
                         if !name.eq_ignore_ascii_case(sheet.as_deref().unwrap_or(context)) {
                             return None;
                         }
-                        (
-                            rewrite_sheet_prefix(&text[second_start..end], &name, change),
-                            end,
-                        )
-                    } else {
-                        (String::new(), second_start)
-                    };
+                        separator += &rewrite_sheet_prefix(&text[second_start..end], &name, change);
+                        end
+                    }
+                    None => second_start,
+                };
                 let (b, end) = endpoint(text, second_pos)?;
                 (a.row.is_some() == b.row.is_some()
                     && a.col.is_some() == b.col.is_some()
                     && ends_here(end))
-                .then(|| (a.clone(), Some(b), first_end, second_prefix, second_pos, end))
+                .then(|| (a.clone(), Some(b), first_end, separator, second_pos, end))
             };
             // A cell before `:` and what isn't a cell (`A1:INDEX(…)`) is a cell of its own.
             range().or_else(|| {
@@ -379,7 +380,7 @@ pub(crate) fn rewrite_references(text: &str, context: &str, change: &ReferenceEd
                 })
             })
         });
-        if let Some((mut a, mut b, first_end, second_prefix, second_pos, end)) = parsed {
+        if let Some((mut a, mut b, first_end, separator, second_pos, end)) = parsed {
             let target = sheet.as_deref().unwrap_or(context);
             let mut valid = true;
             let mut changed = false;
@@ -438,15 +439,13 @@ pub(crate) fn rewrite_references(text: &str, context: &str, change: &ReferenceEd
                 if changed {
                     out.push_str(&a.render());
                     if let Some(b) = b {
-                        out.push(':');
-                        out.push_str(&second_prefix);
+                        out.push_str(&separator);
                         out.push_str(&b.render());
                     }
                 } else {
                     out.push_str(&text[pos..first_end]);
                     if b.is_some() {
-                        out.push(':');
-                        out.push_str(&second_prefix);
+                        out.push_str(&separator);
                         out.push_str(&text[second_pos..end]);
                     }
                 }
