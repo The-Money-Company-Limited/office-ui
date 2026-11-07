@@ -356,10 +356,11 @@ fn error_byte(e: &CellError) -> u8 {
 
 fn encode_col_word(addr: &CellAddress) -> u16 {
     let mut w = addr.col;
-    if !addr.row_absolute {
+    // MS-XLSB ColRelShort: fColRel is bit 14, fRwRel bit 15.
+    if !addr.col_absolute {
         w |= 0x4000;
     }
-    if !addr.col_absolute {
+    if !addr.row_absolute {
         w |= 0x8000;
     }
     w

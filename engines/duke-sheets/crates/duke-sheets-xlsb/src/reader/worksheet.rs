@@ -1500,7 +1500,10 @@ fn read_dv_parsed_formula(data: &[u8], pos: &mut usize) -> Option<String> {
     }
     let formula = duke_sheets_formula::decompile::decompiler::decompile(
         &tokens,
-        &duke_sheets_formula::decompile::FormulaContext::new(Vec::new()),
+        &duke_sheets_formula::decompile::FormulaContext {
+            last_cell: Some(duke_sheets_formula::decompile::BIFF12_LAST_CELL),
+            ..duke_sheets_formula::decompile::FormulaContext::new(Vec::new())
+        },
     );
     if formula.is_empty() {
         None
@@ -1797,7 +1800,10 @@ fn read_cf_parsed_formula(data: &[u8], pos: &mut usize) -> Option<String> {
     }
     let formula = duke_sheets_formula::decompile::decompiler::decompile(
         &tokens,
-        &duke_sheets_formula::decompile::FormulaContext::new(Vec::new()),
+        &duke_sheets_formula::decompile::FormulaContext {
+            last_cell: Some(duke_sheets_formula::decompile::BIFF12_LAST_CELL),
+            ..duke_sheets_formula::decompile::FormulaContext::new(Vec::new())
+        },
     );
     if formula.is_empty() {
         None

@@ -285,6 +285,7 @@ pub(crate) fn read_workbook<R: Read + Seek>(
         extern_names,
         extern_name_index_base: 0,
         base_cell: None,
+        last_cell: Some(duke_sheets_formula::decompile::BIFF12_LAST_CELL),
     };
 
     let mut named_ranges = Vec::new();

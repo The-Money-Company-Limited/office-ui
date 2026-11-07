@@ -33,6 +33,18 @@ $r run ~/Desktop/Code/office-ui/engines/duke-sheets \
   'node tools/excel-parity/parity.mjs bindings/wasm/pkg /work/ssb /tmp/parity.json --max 42'
 ```
 
+**Save and reopen** (`reopen.mjs`): saves every workbook of the corpus as .xlsx and opens it again;
+each formula must read the same. **Load and save times** (`bench-load-save.mjs`): times opening
+and saving the most formula-heavy workbooks with several engine builds, run back to back, and
+prints the median of each.
+
+```sh
+$r run ~/Desktop/Code/office-ui/engines/duke-sheets \
+  'node tools/excel-parity/reopen.mjs bindings/wasm/pkg /work/ssb /tmp/reopen.json'
+$r run ~/Desktop/Code/office-ui/engines/duke-sheets \
+  'node tools/excel-parity/bench-load-save.mjs /work/ssb 6 9 main=<another build>/pkg branch=bindings/wasm/pkg'
+```
+
 `parity.json` lists each mismatch with its file, cell, formula, Excel's value and the engine's;
 read it with `$r run … 'cat /tmp/parity.json'`. The corpus and results go when the box stops, so
 download the corpus again on a fresh box.

@@ -456,10 +456,10 @@ mod tests {
         let mut out = row.to_le_bytes().to_vec();
         let mut col_word: u16 = col;
         if row_rel {
-            col_word |= 0x4000;
+            col_word |= 0x8000;
         }
         if col_rel {
-            col_word |= 0x8000;
+            col_word |= 0x4000;
         }
         out.extend_from_slice(&col_word.to_le_bytes());
         out

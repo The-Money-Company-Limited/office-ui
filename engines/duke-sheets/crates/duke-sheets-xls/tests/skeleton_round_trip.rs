@@ -72,7 +72,9 @@ fn writes_cfb_v3_envelope() {
 fn special_and_unicode_sheet_names_round_trip() {
     let mut wb = Workbook::new();
     wb.rename_worksheet(0, "First & Last").expect("rename Sheet1");
-    wb.add_worksheet_with_name("with 'apostrophe'")
+    // Excel takes an apostrophe in a sheet name, but not as its first or last character.
+    assert!(wb.add_worksheet_with_name("with 'apostrophe'").is_err());
+    wb.add_worksheet_with_name("O'Brien's data")
         .expect("apostrophe sheet");
     wb.add_worksheet_with_name("日本語データ")
         .expect("unicode sheet");
@@ -87,7 +89,7 @@ fn special_and_unicode_sheet_names_round_trip() {
         names,
         vec![
             "First & Last",
-            "with 'apostrophe'",
+            "O'Brien's data",
             "日本語データ",
             "dash-dot.dot",
         ]

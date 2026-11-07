@@ -368,7 +368,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 let (row_off, col_off, row_rel, col_rel) = parse_refn_fields(&data[pos..]);
                 pos += 4;
                 tokens.push(ParsedToken::RefN {
-                    row_offset: row_off as i32,
+                    row_offset: row_off,
                     col_offset: col_off,
                     row_relative: row_rel,
                     col_relative: col_rel,
@@ -383,8 +383,8 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 let (fro, lro, fco, lco, frr, fcr, lrr, lcr) = parse_arean_fields(&data[pos..]);
                 pos += 8;
                 tokens.push(ParsedToken::AreaN {
-                    first_row_offset: fro as i32,
-                    last_row_offset: lro as i32,
+                    first_row_offset: fro,
+                    last_row_offset: lro,
                     first_col_offset: fco,
                     last_col_offset: lco,
                     first_row_rel: frr,
@@ -568,57 +568,61 @@ fn parse_array_constant(extra: &[u8], epos: &mut usize) -> String {
     format!("{{{}}}", rows.join(";"))
 }
 
+/// MS-XLS ColRelU: the column in bits 0-7 (of 0-13), fColRel bit 14, fRwRel bit 15.
+pub(crate) const COL_RELATIVE: u16 = 0x4000;
+pub(crate) const ROW_RELATIVE: u16 = 0x8000;
+
+/// A reference's row and column word: (row, col, row_relative, col_relative).
+fn cell_fields(row: u16, col_rw: u16) -> (u16, u16, bool, bool) {
+    (
+        row,
+        col_rw & 0x00FF,
+        col_rw & ROW_RELATIVE != 0,
+        col_rw & COL_RELATIVE != 0,
+    )
+}
+
+/// A shared formula's reference (MS-XLS RgceLocRel): a relative row or column is a signed offset
+/// from the formula's cell (the column 8 bits), an absolute one the row or column itself.
+fn offset_fields(row: u16, col_rw: u16) -> (i32, i16, bool, bool) {
+    let (row, col, row_rel, col_rel) = cell_fields(row, col_rw);
+    (
+        if row_rel { row as i16 as i32 } else { row as i32 },
+        if col_rel { col as u8 as i8 as i16 } else { col as i16 },
+        row_rel,
+        col_rel,
+    )
+}
+
+fn word(data: &[u8], at: usize) -> u16 {
+    u16::from_le_bytes([data[at], data[at + 1]])
+}
+
 /// Parse a BIFF8 cell reference from 4 bytes: row(u16) + col_rw(u16).
 ///
 /// Returns (row, col, row_relative, col_relative).
 fn parse_ref_fields(data: &[u8]) -> (u16, u16, bool, bool) {
-    let row = u16::from_le_bytes([data[0], data[1]]);
-    let col_rw = u16::from_le_bytes([data[2], data[3]]);
-    let col = col_rw & 0x00FF; // bits 0-7
-    let row_rel = (col_rw & 0x4000) != 0; // bit 14
-    let col_rel = (col_rw & 0x8000) != 0; // bit 15
-    (row, col, row_rel, col_rel)
+    cell_fields(word(data, 0), word(data, 2))
 }
 
-/// Parse a tRefN (shared formula relative ref) from 4 bytes.
-///
-/// Row field is a signed 16-bit offset. Column field is in bits 0-7
-/// of the col_rw word, sign-extended from 8 bits to i16.
+/// Parse a tRefN (shared formula ref) from 4 bytes, as `offset_fields`.
 ///
 /// Returns (row_offset, col_offset, row_relative, col_relative).
-fn parse_refn_fields(data: &[u8]) -> (i16, i16, bool, bool) {
-    let row_off = i16::from_le_bytes([data[0], data[1]]);
-    let col_rw = u16::from_le_bytes([data[2], data[3]]);
-    // Column offset is an 8-bit signed value in bits 0-7
-    let col_off = (col_rw & 0x00FF) as u8 as i8 as i16;
-    let row_rel = (col_rw & 0x4000) != 0;
-    let col_rel = (col_rw & 0x8000) != 0;
-    (row_off, col_off, row_rel, col_rel)
+fn parse_refn_fields(data: &[u8]) -> (i32, i16, bool, bool) {
+    offset_fields(word(data, 0), word(data, 2))
 }
 
-/// Parse a tAreaN (shared formula relative area) from 8 bytes.
-///
-/// Row fields are signed 16-bit offsets. Column fields are 8-bit
-/// signed offsets in bits 0-7 of the col_rw words.
-fn parse_arean_fields(data: &[u8]) -> (i16, i16, i16, i16, bool, bool, bool, bool) {
-    let first_row_off = i16::from_le_bytes([data[0], data[1]]);
-    let last_row_off = i16::from_le_bytes([data[2], data[3]]);
-    let first_col_rw = u16::from_le_bytes([data[4], data[5]]);
-    let last_col_rw = u16::from_le_bytes([data[6], data[7]]);
-
-    let first_col_off = (first_col_rw & 0x00FF) as u8 as i8 as i16;
-    let first_row_rel = (first_col_rw & 0x4000) != 0;
-    let first_col_rel = (first_col_rw & 0x8000) != 0;
-
-    let last_col_off = (last_col_rw & 0x00FF) as u8 as i8 as i16;
-    let last_row_rel = (last_col_rw & 0x4000) != 0;
-    let last_col_rel = (last_col_rw & 0x8000) != 0;
-
+/// Parse a tAreaN (shared formula area) from 8 bytes, as `offset_fields`.
+fn parse_arean_fields(data: &[u8]) -> (i32, i32, i16, i16, bool, bool, bool, bool) {
+    let (first_row, first_col, first_row_rel, first_col_rel) =
+        offset_fields(word(data, 0), word(data, 4));
+    let (last_row, last_col, last_row_rel, last_col_rel) =
+        offset_fields(word(data, 2), word(data, 6));
     (
-        first_row_off,
-        last_row_off,
-        first_col_off,
-        last_col_off,
+        first_row,
+        last_row,
+        first_col,
+        last_col,
         first_row_rel,
         first_col_rel,
         last_row_rel,
@@ -631,19 +635,10 @@ fn parse_arean_fields(data: &[u8]) -> (i16, i16, i16, i16, bool, bool, bool, boo
 /// Returns (first_row, last_row, first_col, last_col,
 ///          first_row_rel, first_col_rel, last_row_rel, last_col_rel).
 fn parse_area_fields(data: &[u8]) -> (u16, u16, u16, u16, bool, bool, bool, bool) {
-    let first_row = u16::from_le_bytes([data[0], data[1]]);
-    let last_row = u16::from_le_bytes([data[2], data[3]]);
-    let first_col_rw = u16::from_le_bytes([data[4], data[5]]);
-    let last_col_rw = u16::from_le_bytes([data[6], data[7]]);
-
-    let first_col = first_col_rw & 0x00FF;
-    let first_row_rel = (first_col_rw & 0x4000) != 0;
-    let first_col_rel = (first_col_rw & 0x8000) != 0;
-
-    let last_col = last_col_rw & 0x00FF;
-    let last_row_rel = (last_col_rw & 0x4000) != 0;
-    let last_col_rel = (last_col_rw & 0x8000) != 0;
-
+    let (first_row, first_col, first_row_rel, first_col_rel) =
+        cell_fields(word(data, 0), word(data, 4));
+    let (last_row, last_col, last_row_rel, last_col_rel) =
+        cell_fields(word(data, 2), word(data, 6));
     (
         first_row,
         last_row,
@@ -734,7 +729,7 @@ mod tests {
 
     #[test]
     fn test_parse_ref_relative() {
-        // tRefV: row=4, col=2, both relative (bits 14+15 set)
+        // tRefV: row=4, col=2, both relative (fColRel bit 14, fRwRel bit 15)
         // col_rw = 2 | 0x4000 | 0x8000 = 0xC002
         let data = [0x44, 0x04, 0x00, 0x02, 0xC0];
         let tokens = parse_tokens(&data);
@@ -868,8 +863,8 @@ mod tests {
 
     #[test]
     fn test_parse_refn_positive_offsets() {
-        // tRefNV: row_off=3, col_off=5, row absolute, col relative
-        // col_rw = 5 | 0x8000 = 0x8005
+        // tRefNV: row_off=3, col_off=5, row relative, col absolute
+        // col_rw = 5 | 0x8000 (fRwRel) = 0x8005
         let data = [0x4C, 0x03, 0x00, 0x05, 0x80];
         let tokens = parse_tokens(&data);
         assert_eq!(
@@ -877,8 +872,8 @@ mod tests {
             vec![ParsedToken::RefN {
                 row_offset: 3,
                 col_offset: 5,
-                row_relative: false,
-                col_relative: true,
+                row_relative: true,
+                col_relative: false,
             }]
         );
     }

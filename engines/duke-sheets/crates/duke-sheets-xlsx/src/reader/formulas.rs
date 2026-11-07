@@ -21,17 +21,6 @@ pub(crate) struct CellFormulaState {
     pub(super) data_table_input2_ref: Option<String>,
 }
 
-impl CellFormulaState {
-    /// The shared formula (`si`) the cell belongs to.
-    pub(super) fn shared_index(&self) -> Option<u32> {
-        if self.kind == CellFormulaKind::Shared {
-            self.shared_index
-        } else {
-            None
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct SharedFormulaMaster {
     pub(super) base_cell_ref: String,

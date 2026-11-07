@@ -930,12 +930,11 @@ impl XlsxReader {
                     &mut sheet_formula_cells,
                 )?);
                 formula_cells.extend(sheet_formula_cells.into_iter().map(
-                    |(row, col, dynamic, shared)| duke_sheets_formula::legacy::FileFormula {
+                    |(row, col, dynamic)| duke_sheets_formula::legacy::FileFormula {
                         sheet: sheet_idx,
                         row,
                         col,
                         dynamic,
-                        shared,
                     },
                 ));
 
@@ -1484,7 +1483,7 @@ impl XlsxReader {
         dxf_styles: &[Style],
         sheet_rels: &RelationshipSet,
         value_errors: &HashMap<u32, CellError>,
-        formula_cells: &mut Vec<(u32, u16, bool, Option<u32>)>,
+        formula_cells: &mut Vec<(u32, u16, bool)>,
     ) -> XlsxResult<Vec<form_controls::PendingControl>> {
         let mut xml_reader = Reader::from_reader(BufReader::new(reader));
         xml_reader.config_mut().trim_text(false);
@@ -2326,7 +2325,6 @@ impl XlsxReader {
                                         addr.row,
                                         addr.col,
                                         current_cell_cm == Some(1),
-                                        current_formula_state.shared_index(),
                                     ));
                                 }
                             }

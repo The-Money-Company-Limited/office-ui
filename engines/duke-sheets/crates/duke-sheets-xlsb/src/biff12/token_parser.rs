@@ -387,13 +387,13 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
 }
 
 /// Parse BIFF12 ref fields: row(u32) + col_rw(u16) = 6 bytes.
-/// col_rw bits 0-13 = column, bit 14 = fRwRel, bit 15 = fColRel.
+/// col_rw bits 0-13 = column, bit 14 = fColRel, bit 15 = fRwRel (MS-XLSB ColRelShort).
 fn parse_ref_fields(data: &[u8]) -> (u32, u16, bool, bool) {
     let row = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
     let col_rw = u16::from_le_bytes([data[4], data[5]]);
     let col = col_rw & 0x3FFF;
-    let row_rel = (col_rw & 0x4000) != 0;
-    let col_rel = (col_rw & 0x8000) != 0;
+    let row_rel = (col_rw & 0x8000) != 0;
+    let col_rel = (col_rw & 0x4000) != 0;
     (row, col, row_rel, col_rel)
 }
 
@@ -405,12 +405,12 @@ fn parse_area_fields(data: &[u8]) -> (u32, u32, u16, u16, bool, bool, bool, bool
     let last_col_rw = u16::from_le_bytes([data[10], data[11]]);
 
     let first_col = first_col_rw & 0x3FFF;
-    let first_row_rel = (first_col_rw & 0x4000) != 0;
-    let first_col_rel = (first_col_rw & 0x8000) != 0;
+    let first_row_rel = (first_col_rw & 0x8000) != 0;
+    let first_col_rel = (first_col_rw & 0x4000) != 0;
 
     let last_col = last_col_rw & 0x3FFF;
-    let last_row_rel = (last_col_rw & 0x4000) != 0;
-    let last_col_rel = (last_col_rw & 0x8000) != 0;
+    let last_row_rel = (last_col_rw & 0x8000) != 0;
+    let last_col_rel = (last_col_rw & 0x4000) != 0;
 
     (
         first_row,
@@ -430,13 +430,14 @@ fn parse_refn_fields(data: &[u8]) -> (i32, i16, bool, bool) {
     let row_off = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
     let col_rw = u16::from_le_bytes([data[4], data[5]]);
     let raw_col = col_rw & 0x3FFF;
-    let col_off = if raw_col & 0x2000 != 0 {
+    let row_rel = (col_rw & 0x8000) != 0;
+    let col_rel = (col_rw & 0x4000) != 0;
+    // An absolute column is the column itself, not an offset.
+    let col_off = if col_rel && raw_col & 0x2000 != 0 {
         (raw_col | 0xC000) as i16
     } else {
         raw_col as i16
     };
-    let row_rel = (col_rw & 0x4000) != 0;
-    let col_rel = (col_rw & 0x8000) != 0;
     (row_off, col_off, row_rel, col_rel)
 }
 
@@ -448,22 +449,22 @@ fn parse_arean_fields(data: &[u8]) -> (i32, i32, i16, i16, bool, bool, bool, boo
     let last_col_rw = u16::from_le_bytes([data[10], data[11]]);
 
     let first_raw = first_col_rw & 0x3FFF;
-    let first_col_off = if first_raw & 0x2000 != 0 {
+    let first_row_rel = (first_col_rw & 0x8000) != 0;
+    let first_col_rel = (first_col_rw & 0x4000) != 0;
+    let first_col_off = if first_col_rel && first_raw & 0x2000 != 0 {
         (first_raw | 0xC000) as i16
     } else {
         first_raw as i16
     };
-    let first_row_rel = (first_col_rw & 0x4000) != 0;
-    let first_col_rel = (first_col_rw & 0x8000) != 0;
 
     let last_raw = last_col_rw & 0x3FFF;
-    let last_col_off = if last_raw & 0x2000 != 0 {
+    let last_row_rel = (last_col_rw & 0x8000) != 0;
+    let last_col_rel = (last_col_rw & 0x4000) != 0;
+    let last_col_off = if last_col_rel && last_raw & 0x2000 != 0 {
         (last_raw | 0xC000) as i16
     } else {
         last_raw as i16
     };
-    let last_row_rel = (last_col_rw & 0x4000) != 0;
-    let last_col_rel = (last_col_rw & 0x8000) != 0;
 
     (
         first_row_off,
@@ -623,10 +624,10 @@ mod tests {
         let mut out = row.to_le_bytes().to_vec();
         let mut col_word: u16 = col;
         if row_rel {
-            col_word |= 0x4000;
+            col_word |= 0x8000;
         }
         if col_rel {
-            col_word |= 0x8000;
+            col_word |= 0x4000;
         }
         out.extend_from_slice(&col_word.to_le_bytes());
         out
@@ -834,7 +835,7 @@ mod tests {
     fn test_parse_refn_signed() {
         let mut data = vec![0x4C];
         data.extend_from_slice(&(-1i32).to_le_bytes());
-        // col_off = -2 as 14-bit = 0x3FFE, flags: row_rel(0x4000) + col_rel(0x8000)
+        // col_off = -2 as 14-bit = 0x3FFE, flags: col_rel(0x4000) + row_rel(0x8000)
         let col_word: u16 = ((-2i16 as u16) & 0x3FFF) | 0x4000 | 0x8000;
         data.extend_from_slice(&col_word.to_le_bytes());
         let tokens = parse_tokens(&data);
