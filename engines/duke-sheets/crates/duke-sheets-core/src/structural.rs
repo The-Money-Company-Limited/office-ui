@@ -110,6 +110,17 @@ pub(crate) enum ReferenceEdit<'a> {
     Rename { old: &'a str, new: &'a str },
     DeleteSheet { sheet: &'a str },
     Qualify { sheet: &'a str },
+    /// A formula copied `rows` down and `cols` right: its relative references move with it.
+    Offset { rows: i32, cols: i32 },
+}
+
+/// A formula copied `rows` down and `cols` right of its cell, as a paste or fill writes it, as in
+/// Excel: the parts of its references without `$` move by as much (`=A1` copied from B1 to B2 is
+/// `=A2`), on whichever sheet they read, and one that would leave the sheet is #REF!. Names,
+/// structured references (`[@Qty]`), strings, other workbooks' references and the rest of the text
+/// stay as written.
+pub fn shift_formula(text: &str, rows: i32, cols: i32) -> String {
+    rewrite_references(text, "", &ReferenceEdit::Offset { rows, cols })
 }
 
 #[derive(Clone)]
@@ -136,6 +147,19 @@ impl Endpoint {
             out.push_str(&(row + 1).to_string());
         }
         out
+    }
+
+    /// Moves the parts without `$`; `None` when one would leave the sheet.
+    fn offset(&mut self, rows: i32, cols: i32) -> Option<()> {
+        let moved =
+            |value: u32, by: i32, limit: u32| value.checked_add_signed(by).filter(|v| *v < limit);
+        if let Some(row) = self.row.filter(|_| !self.row_absolute) {
+            self.row = Some(moved(row, rows, MAX_ROWS)?);
+        }
+        if let Some(col) = self.col.filter(|_| !self.col_absolute) {
+            self.col = Some(moved(col.into(), cols, MAX_COLS.into())? as u16);
+        }
+        Some(())
     }
 }
 
@@ -413,6 +437,11 @@ pub(crate) fn rewrite_references(text: &str, context: &str, change: &ReferenceEd
                     }
                     ReferenceEdit::DeleteSheet { sheet } if target.eq_ignore_ascii_case(sheet) => {
                         valid = false
+                    }
+                    ReferenceEdit::Offset { rows, cols } => {
+                        valid = a.offset(*rows, *cols).is_some()
+                            && b.as_mut().map_or(true, |b| b.offset(*rows, *cols).is_some());
+                        changed = true;
                     }
                     _ => {}
                 }

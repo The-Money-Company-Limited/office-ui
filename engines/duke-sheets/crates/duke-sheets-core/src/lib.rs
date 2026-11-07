@@ -106,3 +106,4 @@ pub const MAX_COLS: u16 = 16_384;
 pub const MAX_SHEET_NAME_LEN: usize = 31;
 
 mod structural;
+pub use structural::shift_formula;
