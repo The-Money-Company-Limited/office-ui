@@ -1173,12 +1173,39 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
   const previewOpenDelayMs = 500
 
   // The active tab is always in view, including a sheet just added at the end.
+  // Only the strip scrolls: scrollIntoView would scroll the page as well.
   React.useEffect(() => {
-    itemRefs.current[activeSheetIndex]?.scrollIntoView({
-      block: "nearest",
-      inline: "nearest",
-    })
+    const strip = scrollRef.current
+    const item = itemRefs.current[activeSheetIndex]
+    if (!strip || !item) return
+    const stripRect = strip.getBoundingClientRect()
+    const itemRect = item.getBoundingClientRect()
+    if (itemRect.left < stripRect.left) {
+      strip.scrollLeft -= stripRect.left - itemRect.left
+    } else if (itemRect.right > stripRect.right) {
+      strip.scrollLeft += itemRect.right - stripRect.right
+    }
   }, [activeSheetIndex, sheets.length])
+
+  // A wheel or a vertical trackpad swipe over the tabs scrolls them sideways,
+  // momentum included; a sideways swipe scrolls them natively.
+  React.useEffect(() => {
+    const strip = scrollRef.current
+    if (!strip) return
+    // At the end it would scroll toward, the strip lets the page scroll instead.
+    const handleWheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+      const canMove =
+        event.deltaY < 0
+          ? strip.scrollLeft > 0
+          : strip.scrollLeft < strip.scrollWidth - strip.clientWidth - 1
+      if (!canMove) return
+      event.preventDefault()
+      strip.scrollLeft += event.deltaY
+    }
+    strip.addEventListener("wheel", handleWheel, { passive: false })
+    return () => strip.removeEventListener("wheel", handleWheel)
+  }, [sheets.length])
 
   const clearOpenTimeout = React.useCallback(() => {
     if (openTimeoutRef.current) {
@@ -1334,8 +1361,10 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
       : (thumbnailUrls[visiblePreviewIndex] ?? null)
 
   return (
+    // One slim bar, as in Sheets and Excel: add and the sheet list on the left, flat tabs on the
+    // same centre line, the selection's summary on the right.
     <div
-      className="flex items-center gap-2 border-t bg-muted/40 px-3 py-2"
+      className="flex h-9 items-center gap-0.5 border-t bg-muted/40 ps-1 pe-2"
       onMouseLeave={handleContainerLeave}
     >
       {onAddSheet ? (
@@ -1358,27 +1387,78 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
           />
         </Button>
       ) : null}
+      {sheets.length > 1 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="All sheets"
+              title="All sheets"
+              className="shrink-0"
+            >
+              <IconPlaceholder
+                lucide="Menu"
+                tabler="IconMenu2"
+                hugeicons="LeftToRightListBulletIcon"
+                phosphor="ListIcon"
+                remixicon="RiMenuLine"
+                className="size-4"
+              />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            side="top"
+            className={cn(
+              "max-h-80 overflow-y-auto",
+              XLSX_DROPDOWN_Z_INDEX_CLASS
+            )}
+          >
+            <DropdownMenuRadioGroup
+              value={String(activeSheetIndex)}
+              onValueChange={(value: string) =>
+                onActiveSheetIndexChange(Number(value))
+              }
+            >
+              {sheets.map((sheet, index) => (
+                <DropdownMenuRadioItem
+                  key={`${sheet.workbookSheetIndex}-${sheet.name}`}
+                  value={String(index)}
+                  closeOnClick
+                >
+                  <span className="truncate">{sheet.name}</span>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
       <Tabs
         value={String(activeSheetIndex)}
         onValueChange={(value) => onActiveSheetIndexChange(Number(value))}
-        className="min-w-0 flex-1 gap-0"
+        className="h-full min-w-0 flex-1 gap-0"
       >
         <ScrollArea
           orientation="horizontal"
-          scrollbarGutter
-          className="h-10 w-full has-[[data-slot=scroll-area-viewport][data-has-overflow-x]]:h-[50px]"
+          scrollFade
+          className="h-full w-full"
           viewportClassName="overflow-y-hidden"
           viewportRef={scrollRef}
         >
-          <div className="flex h-full items-center">
-            <TabsList className="shrink-0">
+          <div className="flex h-full items-stretch">
+            <TabsList
+              variant="underline"
+              className="h-full shrink-0 data-[orientation=horizontal]:py-0"
+            >
               {sheets.map((sheet, index) => renaming?.index === index ? (
                 <Input
                   key={`rename-${sheet.workbookSheetIndex}`}
                   autoFocus
                   aria-label="Sheet name"
                   aria-invalid={Boolean(tabError)}
-                  className="h-8 w-40"
+                  className="h-7 w-40 self-center"
                   value={renaming.name}
                   onFocus={(event) => event.currentTarget.select()}
                   onChange={(event) => setRenaming({ index, name: event.target.value })}
@@ -1400,7 +1480,7 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
                   key={`${sheet.workbookSheetIndex}-${sheet.name}`}
                   ref={(node) => { itemRefs.current[index] = node }}
                   value={String(index)}
-                  className="max-w-48 flex-none"
+                  className="h-full max-w-48 flex-none rounded-none px-3 data-active:bg-background sm:h-full"
                   onMouseEnter={() => handleItemEnter(index)}
                   onDoubleClick={canEdit ? () => beginRename(index) : undefined}
                   onContextMenu={canEdit ? (event) => {
@@ -1446,7 +1526,7 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
         </DropdownMenuContent>
       </DropdownMenu>
       {tabError ? <span role="alert" className="text-xs text-destructive">{tabError}</span> : null}
-      {status ? <div className="shrink-0">{status}</div> : null}
+      {status ? <div className="ms-auto shrink-0">{status}</div> : null}
       {typeof document !== "undefined" &&
       previewSheet &&
       visiblePreviewIndex !== null &&

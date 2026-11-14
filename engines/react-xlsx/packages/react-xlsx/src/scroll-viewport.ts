@@ -78,13 +78,17 @@ export function resolveWindowScrollMetrics(input: WindowScrollMetricsInput): Win
 
 function readWindowScrollMetrics(element: HTMLElement, stickyTop: number) {
   const gridRect = element.getBoundingClientRect();
+  const gridHeight = element.scrollHeight;
+  const gridWidth = element.scrollWidth;
   return {
+    gridHeight,
     gridRect,
+    gridWidth,
     metrics: resolveWindowScrollMetrics({
-      gridHeight: element.scrollHeight,
+      gridHeight,
       gridLeft: gridRect.left,
       gridTop: gridRect.top,
-      gridWidth: element.scrollWidth,
+      gridWidth,
       stickyTop,
       viewportHeight: document.documentElement.clientHeight,
       viewportWidth: document.documentElement.clientWidth
@@ -96,9 +100,15 @@ function readWindowScrollMetrics(element: HTMLElement, stickyTop: number) {
  * A {@link ScrollViewport} over the window for a grid element that does not scroll itself.
  * Writing `scrollTop`/`scrollLeft` scrolls the window so the grid reaches that offset; writing the
  * current offset is a no-op, so restoring offset 0 never scrolls a grid that sits lower on the page.
+ *
+ * The viewport is a snapshot: its first read measures the page once and later reads reuse that
+ * measurement, so a scroll handler forces one layout however many values it reads. A write drops
+ * the snapshot, so the next read measures the scrolled page. Code that runs later, such as a drag
+ * handler, takes a new viewport instead of keeping this one.
  */
 export function createWindowScrollViewport(element: HTMLElement, stickyTop: number): ScrollViewport {
-  const read = () => readWindowScrollMetrics(element, stickyTop);
+  let snapshot: ReturnType<typeof readWindowScrollMetrics> | null = null;
+  const read = () => (snapshot ??= readWindowScrollMetrics(element, stickyTop));
   const scrollAxis = (axis: "left" | "top", offset: number) => {
     const { gridRect, metrics } = read();
     const current = axis === "top" ? metrics.scrollTop : metrics.scrollLeft;
@@ -106,6 +116,7 @@ export function createWindowScrollViewport(element: HTMLElement, stickyTop: numb
     if (Math.abs(target - current) < 0.5) {
       return;
     }
+    snapshot = null;
     if (axis === "top") {
       window.scrollTo({ behavior: "instant", top: window.scrollY + gridRect.top - stickyTop + target });
     } else {
@@ -133,10 +144,10 @@ export function createWindowScrollViewport(element: HTMLElement, stickyTop: numb
       return read().metrics.clientHeight;
     },
     get scrollWidth() {
-      return element.scrollWidth;
+      return read().gridWidth;
     },
     get scrollHeight() {
-      return element.scrollHeight;
+      return read().gridHeight;
     },
     getBoundingClientRect() {
       return read().metrics.rect;

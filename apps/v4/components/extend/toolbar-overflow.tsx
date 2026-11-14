@@ -36,12 +36,15 @@ export function ToolbarOverflow({
 
     // Widths are measured while a group is in the row and remembered while it
     // is in the menu, so the row never has to render every group to refit.
+    // The row refits when it or a group in it changes size.
+    const observer = new ResizeObserver(() => fit())
     const fit = () => {
       row
         .querySelectorAll<HTMLElement>(":scope > [data-toolbar-group]")
         .forEach((element) => {
           widthsRef.current[Number(element.dataset.toolbarGroup)] =
             element.offsetWidth
+          observer.observe(element)
         })
       const gap = parseFloat(getComputedStyle(row).columnGap) || 0
       let used = 0
@@ -60,10 +63,9 @@ export function ToolbarOverflow({
     }
 
     fit()
-    const observer = new ResizeObserver(fit)
     observer.observe(row)
     return () => observer.disconnect()
-  }, [groups.length])
+  }, [groups.length, visibleCount])
 
   const hidden = groups.slice(visibleCount)
 

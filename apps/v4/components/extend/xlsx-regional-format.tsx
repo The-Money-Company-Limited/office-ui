@@ -3,15 +3,14 @@
 import * as React from "react"
 import { getRegionalFormatSamples, useXlsxViewer } from "@extend-ai/react-xlsx"
 
-import { Button } from "@/components/ui/button"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu"
 import { IconPlaceholder } from "@/components/icon-placeholder"
 
@@ -115,9 +114,10 @@ function regionalFormatName(tag: string) {
 
 /**
  * The regional format dates and numbers are typed and shown in, as Excel takes it from the
- * computer, with a menu to pick another. A choice re-applies to the open workbook.
+ * computer: a File menu item that opens the formats to pick another. A choice re-applies to the
+ * open workbook.
  */
-export function EditorRegionalFormat() {
+export function EditorRegionalFormatMenu() {
   const setRegionalFormat = React.useContext(RegionalFormatContext)
   const { readOnly, regionalFormat } = useXlsxViewer()
   const browserFormat = browserRegionalFormat()
@@ -146,32 +146,26 @@ export function EditorRegionalFormat() {
   if (!setRegionalFormat) return null
   const name = regionalFormatName(regionalFormat)
   return (
-    <DropdownMenu onOpenChange={(open) => open && loadSamples()}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onPointerEnter={loadSamples}
-          onFocus={loadSamples}
-          title="Regional format"
-          aria-label={`Regional format: ${name}`}
-          className="text-muted-foreground"
-        >
-          <IconPlaceholder
-            lucide="Globe"
-            tabler="IconWorld"
-            hugeicons="Globe02Icon"
-            phosphor="GlobeIcon"
-            remixicon="RiGlobalLine"
-            className="size-3.5"
-          />
-          <span className="hidden max-w-40 truncate sm:inline">{name}</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        side="top"
+    <DropdownMenuSub onOpenChange={(open) => open && loadSamples()}>
+      <DropdownMenuSubTrigger
+        onPointerEnter={loadSamples}
+        onFocus={loadSamples}
+      >
+        <IconPlaceholder
+          lucide="Globe"
+          tabler="IconWorld"
+          hugeicons="Globe02Icon"
+          phosphor="GlobeIcon"
+          remixicon="RiGlobalLine"
+          className="size-4"
+        />
+        <span className="min-w-0 flex-1 truncate">Regional format</span>
+        <span className="max-w-28 truncate text-xs text-muted-foreground">
+          {name}
+        </span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent
+        side="left"
         // z-40, as the editor's other dropdowns (XLSX_DROPDOWN_Z_INDEX_CLASS).
         className="z-40 max-h-80 w-88 overflow-y-auto"
       >
@@ -200,7 +194,7 @@ export function EditorRegionalFormat() {
             ))}
           </DropdownMenuRadioGroup>
         </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   )
 }

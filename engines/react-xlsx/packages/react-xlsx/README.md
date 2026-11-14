@@ -579,7 +579,6 @@ Common rendering props:
 - `toolbar?: React.ReactNode | ((controller: XlsxViewerController) => React.ReactNode)`
 - `experimentalCanvas?: boolean`
 - `enableGestureZoom?: boolean`
-- `enableCanvasSelectionAnimation?: boolean`
 - `allowResizeInReadOnly?: boolean`
 - `highlightedRanges?: string | readonly string[] | null`
 - `autoScrollToHighlightedRanges?: boolean`

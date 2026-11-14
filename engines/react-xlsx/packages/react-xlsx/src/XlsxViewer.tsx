@@ -1181,6 +1181,24 @@ type WorksheetBatchWindow = {
   startRow: number;
 };
 
+/** The row batch the grid paints from, and the revision it was read at. */
+type ViewportRowBatch = WorksheetBatchWindow & { revision: number };
+
+function rowBatchCovers(batch: WorksheetBatchWindow | null, row: number) {
+  return batch !== null && row >= batch.startRow && row <= batch.endRow;
+}
+
+/**
+ * Whether a row's cell data changes when `next` replaces `previous`: rows that both batches cover
+ * at the same revision keep their data, rows either batch covers otherwise change.
+ */
+function isRowBatchChangedRow(previous: ViewportRowBatch | null, next: ViewportRowBatch | null, row: number) {
+  if (!rowBatchCovers(previous, row) && !rowBatchCovers(next, row)) {
+    return false;
+  }
+  return !(previous && next && previous.revision === next.revision && rowBatchCovers(previous, row) && rowBatchCovers(next, row));
+}
+
 type ThumbnailWorkerRowBatchRequest = {
   endRow: number;
   startRow: number;
@@ -5318,6 +5336,7 @@ type PaintedBodyCanvasSignature = {
   getCellData: (row: number, col: number) => CellRenderData;
   headerHeight: number;
   palette: ViewerPalette;
+  rowBatch: ViewportRowBatch | null;
   rowHeaderWidth: number;
   rowSignature: string;
   viewportLeft: number;
@@ -6616,6 +6635,8 @@ type RenderedColumn = {
 };
 
 type GridRowProps = {
+  /** The worker row batch the row's cells were read from; a new batch re-renders the row. */
+  dataBatch: ViewportRowBatch | null;
   actualRow: number;
   editingCell: XlsxCellAddress | null;
   editingValue: string;
@@ -7093,6 +7114,7 @@ const MemoGridRow = React.memo(GridRow, (prev, next) => {
     prev.trailingSpacerWidth !== next.trailingSpacerWidth ||
     prev.zoomFactor !== next.zoomFactor ||
     prev.getCellData !== next.getCellData ||
+    prev.dataBatch !== next.dataBatch ||
     prev.onCellClick !== next.onCellClick ||
     prev.onCellDoubleClick !== next.onCellDoubleClick ||
     prev.onCellPointerDown !== next.onCellPointerDown ||
@@ -7136,6 +7158,70 @@ const CELL_ANCHOR_STYLE: React.CSSProperties = {
   whiteSpace: "pre"
 };
 
+type CellAnchorRowProps = {
+  actualRow: number;
+  cols: ReadonlyArray<{ actualCol: number; size: number; start: number }>;
+  /** The cell being edited; its anchor is left out. */
+  editingCell: XlsxCellAddress | null;
+  getCellData: (row: number, col: number) => CellRenderData;
+  idPrefix: string;
+  /** The first row of a pane also places the merges that start above it. */
+  includesMergesFromAbove: boolean;
+  mergeAnchorOf: (row: number, col: number) => { col: number; row: number } | null;
+  originLeft: number;
+  originTop: number;
+  resolveCellDisplayRect: (cell: XlsxCellAddress) => { height: number; left: number; top: number; width: number } | null;
+  /** Not read: a new row batch re-renders the row, because the labels come from its data. */
+  rowBatch: ViewportRowBatch | null;
+  size: number;
+  start: number;
+};
+
+/**
+ * One row of cell anchors. A row re-renders only when its own props change, so scrolling renders
+ * just the rows that come into view. A non-empty cell holds its text, transparent, for the page's
+ * comment layer to read and as its accessible name; an empty cell holds none.
+ */
+const CellAnchorRow = React.memo(function CellAnchorRow({
+  actualRow,
+  cols,
+  editingCell,
+  getCellData,
+  idPrefix,
+  includesMergesFromAbove,
+  mergeAnchorOf,
+  originLeft,
+  originTop,
+  resolveCellDisplayRect,
+  size,
+  start
+}: CellAnchorRowProps) {
+  const placements = listCellAnchors(idPrefix, [{ actualRow, size, start }], cols, mergeAnchorOf);
+  return placements.map((placement) => {
+    if (placement.rect === null && placement.row !== actualRow && !(includesMergesFromAbove && placement.row < actualRow)) {
+      return null;
+    }
+    const cell = { col: placement.col, row: placement.row };
+    if (editingCell && isSameCell(editingCell, cell)) {
+      return null;
+    }
+    const rect = placement.rect
+      ? { ...placement.rect, left: originLeft + placement.rect.left, top: originTop + placement.rect.top }
+      : resolveCellDisplayRect(cell);
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+    const cellData = getCellData(cell.row, cell.col);
+    // A checkbox cell paints a box, not its value; a sparkline without a value has no text.
+    const text = cellData.checkboxState != null ? (cellData.checkboxState ? "TRUE" : "FALSE") : cellData.value;
+    return (
+      <div key={placement.id} id={placement.id} role="gridcell" style={{ ...CELL_ANCHOR_STYLE, ...rect }}>
+        {text || null}
+      </div>
+    );
+  });
+});
+
 function DefaultCommentIndicator({ suggestion, thread, zoomFactor }: XlsxCommentIndicatorRenderProps & { zoomFactor: number }) {
   const size = Math.max(5, Math.round(7 * zoomFactor));
   const color = thread.resolved ? "#a19f9d" : thread.legacy ? "#d13438" : "#8764b8";
@@ -7165,7 +7251,6 @@ function XlsxGrid({
   allowResizeInReadOnly = false,
   controller,
   emptyState,
-  enableCanvasSelectionAnimation = true,
   errorState,
   fileTooLargeState,
   getCellStyle,
@@ -7199,7 +7284,7 @@ function XlsxGrid({
   stickyTop = 0
 }: Pick<
   XlsxViewerProps,
-  "allowResizeInReadOnly" | "emptyState" | "enableCanvasSelectionAnimation" | "enableGestureZoom" | "errorState" | "experimentalCanvas" | "fileTooLargeState" | "getCellStyle" | "highlightClassName" | "loadingComponent" | "loadingState" | "onFormControlAction" | "onFormControlChange" | "renderChartLoading" | "renderFormControl" | "renderImage" | "renderImageSelection" | "renderScroller" | "renderTableHeaderMenu" | "renderActiveCellOverlay" | "renderCommentIndicator" | "onCommentClick" | "onCellContextMenu" | "onHeaderContextMenu" | "onFind" | "scrollToCell" | "cellAnchorIdPrefix" | "scrollTarget" | "selectionColor" | "selectionFillColor" | "selectionHeaderColor" | "showImages" | "stickyTop"
+  "allowResizeInReadOnly" | "emptyState" | "enableGestureZoom" | "errorState" | "experimentalCanvas" | "fileTooLargeState" | "getCellStyle" | "highlightClassName" | "loadingComponent" | "loadingState" | "onFormControlAction" | "onFormControlChange" | "renderChartLoading" | "renderFormControl" | "renderImage" | "renderImageSelection" | "renderScroller" | "renderTableHeaderMenu" | "renderActiveCellOverlay" | "renderCommentIndicator" | "onCommentClick" | "onCellContextMenu" | "onHeaderContextMenu" | "onFind" | "scrollToCell" | "cellAnchorIdPrefix" | "scrollTarget" | "selectionColor" | "selectionFillColor" | "selectionHeaderColor" | "showImages" | "stickyTop"
 > & {
   controller: XlsxViewerController;
   palette: ViewerPalette;
@@ -7232,7 +7317,6 @@ function XlsxGrid({
     getChartById,
     getRowsBatchAsync,
     getClipboardData,
-    getCellDisplayValue: getControllerCellDisplayValue,
     getFormControlItems,
     commentThreads,
     highlightedRanges,
@@ -7787,20 +7871,24 @@ function XlsxGrid({
       "0 0"
     );
 
+    // The canvases scroll natively with the content, so only a live zoom moves them here. The
+    // zoom's origin is where each canvas is on screen: its painted place, moved by the scroll since.
+    const liveScrollBodyCanvasScreenLeft = liveScrollBodyCanvasLeft + scrollDeltaX;
+    const liveScrollBodyCanvasScreenTop = liveScrollBodyCanvasTop + scrollDeltaY;
     applyCanvasTransform(
       scrollBodyCanvasRef.current,
-      scrollDeltaX,
-      scrollDeltaY,
-      liveScrollBodyCanvasLeft,
-      liveScrollBodyCanvasTop,
+      0,
+      0,
+      liveScrollBodyCanvasScreenLeft,
+      liveScrollBodyCanvasScreenTop,
       liveZoomAnchorX,
       liveZoomAnchorY
     );
     applyCanvasTransform(
       topBodyCanvasRef.current,
-      scrollDeltaX,
       0,
-      liveScrollBodyCanvasLeft,
+      0,
+      liveScrollBodyCanvasScreenLeft,
       liveDisplayHeaderHeight,
       liveZoomAnchorX,
       0
@@ -7808,9 +7896,9 @@ function XlsxGrid({
     applyCanvasTransform(
       leftBodyCanvasRef.current,
       0,
-      scrollDeltaY,
+      0,
       liveDisplayRowHeaderWidth,
-      liveScrollBodyCanvasTop,
+      liveScrollBodyCanvasScreenTop,
       0,
       liveZoomAnchorY
     );
@@ -7826,9 +7914,9 @@ function XlsxGrid({
 
     applyCanvasTransform(
       topScrollHeaderCanvasRef.current,
-      scrollDeltaX,
       0,
-      liveScrollBodyCanvasLeft,
+      0,
+      liveScrollBodyCanvasScreenLeft,
       0,
       liveZoomAnchorX,
       0
@@ -7845,9 +7933,9 @@ function XlsxGrid({
     applyCanvasTransform(
       leftScrollHeaderCanvasRef.current,
       0,
-      scrollDeltaY,
       0,
-      liveScrollBodyCanvasTop,
+      0,
+      liveScrollBodyCanvasScreenTop,
       0,
       liveZoomAnchorY
     );
@@ -7869,20 +7957,21 @@ function XlsxGrid({
       0,
       0
     );
+    // Overlays sit in content coordinates; the content's origin is on screen at minus the scroll.
     applyOverlayTransform(
       canvasScrollOverlayContentRef.current,
-      -nextLiveViewport.left - liveFrozenPaneRight,
-      -nextLiveViewport.top - liveFrozenPaneBottom,
-      liveFrozenPaneRight,
-      liveFrozenPaneBottom,
+      0,
+      0,
+      -nextLiveViewport.left,
+      -nextLiveViewport.top,
       liveZoomAnchorX,
       liveZoomAnchorY
     );
     applyOverlayTransform(
       canvasTopOverlayContentRef.current,
-      -nextLiveViewport.left - liveFrozenPaneRight,
+      0,
       -liveDisplayHeaderHeight,
-      liveFrozenPaneRight,
+      -nextLiveViewport.left,
       liveDisplayHeaderHeight,
       liveZoomAnchorX,
       0
@@ -7890,9 +7979,9 @@ function XlsxGrid({
     applyOverlayTransform(
       canvasLeftOverlayContentRef.current,
       -liveDisplayRowHeaderWidth,
-      -nextLiveViewport.top - liveFrozenPaneBottom,
+      0,
       liveDisplayRowHeaderWidth,
-      liveFrozenPaneBottom,
+      -nextLiveViewport.top,
       0,
       liveZoomAnchorY
     );
@@ -7930,8 +8019,7 @@ function XlsxGrid({
         applyCanvasViewportCompensation();
       });
     }
-    // Canvas zoom is compositor-driven; React only needs gesture activity changes
-    // so selection geometry transitions stay disabled through the commit frame.
+    // Canvas zoom is compositor-driven; React only needs to know when a gesture starts or ends.
     const shouldSyncReactState = !experimentalCanvas || (previousState === null) !== (resolvedState === null);
     if (!shouldSyncReactState) {
       return;
@@ -8007,7 +8095,10 @@ function XlsxGrid({
       commitLiveGestureZoom();
     }, LIVE_ZOOM_COMMIT_IDLE_MS);
   }, [clearLiveZoomCommitTimer, commitLiveGestureZoom]);
-  const syncDrawingViewport = React.useCallback((scroller: ScrollViewport | null, options?: { immediate?: boolean }) => {
+  const syncDrawingViewport = React.useCallback((
+    scroller: Pick<ScrollViewport, "clientHeight" | "clientWidth" | "scrollLeft" | "scrollTop"> | null,
+    options?: { immediate?: boolean }
+  ) => {
     if (!scroller) {
       return;
     }
@@ -8989,51 +9080,72 @@ function XlsxGrid({
   const handleViewportScroll = React.useCallback((currentScroller: ScrollViewport) => {
     cachedScrollerRectRef.current = null;
     gestureScrollerRectRef.current = null;
+    // Every metric is read before syncDrawingViewport writes the canvas transforms, so a scroll
+    // lays the page out once.
+    const metrics = {
+      clientHeight: currentScroller.clientHeight,
+      clientWidth: currentScroller.clientWidth,
+      scrollHeight: currentScroller.scrollHeight,
+      scrollLeft: currentScroller.scrollLeft,
+      scrollTop: currentScroller.scrollTop,
+      scrollWidth: currentScroller.scrollWidth
+    };
     const paintedViewport = paintedDrawingViewportRef.current;
     const shouldSyncDrawingViewportImmediately =
-      Math.abs(currentScroller.scrollLeft - paintedViewport.left) > CANVAS_IMMEDIATE_VIEWPORT_SYNC_THRESHOLD_PX
-      || Math.abs(currentScroller.scrollTop - paintedViewport.top) > CANVAS_IMMEDIATE_VIEWPORT_SYNC_THRESHOLD_PX;
-    syncDrawingViewport(currentScroller, { immediate: shouldSyncDrawingViewportImmediately });
-    if (
-      currentScroller.scrollHeight - (currentScroller.scrollTop + currentScroller.clientHeight) <
-      OPEN_GRID_VERTICAL_EDGE_PX
-    ) {
+      Math.abs(metrics.scrollLeft - paintedViewport.left) > CANVAS_IMMEDIATE_VIEWPORT_SYNC_THRESHOLD_PX
+      || Math.abs(metrics.scrollTop - paintedViewport.top) > CANVAS_IMMEDIATE_VIEWPORT_SYNC_THRESHOLD_PX;
+    syncDrawingViewport(metrics, { immediate: shouldSyncDrawingViewportImmediately });
+    if (metrics.scrollHeight - (metrics.scrollTop + metrics.clientHeight) < OPEN_GRID_VERTICAL_EDGE_PX) {
       setDisplayRowLimit((current) =>
         growScrollDisplayLimit(current, OPEN_GRID_ROW_GROWTH, maxRowDisplayLimit, readOnly)
       );
     }
 
-    if (
-      currentScroller.scrollWidth - (currentScroller.scrollLeft + currentScroller.clientWidth) <
-      OPEN_GRID_HORIZONTAL_EDGE_PX
-    ) {
+    if (metrics.scrollWidth - (metrics.scrollLeft + metrics.clientWidth) < OPEN_GRID_HORIZONTAL_EDGE_PX) {
       setDisplayColLimit((current) =>
         growScrollDisplayLimit(current, OPEN_GRID_COL_GROWTH, maxColDisplayLimit, readOnly)
       );
     }
   }, [maxColDisplayLimit, maxRowDisplayLimit, readOnly, syncDrawingViewport]);
-  const handleScrollerScroll = React.useCallback((event: React.UIEvent<HTMLDivElement>) => {
-    handleViewportScroll(event.currentTarget);
-  }, [handleViewportScroll]);
+  // Scroll events are handled once per frame, in the frame they arrive in. The cached rects are
+  // dropped at once, since pointer handlers can run before that frame.
+  const viewportScrollFrameRef = React.useRef<number | null>(null);
+  const scheduleViewportScroll = React.useCallback(() => {
+    cachedScrollerRectRef.current = null;
+    gestureScrollerRectRef.current = null;
+    if (viewportScrollFrameRef.current !== null) {
+      return;
+    }
+    viewportScrollFrameRef.current = window.requestAnimationFrame(() => {
+      viewportScrollFrameRef.current = null;
+      const viewport = getScrollViewport();
+      if (viewport) {
+        handleViewportScroll(viewport);
+      }
+    });
+  }, [getScrollViewport, handleViewportScroll]);
+  React.useEffect(() => () => {
+    if (viewportScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(viewportScrollFrameRef.current);
+      viewportScrollFrameRef.current = null;
+    }
+  }, []);
 
   React.useEffect(() => {
     if (!isWindowScroll) {
       return;
     }
-    const handleWindowScroll = () => {
-      const viewport = getScrollViewport();
-      if (viewport) {
-        handleViewportScroll(viewport);
-      }
-    };
-    window.addEventListener("scroll", handleWindowScroll, { passive: true });
-    window.addEventListener("resize", handleWindowScroll);
-    handleWindowScroll();
+    window.addEventListener("scroll", scheduleViewportScroll, { passive: true });
+    window.addEventListener("resize", scheduleViewportScroll);
+    const viewport = getScrollViewport();
+    if (viewport) {
+      handleViewportScroll(viewport);
+    }
     return () => {
-      window.removeEventListener("scroll", handleWindowScroll);
-      window.removeEventListener("resize", handleWindowScroll);
+      window.removeEventListener("scroll", scheduleViewportScroll);
+      window.removeEventListener("resize", scheduleViewportScroll);
     };
-  }, [getScrollViewport, handleViewportScroll, isWindowScroll]);
+  }, [getScrollViewport, handleViewportScroll, isWindowScroll, scheduleViewportScroll]);
 
   React.useEffect(() => {
     const scroller = scrollRef.current;
@@ -9785,7 +9897,7 @@ function XlsxGrid({
   }, [commitEditing]);
 
   const [, startBatchTransition] = React.useTransition();
-  const [asyncViewportRowBatch, setAsyncViewportRowBatch] = React.useState<WorksheetBatchWindow | null>(null);
+  const [asyncViewportRowBatch, setAsyncViewportRowBatch] = React.useState<ViewportRowBatch | null>(null);
   const viewportRequest = React.useMemo(() => {
     const rowIndices = experimentalCanvas
       ? (() => {
@@ -9834,18 +9946,21 @@ function XlsxGrid({
     visibleRows
   ]);
 
-  const syncViewportRowBatch = React.useMemo<WorksheetBatchWindow | null>(() => {
+  const syncViewportRowBatch = React.useMemo<ViewportRowBatch | null>(() => {
     if (!shouldVirtualizeRows || !worksheet || getRowsBatchAsync || !viewportRequest) {
       return null;
     }
 
     try {
       const rows = getWorksheetRowsBatch(worksheet, viewportRequest.startRow, viewportRequest.endRow - viewportRequest.startRow + 1);
-      return buildWorksheetBatchWindow(rows, activeSheet ?? null, viewportRequest.startRow, viewportRequest.endRow);
+      return {
+        ...buildWorksheetBatchWindow(rows, activeSheet ?? null, viewportRequest.startRow, viewportRequest.endRow),
+        revision
+      };
     } catch {
       return null;
     }
-  }, [activeSheet, getRowsBatchAsync, shouldVirtualizeRows, viewportRequest, worksheet]);
+  }, [activeSheet, getRowsBatchAsync, revision, shouldVirtualizeRows, viewportRequest, worksheet]);
 
   React.useEffect(() => {
     if (!shouldVirtualizeRows || !getRowsBatchAsync || !activeSheet || !viewportRequest) {
@@ -9853,8 +9968,11 @@ function XlsxGrid({
       return;
     }
 
+    // After an edit the current batch keeps painting until the batch read at the new revision
+    // replaces it, so the grid never shows a blank frame in between.
     if (
       asyncViewportRowBatch
+      && asyncViewportRowBatch.revision === revision
       && viewportRequest.startRow >= asyncViewportRowBatch.startRow
       && viewportRequest.endRow <= asyncViewportRowBatch.endRow
     ) {
@@ -9872,12 +9990,10 @@ function XlsxGrid({
           return;
         }
 
-        const nextBatch = buildWorksheetBatchWindow(
-          rows,
-          activeSheet,
-          viewportRequest.startRow,
-          viewportRequest.endRow
-        );
+        const nextBatch = {
+          ...buildWorksheetBatchWindow(rows, activeSheet, viewportRequest.startRow, viewportRequest.endRow),
+          revision
+        };
         startBatchTransition(() => {
           setAsyncViewportRowBatch(nextBatch);
         });
@@ -9895,13 +10011,29 @@ function XlsxGrid({
     return () => {
       isCurrent = false;
     };
-  }, [activeSheet, asyncViewportRowBatch, getRowsBatchAsync, shouldVirtualizeRows, startBatchTransition, viewportRequest]);
+  }, [activeSheet, asyncViewportRowBatch, getRowsBatchAsync, revision, shouldVirtualizeRows, startBatchTransition, viewportRequest]);
 
   const viewportRowBatch = getRowsBatchAsync ? asyncViewportRowBatch : syncViewportRowBatch;
+  // getCellData reads the batch through this ref, so a new batch keeps its identity and the canvas
+  // repaints only the rows whose data the batch changed; those rows leave the render caches here.
+  const viewportRowBatchRef = React.useRef<ViewportRowBatch | null>(null);
+  if (viewportRowBatchRef.current !== viewportRowBatch) {
+    const previousBatch = viewportRowBatchRef.current;
+    for (const cache of [cellRenderCacheRef.current, cellBaseRawStyleCacheRef.current]) {
+      for (const key of cache.keys()) {
+        if (isRowBatchChangedRow(previousBatch, viewportRowBatch, Number(key.slice(0, key.indexOf(":"))))) {
+          cache.delete(key);
+        }
+      }
+    }
+    // A merge's border overlay reads cells across several rows; recomputing the few merges is cheap.
+    mergedBorderOverlayCacheRef.current.clear();
+    viewportRowBatchRef.current = viewportRowBatch;
+  }
 
   React.useEffect(() => {
     setAsyncViewportRowBatch(null);
-  }, [activeSheetIndex, revision]);
+  }, [activeSheetIndex]);
 
   const sparklinesByCell = React.useMemo(() => {
     const map = new Map<string, XlsxSheetData["sparklines"][number]>();
@@ -9933,7 +10065,6 @@ function XlsxGrid({
         revision,
         selectedChartElement,
         selectedChartId,
-        viewportRowBatch,
         worksheet,
         zoomFactor
       ] as const,
@@ -9947,7 +10078,6 @@ function XlsxGrid({
       revision,
       selectedChartElement,
       selectedChartId,
-      viewportRowBatch,
       worksheet,
       zoomFactor
     ]
@@ -9967,7 +10097,8 @@ function XlsxGrid({
       return cached;
     }
 
-    const batchCoversRow = viewportRowBatch ? row >= viewportRowBatch.startRow && row <= viewportRowBatch.endRow : false;
+    const viewportRowBatch = viewportRowBatchRef.current;
+    const batchCoversRow = rowBatchCovers(viewportRowBatch, row);
     const batchedCell = batchCoversRow ? viewportRowBatch?.cells.get(cacheKey) : undefined;
     const worksheetMergedSecondary = worksheet?.isMergedSecondary(row, col) ?? false;
 
@@ -10011,9 +10142,7 @@ function XlsxGrid({
         return cachedBaseStyle;
       }
 
-      const targetBatchCoversRow = viewportRowBatch
-        ? targetRow >= viewportRowBatch.startRow && targetRow <= viewportRowBatch.endRow
-        : false;
+      const targetBatchCoversRow = rowBatchCovers(viewportRowBatch, targetRow);
       const targetBatchedCell = targetBatchCoversRow
         ? viewportRowBatch?.cells.get(targetCacheKey)
         : undefined;
@@ -10313,7 +10442,6 @@ function XlsxGrid({
     getCellStyle,
     palette,
     sparklinesByCell,
-    viewportRowBatch,
     visibleCols,
     worksheet,
     zoomFactor
@@ -12477,6 +12605,7 @@ function XlsxGrid({
       getCellData,
       headerHeight,
       palette,
+      rowBatch: viewportRowBatch,
       rowHeaderWidth,
       rowSignature: buildRenderedAxisSignature(canvasVisibleRowItems, (item) => item.index),
       viewportLeft: drawingViewport.left,
@@ -12510,6 +12639,7 @@ function XlsxGrid({
       && previousBodyCanvasSignature.getCellData === nextBodyCanvasSignature.getCellData
       && previousBodyCanvasSignature.headerHeight === nextBodyCanvasSignature.headerHeight
       && previousBodyCanvasSignature.palette === nextBodyCanvasSignature.palette
+      && previousBodyCanvasSignature.rowBatch === nextBodyCanvasSignature.rowBatch
       && previousBodyCanvasSignature.rowHeaderWidth === nextBodyCanvasSignature.rowHeaderWidth
       && previousBodyCanvasSignature.rowSignature === nextBodyCanvasSignature.rowSignature
       && previousBodyCanvasSignature.viewportLeft === nextBodyCanvasSignature.viewportLeft
@@ -12937,6 +13067,23 @@ function XlsxGrid({
             );
             if (blittedDirtyRects) {
               dirtyRects = blittedDirtyRects;
+            }
+          }
+          // Rows whose data a new row batch changed are painted again where they are.
+          if (previousBodyCanvasSignature?.rowBatch !== viewportRowBatch) {
+            const previousRowBatch = previousBodyCanvasSignature?.rowBatch ?? null;
+            const useFrozenVerticalPosition = pane === "top" || pane === "corner";
+            for (const rowItem of canvasPaneAxisItems[pane].rows) {
+              if (!isRowBatchChangedRow(previousRowBatch, viewportRowBatch, rowItem.actualRow)) {
+                continue;
+              }
+              const contentTop = displayHeaderHeight + rowItem.start;
+              const top = (
+                useFrozenVerticalPosition
+                  ? (stickyTopByRow.get(rowItem.actualRow) ?? (contentTop - drawingViewport.top))
+                  : (contentTop - drawingViewport.top)
+              ) - bounds.top;
+              dirtyRects.push({ height: rowItem.size, left: 0, top, width: bounds.width });
             }
           }
         } else {
@@ -13821,6 +13968,7 @@ function XlsxGrid({
     shouldBakeCanvasStaticDrawings,
     stickyLeftByCol,
     stickyTopByRow,
+    viewportRowBatch,
     visibleCols,
     visibleRows,
     zoomFactor
@@ -13999,41 +14147,65 @@ function XlsxGrid({
     selectChartElement(selection);
   }, [selectChartElement]);
 
-  // Opt-in anchors for page comment layers: one transparent element per cell the canvas draws, per pane.
+  // Opt-in anchors for page comment layers: one transparent element per cell in view, per pane.
   // Pointer events on them go to the same coordinate-based handlers as the canvas.
+  const mergeAnchorOf = React.useMemo(() => {
+    const mergeAnchorKeys = new Set(mergedRegions.map((region) => `${region.start.row}:${region.start.col}`));
+    return (row: number, col: number) => (
+      mergedSecondaryAnchorMap.get(`${row}:${col}`) ?? (mergeAnchorKeys.has(`${row}:${col}`) ? { col, row } : null)
+    );
+  }, [mergedRegions, mergedSecondaryAnchorMap]);
+  // Each pane's columns keep their identity while the same columns are in view, so a vertical
+  // scroll leaves the rows already rendered alone.
+  const cellAnchorColsRef = React.useRef<Partial<Record<FrozenDrawingPane, { cols: CellAnchorRowProps["cols"]; key: string }>>>({});
   const cellAnchorPaneNodes = React.useMemo(() => {
     if (cellAnchorIdPrefix === undefined || !experimentalCanvas) {
       return null;
     }
-    const mergeAnchorKeys = new Set(mergedRegions.map((region) => `${region.start.row}:${region.start.col}`));
-    const mergeAnchorOf = (row: number, col: number) => (
-      mergedSecondaryAnchorMap.get(`${row}:${col}`) ?? (mergeAnchorKeys.has(`${row}:${col}`) ? { col, row } : null)
+    // The viewport state trails the live scroll position by up to the deferred sync threshold, so
+    // anchors reach that far past it; every cell on screen then has one.
+    const margin = CANVAS_DEFERRED_VIEWPORT_SYNC_THRESHOLD_PX;
+    const isInView = (offset: number, size: number, viewportStart: number, viewportSize: number) => (
+      offset + size > viewportStart - margin && offset < viewportStart + viewportSize + margin
     );
     const nodes = {} as Record<FrozenDrawingPane, React.ReactNode>;
     for (const pane of ["scroll", "top", "left", "corner"] as const) {
-      const { cols, rows } = canvasPaneAxisItems[pane];
-      const cells = listCellAnchors(cellAnchorIdPrefix, rows, cols, mergeAnchorOf).flatMap((placement) => {
-        const cell = { col: placement.col, row: placement.row };
-        if (editingCell && isSameCell(editingCell, cell)) {
-          return [];
-        }
-        const rect = placement.rect
-          ? { ...placement.rect, left: displayRowHeaderWidth + placement.rect.left, top: displayHeaderHeight + placement.rect.top }
-          : resolveCellDisplayRect(cell);
-        return rect && rect.width > 0 && rect.height > 0 ? [
-          <div key={placement.id} id={placement.id} role="gridcell" style={{ ...CELL_ANCHOR_STYLE, ...rect }}>
-            {getControllerCellDisplayValue(cell)}
-          </div>
-        ] : [];
-      });
-      nodes[pane] = cells.length > 0 ? (
+      const { cols: paneCols, rows: paneRows } = canvasPaneAxisItems[pane];
+      const rows = pane === "scroll" || pane === "left"
+        ? paneRows.filter((item) => isInView(displayHeaderHeight + item.start, item.size, drawingViewport.top, drawingViewport.height))
+        : paneRows;
+      const visibleCols = pane === "scroll" || pane === "top"
+        ? paneCols.filter((item) => isInView(displayRowHeaderWidth + item.start, item.size, drawingViewport.left, drawingViewport.width))
+        : paneCols;
+      const colsKey = visibleCols.map((item) => `${item.actualCol}:${item.start}:${item.size}`).join(",");
+      const previousCols = cellAnchorColsRef.current[pane];
+      const cols = previousCols?.key === colsKey ? previousCols.cols : visibleCols;
+      cellAnchorColsRef.current[pane] = { cols, key: colsKey };
+      nodes[pane] = rows.length > 0 && cols.length > 0 ? (
         <div
           onClick={handleCanvasBodyClick}
           onDoubleClick={handleCanvasBodyDoubleClick}
           onPointerDown={handleCanvasBodyPointerDown}
           style={CELL_ANCHOR_LAYER_STYLE}
         >
-          {cells}
+          {rows.map((item, index) => (
+            <CellAnchorRow
+              key={item.actualRow}
+              actualRow={item.actualRow}
+              cols={cols}
+              editingCell={editingCell}
+              getCellData={getCellData}
+              idPrefix={cellAnchorIdPrefix}
+              includesMergesFromAbove={index === 0}
+              mergeAnchorOf={mergeAnchorOf}
+              originLeft={displayRowHeaderWidth}
+              originTop={displayHeaderHeight}
+              resolveCellDisplayRect={resolveCellDisplayRect}
+              rowBatch={viewportRowBatch}
+              size={item.size}
+              start={item.start}
+            />
+          ))}
         </div>
       ) : null;
     }
@@ -14043,16 +14215,16 @@ function XlsxGrid({
     cellAnchorIdPrefix,
     displayHeaderHeight,
     displayRowHeaderWidth,
+    drawingViewport,
     editingCell,
     experimentalCanvas,
-    getControllerCellDisplayValue,
+    getCellData,
     handleCanvasBodyClick,
     handleCanvasBodyDoubleClick,
     handleCanvasBodyPointerDown,
-    mergedRegions,
-    mergedSecondaryAnchorMap,
+    mergeAnchorOf,
     resolveCellDisplayRect,
-    revision
+    viewportRowBatch
   ]);
   const scrolledCellRef = React.useRef<XlsxCellAddress | null>(null);
   React.useEffect(() => {
@@ -14196,11 +14368,6 @@ function XlsxGrid({
     : 0;
   const headerLabelLiveScale = isLiveZooming ? liveZoomScale : 1;
   const selectionBorderWidth = Math.max(1, zoomFactor);
-  const shouldAnimateCanvasSelection = experimentalCanvas && enableCanvasSelectionAnimation;
-  const shouldAnimateCanvasSelectionGeometry = shouldAnimateCanvasSelection && liveGestureZoom === null;
-  const canvasSelectionTransition = shouldAnimateCanvasSelectionGeometry
-    ? "left 120ms cubic-bezier(0.22, 1, 0.36, 1), top 120ms cubic-bezier(0.22, 1, 0.36, 1), width 120ms cubic-bezier(0.22, 1, 0.36, 1), height 120ms cubic-bezier(0.22, 1, 0.36, 1), opacity 100ms linear"
-    : "none";
   const rowColSpan = renderedCols.length + 1 + (leadingColumnSpacerWidth > 0 ? 1 : 0) + (trailingColumnSpacerWidth > 0 ? 1 : 0);
   const gutterSeparatorShadow = `inset -1px 0 0 ${palette.border}, inset 0 -1px 0 ${palette.border}`;
   const maxDrawingOverlayZIndex = Math.max(
@@ -14246,25 +14413,20 @@ function XlsxGrid({
     height: "100%",
     zIndex: 5
   }, zoomFactor);
-  const canvasBodyViewportLayerStyle: React.CSSProperties = {
+  // The grid's layers scroll natively with the content, so every one moves in the frame the
+  // browser scrolls; JS only repaints a canvas when the scroll uses up its buffer. Frozen panes
+  // and headers stick to the viewport in their frozen axis only: a layer stuck to the top still
+  // scrolls sideways with the content, one stuck to the left still scrolls down with it.
+  const canvasStickyLayerBaseStyle: React.CSSProperties = {
     height: 0,
-    left: 0,
     overflow: "visible",
     pointerEvents: "none",
     position: "sticky",
-    top: stickyTopOffset,
     width: 0
   };
-  const canvasHeaderViewportLayerStyle: React.CSSProperties = {
-    height: 0,
-    left: 0,
-    overflow: "visible",
-    pointerEvents: "none",
-    position: "sticky",
-    top: stickyTopOffset,
-    width: 0,
-    zIndex: canvasHeaderOverlayZIndex
-  };
+  const canvasStickyTopLayerStyle: React.CSSProperties = { ...canvasStickyLayerBaseStyle, top: stickyTopOffset };
+  const canvasStickyLeftLayerStyle: React.CSSProperties = { ...canvasStickyLayerBaseStyle, left: 0 };
+  const canvasStickyCornerLayerStyle: React.CSSProperties = { ...canvasStickyLayerBaseStyle, left: 0, top: stickyTopOffset };
   const canvasBodyBaseStyle: React.CSSProperties = {
     cursor: "cell",
     pointerEvents: "auto",
@@ -14273,32 +14435,32 @@ function XlsxGrid({
     transition: "none",
     zIndex: 10
   };
+  // A canvas covers the viewport it was painted at, plus its buffer, in content coordinates.
+  const paintedCanvasLeft = drawingViewport.left + scrollBodyCanvasLeft;
+  const paintedCanvasTop = drawingViewport.top + scrollBodyCanvasTop;
   const canvasScrollBodyStyle: React.CSSProperties = {
     ...canvasBodyBaseStyle,
     display: scrollBodyCanvasWidth > 0 && scrollBodyCanvasHeight > 0 ? "block" : "none",
-    left: scrollBodyCanvasLeft,
-    top: scrollBodyCanvasTop
+    left: paintedCanvasLeft,
+    top: paintedCanvasTop
   };
   const canvasTopBodyStyle: React.CSSProperties = {
     ...canvasBodyBaseStyle,
     display: topBodyCanvasWidth > 0 && topBodyCanvasHeight > 0 ? "block" : "none",
-    left: scrollBodyCanvasLeft,
-    top: displayHeaderHeight,
-    zIndex: 30
+    left: paintedCanvasLeft,
+    top: displayHeaderHeight
   };
   const canvasLeftBodyStyle: React.CSSProperties = {
     ...canvasBodyBaseStyle,
     display: leftBodyCanvasWidth > 0 && leftBodyCanvasHeight > 0 ? "block" : "none",
     left: displayRowHeaderWidth,
-    top: scrollBodyCanvasTop,
-    zIndex: 30
+    top: paintedCanvasTop
   };
   const canvasCornerBodyStyle: React.CSSProperties = {
     ...canvasBodyBaseStyle,
     display: cornerBodyCanvasWidth > 0 && cornerBodyCanvasHeight > 0 ? "block" : "none",
     left: displayRowHeaderWidth,
-    top: displayHeaderHeight,
-    zIndex: 31
+    top: displayHeaderHeight
   };
   const canvasHeaderBaseStyle: React.CSSProperties = {
     cursor: "default",
@@ -14316,7 +14478,7 @@ function XlsxGrid({
   const canvasTopScrollHeaderStyle: React.CSSProperties = {
     ...canvasHeaderBaseStyle,
     display: topScrollHeaderCanvasWidth > 0 && drawingViewport.height > 0 ? "block" : "none",
-    left: scrollBodyCanvasLeft,
+    left: paintedCanvasLeft,
     top: 0,
     zIndex: canvasHeaderOverlayZIndex
   };
@@ -14331,7 +14493,7 @@ function XlsxGrid({
     ...canvasHeaderBaseStyle,
     display: leftScrollHeaderCanvasHeight > 0 && drawingViewport.width > 0 ? "block" : "none",
     left: 0,
-    top: scrollBodyCanvasTop,
+    top: paintedCanvasTop,
     zIndex: canvasHeaderOverlayZIndex
   };
   const canvasCornerHeaderStyle: React.CSSProperties = {
@@ -15099,14 +15261,12 @@ function XlsxGrid({
     if (drawingPane !== pane) {
       return null;
     }
-    const hasMeasuredViewport = drawingViewport.width > 0 && drawingViewport.height > 0;
-    if (pane === "scroll" && hasMeasuredViewport && !rectIntersectsViewport(rect, drawingViewport)) {
-      return null;
-    }
 
     const isFrozenDrawing = pane !== "scroll";
     const canEditChart = !readOnly && chart.editable !== false;
     const drawingSelectionSurface = paletteIsDark(palette) ? palette.canvas : DRAWING_SELECTION_HANDLE_FILL;
+    // Charts stay mounted while scrolled out of view, so coming back does not rebuild their SVG;
+    // content-visibility skips laying out and painting one that is off screen.
     const style: React.CSSProperties = {
       contain: "layout paint",
       height: rect.height,
@@ -15162,6 +15322,7 @@ function XlsxGrid({
             onPointerDownCapture={(event) => startChartMove(event, chart, rect)}
             style={{
               ...style,
+              contentVisibility: "auto",
               cursor: canEditChart && selectedChartId === chart.id ? "move" : "cell",
               pointerEvents: "auto"
             }}
@@ -15218,46 +15379,40 @@ function XlsxGrid({
     width: 0,
     zIndex: 34
   };
+  // A frozen pane's overlays are cut to the pane in its frozen axis; along the scrolling axis,
+  // and for the scrolling pane, the panes and headers stacked above cover what scrolls under them.
   const canvasOverlayPaneBaseStyle: React.CSSProperties = {
-    overflow: "hidden",
     pointerEvents: "none",
     position: "absolute"
-  };
-  const canvasScrollOverlayPaneStyle: React.CSSProperties = {
-    ...canvasOverlayPaneBaseStyle,
-    display: scrollBodyViewportWidth > 0 && scrollBodyViewportHeight > 0 ? "block" : "none",
-    height: scrollBodyViewportHeight,
-    left: frozenPaneRight,
-    top: frozenPaneBottom,
-    width: scrollBodyViewportWidth,
-    zIndex: 20
   };
   const canvasTopOverlayPaneStyle: React.CSSProperties = {
     ...canvasOverlayPaneBaseStyle,
     display: scrollBodyViewportWidth > 0 && topBodyCanvasHeight > 0 ? "block" : "none",
     height: topBodyCanvasHeight,
-    left: frozenPaneRight,
+    left: 0,
+    overflowX: "visible",
+    overflowY: "clip",
     top: displayHeaderHeight,
-    width: scrollBodyViewportWidth,
-    zIndex: 35
+    width: totalWidth
   };
   const canvasLeftOverlayPaneStyle: React.CSSProperties = {
     ...canvasOverlayPaneBaseStyle,
     display: leftBodyCanvasWidth > 0 && scrollBodyViewportHeight > 0 ? "block" : "none",
-    height: scrollBodyViewportHeight,
+    height: sheetContentHeight,
     left: displayRowHeaderWidth,
-    top: frozenPaneBottom,
-    width: leftBodyCanvasWidth,
-    zIndex: 35
+    overflowX: "clip",
+    overflowY: "visible",
+    top: 0,
+    width: leftBodyCanvasWidth
   };
   const canvasCornerOverlayPaneStyle: React.CSSProperties = {
     ...canvasOverlayPaneBaseStyle,
     display: cornerBodyCanvasWidth > 0 && cornerBodyCanvasHeight > 0 ? "block" : "none",
     height: cornerBodyCanvasHeight,
     left: displayRowHeaderWidth,
+    overflow: "hidden",
     top: displayHeaderHeight,
-    width: cornerBodyCanvasWidth,
-    zIndex: 36
+    width: cornerBodyCanvasWidth
   };
   const drawingViewportCacheSignature = `${Math.floor(drawingViewport.left / CANVAS_VIEWPORT_OVERSCAN_PX)}:${Math.floor(drawingViewport.top / CANVAS_VIEWPORT_OVERSCAN_PX)}:${drawingViewport.width}:${drawingViewport.height}`;
   const previousPaneDrawingNodes = paneDrawingNodesCacheRef.current;
@@ -15522,13 +15677,14 @@ function XlsxGrid({
       event: PointerEvent
     ) => {
       const pane = resolveDrawingPane(interaction.baseRect);
-      const viewportRect = viewport?.getBoundingClientRect();
+      const liveViewport = getScrollViewport();
+      const viewportRect = liveViewport?.getBoundingClientRect();
       const deltaX = event.clientX - interaction.startClientX
         + (startViewportRect && viewportRect ? startViewportRect.left - viewportRect.left : 0)
-        + (pane === "scroll" || pane === "top" ? (getScrollViewport()?.scrollLeft ?? 0) - startScroll.left : 0);
+        + (pane === "scroll" || pane === "top" ? (liveViewport?.scrollLeft ?? 0) - startScroll.left : 0);
       const deltaY = event.clientY - interaction.startClientY
         + (startViewportRect && viewportRect ? startViewportRect.top - viewportRect.top : 0)
-        + (pane === "scroll" || pane === "left" ? (getScrollViewport()?.scrollTop ?? 0) - startScroll.top : 0);
+        + (pane === "scroll" || pane === "left" ? (liveViewport?.scrollTop ?? 0) - startScroll.top : 0);
       let rect = interaction.type === "move"
         ? { ...interaction.baseRect, left: interaction.baseRect.left + deltaX, top: interaction.baseRect.top + deltaY }
         : resizeImageRect(interaction.baseRect, interaction.handle, deltaX, deltaY, displayImageMinSize, event.shiftKey || interaction.handle.length === 2);
@@ -15626,13 +15782,14 @@ function XlsxGrid({
       event: PointerEvent
     ) => {
       const pane = resolveDrawingPane(interaction.baseRect);
-      const viewportRect = viewport?.getBoundingClientRect();
+      const liveViewport = getScrollViewport();
+      const viewportRect = liveViewport?.getBoundingClientRect();
       const deltaX = event.clientX - interaction.startClientX
         + (startViewportRect && viewportRect ? startViewportRect.left - viewportRect.left : 0)
-        + (pane === "scroll" || pane === "top" ? (getScrollViewport()?.scrollLeft ?? 0) - startScroll.left : 0);
+        + (pane === "scroll" || pane === "top" ? (liveViewport?.scrollLeft ?? 0) - startScroll.left : 0);
       const deltaY = event.clientY - interaction.startClientY
         + (startViewportRect && viewportRect ? startViewportRect.top - viewportRect.top : 0)
-        + (pane === "scroll" || pane === "left" ? (getScrollViewport()?.scrollTop ?? 0) - startScroll.top : 0);
+        + (pane === "scroll" || pane === "left" ? (liveViewport?.scrollTop ?? 0) - startScroll.top : 0);
       let rect = interaction.type === "move"
         ? { ...interaction.baseRect, left: interaction.baseRect.left + deltaX, top: interaction.baseRect.top + deltaY }
         : resizeImageRect(interaction.baseRect, interaction.handle, deltaX, deltaY, 48 * zoomFactor, event.shiftKey);
@@ -15733,40 +15890,41 @@ function XlsxGrid({
       return;
     }
 
-    let nextScrollTop = scroller.scrollTop;
-    let nextScrollLeft = scroller.scrollLeft;
+    // The scroll metrics are read once, before anything is written.
+    const { clientHeight, clientWidth, scrollHeight, scrollLeft, scrollTop, scrollWidth } = scroller;
+    let nextScrollTop = scrollTop;
+    let nextScrollLeft = scrollLeft;
     const rowStart = displayHeaderHeight + (rowPrefixSums[rowIndex] ?? 0);
     const rowEnd = displayHeaderHeight + (rowPrefixSums[rowIndex + 1] ?? rowStart);
     const colStart = displayRowHeaderWidth + (colPrefixSums[colIndex] ?? 0);
     const colEnd = displayRowHeaderWidth + (colPrefixSums[colIndex + 1] ?? colStart);
 
     if (rowEnd > frozenPaneBottom) {
-      const visibleTop = scroller.scrollTop + frozenPaneBottom;
-      const visibleBottom = scroller.scrollTop + scroller.clientHeight;
+      const visibleTop = scrollTop + frozenPaneBottom;
+      const visibleBottom = scrollTop + clientHeight;
       if (rowStart < visibleTop) {
         nextScrollTop = rowStart - frozenPaneBottom;
       } else if (rowEnd > visibleBottom) {
-        nextScrollTop = rowEnd - scroller.clientHeight;
+        nextScrollTop = rowEnd - clientHeight;
       }
     }
 
     if (colEnd > frozenPaneRight) {
-      const visibleLeft = scroller.scrollLeft + frozenPaneRight;
-      const visibleRight = scroller.scrollLeft + scroller.clientWidth;
+      const visibleLeft = scrollLeft + frozenPaneRight;
+      const visibleRight = scrollLeft + clientWidth;
       if (colStart < visibleLeft) {
         nextScrollLeft = colStart - frozenPaneRight;
       } else if (colEnd > visibleRight) {
-        nextScrollLeft = colEnd - scroller.clientWidth;
+        nextScrollLeft = colEnd - clientWidth;
       }
     }
 
-    nextScrollTop = Math.max(0, Math.min(nextScrollTop, scroller.scrollHeight - scroller.clientHeight));
-    nextScrollLeft = Math.max(0, Math.min(nextScrollLeft, scroller.scrollWidth - scroller.clientWidth));
-
-    if (nextScrollTop !== scroller.scrollTop) {
+    nextScrollTop = Math.max(0, Math.min(nextScrollTop, scrollHeight - clientHeight));
+    nextScrollLeft = Math.max(0, Math.min(nextScrollLeft, scrollWidth - clientWidth));
+    if (nextScrollTop !== scrollTop) {
       scroller.scrollTop = nextScrollTop;
     }
-    if (nextScrollLeft !== scroller.scrollLeft) {
+    if (nextScrollLeft !== scrollLeft) {
       scroller.scrollLeft = nextScrollLeft;
     }
     syncDrawingViewport(scroller, { immediate: true });
@@ -15785,9 +15943,10 @@ function XlsxGrid({
     axisSelectionRef.current = null;
     selectionPreviewRangeRef.current = null;
     displayedSelectionRef.current = nextRange;
+    // Scroll first: it reads layout, and reading after the overlay writes below would lay out twice.
+    ensureCellVisible(clampedRowIndex, clampedColIndex);
     applyPreviewOverlay(nextRange);
     selectCell({ row: nextRow, col: nextCol }, extend ? { extend: true } : undefined);
-    ensureCellVisible(clampedRowIndex, clampedColIndex);
   }
 
   function resolvePageRowIndex(currentRowIndex: number, direction: 1 | -1) {
@@ -16095,7 +16254,7 @@ function XlsxGrid({
     "aria-readonly": readOnly,
     "aria-rowcount": Math.max(activeSheet?.rowCount ?? 0, displayRowLimit),
     role: "grid",
-    onScroll: isWindowScroll ? undefined : handleScrollerScroll,
+    onScroll: isWindowScroll ? undefined : scheduleViewportScroll,
     onContextMenu: (event) => {
       if (isInteractiveFocusTarget(event.target, event.currentTarget)) return;
       const rect = getScrollViewport()?.getBoundingClientRect();
@@ -16368,12 +16527,8 @@ function XlsxGrid({
       </div>
     ];
   }) : [];
-  const overlayPanes = ([
-    { pane: "scroll", style: canvasScrollOverlayPaneStyle, ref: canvasScrollOverlayContentRef, left: -drawingViewport.left - frozenPaneRight, top: -drawingViewport.top - frozenPaneBottom },
-    { pane: "top", style: canvasTopOverlayPaneStyle, ref: canvasTopOverlayContentRef, left: -drawingViewport.left - frozenPaneRight, top: -displayHeaderHeight },
-    { pane: "left", style: canvasLeftOverlayPaneStyle, ref: canvasLeftOverlayContentRef, left: -displayRowHeaderWidth, top: -drawingViewport.top - frozenPaneBottom },
-    { pane: "corner", style: canvasCornerOverlayPaneStyle, ref: canvasCornerOverlayContentRef, left: -displayRowHeaderWidth, top: -displayHeaderHeight }
-  ] as const);
+  // Overlay content is laid out in content coordinates; a frozen pane's content is shifted by
+  // where its clip box starts.
   const overlayPaneContentStyle = (left: number, top: number): React.CSSProperties => ({
     height: sheetContentHeight,
     left: 0,
@@ -16384,28 +16539,39 @@ function XlsxGrid({
     transformOrigin: "0 0",
     width: totalWidth
   });
-  const drawingOverlayPanes = (experimentalCanvas && hasCanvasDomDrawingOverlays) || rangeHighlightNodes.length > 0 || commentIndicatorNodes.length > 0 || cellAnchorPaneNodes ? (
-    <div style={{ ...canvasBodyViewportLayerStyle, zIndex: 34 }}>
-      {overlayPanes.map(({ pane, style, ref, left, top }) => (
-        <div key={pane} style={style}>
-          <div ref={ref} style={overlayPaneContentStyle(left, top)}>
-            {pane === "scroll" ? cellAnchorPaneNodes?.scroll : null}
-            {experimentalCanvas ? paneDrawingNodes[pane] : null}
-            {rangeHighlightNodes}
-            {commentIndicatorNodes}
-          </div>
-        </div>
-      ))}
+  const hasPaneOverlays = (experimentalCanvas && hasCanvasDomDrawingOverlays) || rangeHighlightNodes.length > 0 || commentIndicatorNodes.length > 0 || cellAnchorPaneNodes !== null;
+  const renderPaneOverlayContent = (pane: FrozenDrawingPane) => (
+    <>
+      {cellAnchorPaneNodes?.[pane]}
+      {experimentalCanvas ? paneDrawingNodes[pane] : null}
+      {rangeHighlightNodes}
+      {commentIndicatorNodes}
+    </>
+  );
+  const scrollPaneOverlay = hasPaneOverlays ? (
+    <div ref={canvasScrollOverlayContentRef} style={{ ...overlayPaneContentStyle(0, 0), zIndex: 20 }}>
+      {renderPaneOverlayContent("scroll")}
     </div>
   ) : null;
-  // Frozen panes paint on canvases stacked above the overlay layer, so their cell anchors get a layer above those.
-  const frozenCellAnchorPanes = cellAnchorPaneNodes ? (
-    <div style={{ ...canvasBodyViewportLayerStyle, zIndex: 32 }}>
-      {overlayPanes.filter(({ pane }) => pane !== "scroll").map(({ pane, style, left, top }) => (
-        <div key={pane} style={style}>
-          <div style={overlayPaneContentStyle(left, top)}>{cellAnchorPaneNodes[pane]}</div>
-        </div>
-      ))}
+  const topPaneOverlay = hasPaneOverlays ? (
+    <div style={canvasTopOverlayPaneStyle}>
+      <div ref={canvasTopOverlayContentRef} style={overlayPaneContentStyle(0, -displayHeaderHeight)}>
+        {renderPaneOverlayContent("top")}
+      </div>
+    </div>
+  ) : null;
+  const leftPaneOverlay = hasPaneOverlays ? (
+    <div style={canvasLeftOverlayPaneStyle}>
+      <div ref={canvasLeftOverlayContentRef} style={overlayPaneContentStyle(-displayRowHeaderWidth, 0)}>
+        {renderPaneOverlayContent("left")}
+      </div>
+    </div>
+  ) : null;
+  const cornerPaneOverlay = hasPaneOverlays ? (
+    <div style={canvasCornerOverlayPaneStyle}>
+      <div ref={canvasCornerOverlayContentRef} style={overlayPaneContentStyle(-displayRowHeaderWidth, -displayHeaderHeight)}>
+        {renderPaneOverlayContent("corner")}
+      </div>
     </div>
   ) : null;
 
@@ -16413,8 +16579,12 @@ function XlsxGrid({
     <div
           style={{
             backgroundColor: resolveSheetSurface(activeSheet),
+            // The grid stacks its layers among themselves, below the host's sticky bars, and the
+            // canvases' scroll buffers are cut at the sheet's edge so they never grow the scroll range.
+            isolation: "isolate",
             minHeight: "100%",
             minWidth: "100%",
+            overflow: "clip",
             position: "relative",
             width: totalWidth,
             height: sheetContentHeight
@@ -16445,41 +16615,93 @@ function XlsxGrid({
                 <div style={scrollOverlayStyle}>{paneDrawingNodes.scroll}</div>
               </>
             ) : null}
-            {drawingOverlayPanes}
-            {frozenCellAnchorPanes}
+            {/* Stacking, bottom to top: the scrolling pane's canvas and overlays, the frozen
+                panes (opaque, so they cover what scrolls under them), the selection layer,
+                then the headers. */}
+            {experimentalCanvas ? (
+              <canvas
+                ref={scrollBodyCanvasRef}
+                onClick={handleCanvasBodyClick}
+                onDoubleClick={handleCanvasBodyDoubleClick}
+                onPointerDown={handleCanvasBodyPointerDown}
+                style={canvasScrollBodyStyle}
+              />
+            ) : null}
+            {scrollPaneOverlay}
+            <div style={{ ...canvasStickyTopLayerStyle, zIndex: 22 }}>
+              {experimentalCanvas ? (
+                <canvas
+                  ref={topBodyCanvasRef}
+                  onClick={handleCanvasBodyClick}
+                  onDoubleClick={handleCanvasBodyDoubleClick}
+                  onPointerDown={handleCanvasBodyPointerDown}
+                  style={canvasTopBodyStyle}
+                />
+              ) : null}
+              {topPaneOverlay}
+            </div>
+            <div style={{ ...canvasStickyLeftLayerStyle, zIndex: 22 }}>
+              {experimentalCanvas ? (
+                <canvas
+                  ref={leftBodyCanvasRef}
+                  onClick={handleCanvasBodyClick}
+                  onDoubleClick={handleCanvasBodyDoubleClick}
+                  onPointerDown={handleCanvasBodyPointerDown}
+                  style={canvasLeftBodyStyle}
+                />
+              ) : null}
+              {leftPaneOverlay}
+            </div>
+            <div style={{ ...canvasStickyCornerLayerStyle, zIndex: 23 }}>
+              {experimentalCanvas ? (
+                <canvas
+                  ref={cornerBodyCanvasRef}
+                  onClick={handleCanvasBodyClick}
+                  onDoubleClick={handleCanvasBodyDoubleClick}
+                  onPointerDown={handleCanvasBodyPointerDown}
+                  style={canvasCornerBodyStyle}
+                />
+              ) : null}
+              {cornerPaneOverlay}
+            </div>
             {experimentalCanvas ? (
               <>
-                <div style={canvasBodyViewportLayerStyle}>
+                <div style={{ ...canvasStickyTopLayerStyle, zIndex: canvasHeaderOverlayZIndex }}>
                   <canvas
-                    ref={scrollBodyCanvasRef}
-                    onClick={handleCanvasBodyClick}
-                    onDoubleClick={handleCanvasBodyDoubleClick}
-                    onPointerDown={handleCanvasBodyPointerDown}
-                    style={canvasScrollBodyStyle}
-                  />
-                  <canvas
-                    ref={topBodyCanvasRef}
-                    onClick={handleCanvasBodyClick}
-                    onDoubleClick={handleCanvasBodyDoubleClick}
-                    onPointerDown={handleCanvasBodyPointerDown}
-                    style={canvasTopBodyStyle}
-                  />
-                  <canvas
-                    ref={leftBodyCanvasRef}
-                    onClick={handleCanvasBodyClick}
-                    onDoubleClick={handleCanvasBodyDoubleClick}
-                    onPointerDown={handleCanvasBodyPointerDown}
-                    style={canvasLeftBodyStyle}
-                  />
-                  <canvas
-                    ref={cornerBodyCanvasRef}
-                    onClick={handleCanvasBodyClick}
-                    onDoubleClick={handleCanvasBodyDoubleClick}
-                    onPointerDown={handleCanvasBodyPointerDown}
-                    style={canvasCornerBodyStyle}
+                    ref={topScrollHeaderCanvasRef}
+                    onPointerLeave={handleCanvasHeaderPointerLeave}
+                    onPointerMove={handleCanvasColumnHeaderPointerMove}
+                    onPointerDown={handleCanvasColumnHeaderPointerDown}
+                    style={canvasTopScrollHeaderStyle}
                   />
                 </div>
-                <div style={canvasHeaderViewportLayerStyle}>
+                <div style={{ ...canvasStickyLeftLayerStyle, zIndex: canvasHeaderOverlayZIndex }}>
+                  <canvas
+                    ref={leftScrollHeaderCanvasRef}
+                    onPointerLeave={handleCanvasHeaderPointerLeave}
+                    onPointerMove={handleCanvasRowHeaderPointerMove}
+                    onPointerDown={handleCanvasRowHeaderPointerDown}
+                    style={canvasLeftScrollHeaderStyle}
+                  />
+                </div>
+                <div style={{ ...canvasStickyCornerLayerStyle, zIndex: canvasHeaderOverlayZIndex + 1 }}>
+                  {stickyTopOffset > 0 ? (
+                    // In window mode the host's bars stick above the headers; this opaque band
+                    // behind them keeps what scrolls under the bars from showing through any gap
+                    // or translucent part of them.
+                    <div
+                      aria-hidden="true"
+                      style={{
+                        backgroundColor: resolveSheetSurface(activeSheet),
+                        height: stickyTopOffset,
+                        left: 0,
+                        pointerEvents: "none",
+                        position: "absolute",
+                        top: -stickyTopOffset,
+                        width: totalWidth
+                      }}
+                    />
+                  ) : null}
                   <canvas
                     ref={topFrozenHeaderCanvasRef}
                     onPointerLeave={handleCanvasHeaderPointerLeave}
@@ -16488,25 +16710,11 @@ function XlsxGrid({
                     style={canvasTopFrozenHeaderStyle}
                   />
                   <canvas
-                    ref={topScrollHeaderCanvasRef}
-                    onPointerLeave={handleCanvasHeaderPointerLeave}
-                    onPointerMove={handleCanvasColumnHeaderPointerMove}
-                    onPointerDown={handleCanvasColumnHeaderPointerDown}
-                    style={canvasTopScrollHeaderStyle}
-                  />
-                  <canvas
                     ref={leftFrozenHeaderCanvasRef}
                     onPointerLeave={handleCanvasHeaderPointerLeave}
                     onPointerMove={handleCanvasRowHeaderPointerMove}
                     onPointerDown={handleCanvasRowHeaderPointerDown}
                     style={canvasLeftFrozenHeaderStyle}
-                  />
-                  <canvas
-                    ref={leftScrollHeaderCanvasRef}
-                    onPointerLeave={handleCanvasHeaderPointerLeave}
-                    onPointerMove={handleCanvasRowHeaderPointerMove}
-                    onPointerDown={handleCanvasRowHeaderPointerDown}
-                    style={canvasLeftScrollHeaderStyle}
                   />
                   <canvas ref={cornerHeaderCanvasRef} style={canvasCornerHeaderStyle} />
                 </div>
@@ -16727,6 +16935,7 @@ function XlsxGrid({
                           editingInputRef={editingInputRef}
                           formulaAssist={formulaAssist}
                           frozenRowHeaderZIndex={frozenRowHeaderOverlayZIndex}
+                          dataBatch={viewportRowBatch}
                           getCellData={getCellData}
                           key={virtualRow.key}
                           leadingSpacerWidth={leadingColumnSpacerWidth}
@@ -16805,9 +17014,7 @@ function XlsxGrid({
                   pointerEvents: "none",
                   position: "absolute",
                   top: resolvedSelectionOverlay?.top ?? 0,
-                  transition: canvasSelectionTransition,
                   visibility: resolvedSelectionOverlay ? "visible" : "hidden",
-                  willChange: shouldAnimateCanvasSelectionGeometry ? "left, top, width, height" : undefined,
                   width: resolvedSelectionOverlay?.width ?? 0,
                   zIndex: 24
                 }}
@@ -16872,10 +17079,6 @@ function XlsxGrid({
                   pointerEvents: "auto",
                   position: "absolute",
                   top: resolvedSelectionOverlay ? resolvedSelectionOverlay.top + resolvedSelectionOverlay.height - (4 * zoomFactor) : 0,
-                  transition: shouldAnimateCanvasSelectionGeometry
-                    ? "left 120ms cubic-bezier(0.22, 1, 0.36, 1), top 120ms cubic-bezier(0.22, 1, 0.36, 1)"
-                    : "none",
-                  willChange: shouldAnimateCanvasSelectionGeometry ? "left, top" : undefined,
                   width: 8 * zoomFactor,
                   zIndex: 25
                 }}
@@ -16956,7 +17159,6 @@ function XlsxViewerInner({
   className,
   controller,
   emptyState,
-  enableCanvasSelectionAnimation = true,
   enableGestureZoom = true,
   errorState,
   experimentalCanvas = true,
@@ -17076,7 +17278,6 @@ function XlsxViewerInner({
                   allowResizeInReadOnly={allowResizeInReadOnly}
                   controller={controller}
                   emptyState={emptyState}
-                  enableCanvasSelectionAnimation={enableCanvasSelectionAnimation}
                   enableGestureZoom={enableGestureZoom}
                   errorState={errorState}
                   experimentalCanvas={experimentalCanvas}

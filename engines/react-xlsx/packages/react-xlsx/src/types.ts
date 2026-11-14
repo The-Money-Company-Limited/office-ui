@@ -1689,12 +1689,6 @@ export interface XlsxViewerProps extends UseXlsxViewerControllerOptions {
   /** Content shown when no workbook has been loaded. */
   emptyState?: React.ReactNode;
   /**
-   * Animates the selection rectangle in canvas mode.
-   *
-   * @default true
-   */
-  enableCanvasSelectionAnimation?: boolean;
-  /**
    * Enables pinch zoom and modifier-key wheel zoom inside the viewer.
    *
    * @default true
