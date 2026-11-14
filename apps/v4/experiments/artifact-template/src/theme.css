@@ -267,8 +267,8 @@ html:has(.artifact-slides) {
    highlight, and a ring while it has focus. EmbedPDF draws each field in an
    annotation box with no hook of its own: a fillable one holds an enabled
    control (text, choice) or a focusable box (check box, radio, list). The page
-   is white in both themes, so the colours are fixed. A focused field scrolls
-   clear of the sticky toolbar. */
+   is white in both themes, so the colours are fixed. A focused field keeps a
+   little room around it; the page's scroll padding clears the toolbar. */
 .artifact-pdf
   [data-no-interaction]
   > div:has(:is(input, textarea, select):not(:disabled), [tabindex="0"]) {
@@ -287,7 +287,7 @@ html:has(.artifact-slides) {
 .artifact-pdf
   [data-no-interaction]
   :is(input, textarea, select, [tabindex="0"]) {
-  scroll-margin: calc(var(--pdf-editor-toolbar-height, 0px) + 24px) 24px 24px;
+  scroll-margin: 24px;
 }
 
 .artifact-xlsx .xlsx-editor-ribbon {
