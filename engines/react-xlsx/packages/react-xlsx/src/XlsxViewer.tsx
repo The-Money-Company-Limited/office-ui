@@ -7179,7 +7179,8 @@ type CellAnchorRowProps = {
 
 /**
  * One row of cell anchors. A row re-renders only when its own props change, so scrolling renders
- * just the rows that come into view. A non-empty cell carries its text as its accessible name.
+ * just the rows that come into view. A non-empty cell holds its text, transparent, for the page's
+ * comment layer to read and as its accessible name; an empty cell holds none.
  */
 const CellAnchorRow = React.memo(function CellAnchorRow({
   actualRow,
@@ -7210,9 +7211,13 @@ const CellAnchorRow = React.memo(function CellAnchorRow({
     if (!rect || rect.width <= 0 || rect.height <= 0) {
       return null;
     }
-    const label = getCellData(cell.row, cell.col).value;
+    const cellData = getCellData(cell.row, cell.col);
+    // A checkbox cell paints a box, not its value; a sparkline without a value has no text.
+    const text = cellData.checkboxState != null ? (cellData.checkboxState ? "TRUE" : "FALSE") : cellData.value;
     return (
-      <div key={placement.id} id={placement.id} role="gridcell" aria-label={label || undefined} style={{ ...CELL_ANCHOR_STYLE, ...rect }} />
+      <div key={placement.id} id={placement.id} role="gridcell" style={{ ...CELL_ANCHOR_STYLE, ...rect }}>
+        {text || null}
+      </div>
     );
   });
 });
