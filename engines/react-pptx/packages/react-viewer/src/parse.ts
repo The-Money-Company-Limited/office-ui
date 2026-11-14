@@ -32,14 +32,23 @@ function isPresentationDocument(source: PresentationSource): source is Presentat
   );
 }
 
+function inputLimitError(byteLength: number, maximum: number): PptxViewerError {
+  return new PptxViewerError(
+    'resource-limit',
+    `The presentation exceeds the ${Math.round(maximum / 1024 / 1024)} MB input limit.`,
+    { details: { byteLength, maximum } },
+  );
+}
+
 /**
  * Reads a response chunk by chunk, so progress can be reported as it arrives,
  * into one buffer: sized up front when the server declares the length, grown
- * when it does not.
+ * when it does not. Stops at the input limit.
  */
 async function readBody(
   response: Response,
   totalBytes: number | undefined,
+  maximum: number,
   onProgress: ParsePresentationOptions['onDownloadProgress'],
 ): Promise<ArrayBuffer> {
   let bytes = new Uint8Array(totalBytes ?? 64 * 1024);
@@ -50,8 +59,12 @@ async function readBody(
       const { done, value } = await reader.read();
       if (done) break;
       const nextLength = loadedBytes + value.byteLength;
+      if (nextLength > maximum) {
+        await reader.cancel();
+        throw inputLimitError(nextLength, maximum);
+      }
       if (nextLength > bytes.byteLength) {
-        const grown = new Uint8Array(Math.max(nextLength, bytes.byteLength * 2));
+        const grown = new Uint8Array(Math.min(maximum, Math.max(nextLength, bytes.byteLength * 2)));
         grown.set(bytes.subarray(0, loadedBytes));
         bytes = grown;
       }
@@ -101,11 +114,7 @@ async function readSource(
     const declaredLength = Number(response.headers.get('content-length'));
     const maximum = options.maxInputBytes ?? DEFAULT_MAX_INPUT_BYTES;
     if (Number.isFinite(declaredLength) && declaredLength > maximum) {
-      throw new PptxViewerError(
-        'resource-limit',
-        `The presentation exceeds the ${Math.round(maximum / 1024 / 1024)} MB input limit.`,
-        { details: { byteLength: declaredLength, maximum } },
-      );
+      throw inputLimitError(declaredLength, maximum);
     }
     // A compressed response declares its encoded length, not the bytes it decodes to.
     const encoding = response.headers.get('content-encoding')?.trim().toLowerCase();
@@ -114,6 +123,7 @@ async function readSource(
       (!encoding || encoding === 'identity') && Number.isFinite(declaredLength) && declaredLength > 0
         ? declaredLength
         : undefined,
+      maximum,
       options.onDownloadProgress,
     );
   } else {
@@ -122,13 +132,7 @@ async function readSource(
 
   throwIfAborted(options.signal);
   const maximum = options.maxInputBytes ?? DEFAULT_MAX_INPUT_BYTES;
-  if (buffer.byteLength > maximum) {
-    throw new PptxViewerError(
-      'resource-limit',
-      `The presentation exceeds the ${Math.round(maximum / 1024 / 1024)} MB input limit.`,
-      { details: { byteLength: buffer.byteLength, maximum } },
-    );
-  }
+  if (buffer.byteLength > maximum) throw inputLimitError(buffer.byteLength, maximum);
   if (buffer.byteLength === 0) {
     throw new PptxViewerError('invalid-source', 'The presentation is empty.');
   }
