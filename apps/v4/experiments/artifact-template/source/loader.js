@@ -50,8 +50,8 @@ async function run() {
   const files = new Set(manifest.files)
   const entries = new Map() // path -> {code, specs, hash}
   const jobs = []
-  // Cache writes never hold up the page; nothing waits for them.
-  const writes = []
+  // Cache writes never hold up the page; a failed one only costs a recompile.
+  const write = (promise) => promise.catch(() => {})
   async function load(path) {
     const hint = await (await store.match(hintKey(path)))?.text()
     let response = await fetch(at(path), {
@@ -79,7 +79,7 @@ async function run() {
     else {
       entries.set(path, await cached.json())
       if (etag !== hint)
-        writes.push(store.put(hintKey(path), new Response(etag)))
+        write(store.put(hintKey(path), new Response(etag)))
     }
     return true
   }
@@ -255,7 +255,7 @@ onmessage = ({ data }) => postMessage(data.map(({ path, source }) => self.compil
     for (const [job, result] of results.flat()) {
       const entry = { ...result, hash: job.hash }
       entries.set(job.path, entry)
-      writes.push(
+      write(
         store
           .put(entryKey(job.path, job.etag), Response.json(entry))
           .then(() => store.put(hintKey(job.path), new Response(job.etag)))

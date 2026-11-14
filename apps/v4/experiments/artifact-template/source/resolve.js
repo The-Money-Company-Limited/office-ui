@@ -47,6 +47,15 @@ export function resolve(spec, from, config, exists) {
     : bare.startsWith("./") || bare.startsWith("../")
       ? join(dirname(from), bare)
       : null
+  // In a stylesheet, @import "extra.css" is a URL relative to it, found or
+  // not yet (the loader then looks for it). A name with a slash
+  // (tailwindcss/theme.css) is relative only when that file exists; anything
+  // else (tailwindcss) is a package.
+  if (base === null && from.endsWith(".css") && bare.endsWith(".css")) {
+    const local = join(dirname(from), bare)
+    if (!bare.includes("/") || exists(local))
+      return exists(local) ? { path: local, query } : { missing: local }
+  }
   if (base === null) {
     // vendor/ holds package modules only; a file URL (?url) needs an alias.
     if (query) throw new Error(`${spec}: an npm import with a query needs an alias`)
@@ -78,16 +87,7 @@ export function link(entry, specsOf, config, exists) {
     if (!specs) return needed.add(path)
     const map = {}
     for (const spec of specs) {
-      // In a stylesheet, @import "extra.css" is a URL relative to it; a bare
-      // name without .css (tailwindcss) is a package.
-      const relative =
-        path.endsWith(".css") && spec.endsWith(".css") && !/^[./]/.test(spec)
-      const target = resolve(
-        relative ? "./" + spec : spec,
-        path,
-        config,
-        exists
-      )
+      const target = resolve(spec, path, config, exists)
       if (target.missing) {
         missing.add(target.missing)
         missingFrom[target.missing] ??= path
