@@ -1524,7 +1524,7 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
         </DropdownMenuContent>
       </DropdownMenu>
       {tabError ? <span role="alert" className="text-xs text-destructive">{tabError}</span> : null}
-      {status ? <div className="shrink-0">{status}</div> : null}
+      {status ? <div className="ms-auto shrink-0">{status}</div> : null}
       {typeof document !== "undefined" &&
       previewSheet &&
       visiblePreviewIndex !== null &&
