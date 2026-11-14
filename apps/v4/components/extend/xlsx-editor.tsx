@@ -297,6 +297,7 @@ const XLSX_EDITOR_READ_ONLY_THRESHOLD_BYTES = 5 * 1024 * 1024
 const XLSX_DROPDOWN_Z_INDEX_CLASS = "z-40"
 const ZOOM_OPTIONS = [50, 75, 100, 125, 150, 200, 400] as const
 const DEFAULT_FONT_FAMILY = "Arial"
+const DEFAULT_FONT_SIZE = 11
 const FONT_FAMILIES = [
   "Arial",
   "Times New Roman",
@@ -579,6 +580,14 @@ function getFontFamilyValue(style: XlsxResolvedCellStyle | null) {
 
   return typeof fontName === "string" && fontName.trim()
     ? fontName.trim()
+    : undefined
+}
+
+function getFontSizeValue(style: XlsxResolvedCellStyle | null) {
+  const size = asResolvedStyleGroup(style?.font)?.size
+
+  return typeof size === "number" && Number.isFinite(size) && size > 0
+    ? size
     : undefined
 }
 
@@ -1445,14 +1454,15 @@ function EditorToolbar({
     formulaInputRef
   )
   const viewerPalette = useXlsxViewerPalette()
-  const [fontFamily, setFontFamily] = React.useState(DEFAULT_FONT_FAMILY)
-  const [fontSize, setFontSize] = React.useState(11)
   const [textColor, setTextColor] = React.useState(DEFAULT_TEXT_COLOR)
   const [fillColor, setFillColor] = React.useState(DEFAULT_FILL_COLOR)
   const [borderColor, setBorderColor] = React.useState(DEFAULT_BORDER_COLOR)
-  const [appliedMergeRegions, setAppliedMergeRegions] = React.useState<
-    XlsxMergeRegion[]
-  >([])
+  // Merges applied from here, until the workbook's next revision shows them.
+  const [appliedMerges, setAppliedMerges] = React.useState<{
+    regions: XlsxMergeRegion[]
+    revision: number
+    sheetIndex: number
+  } | null>(null)
   const lastStyleTargetRef = React.useRef<{
     range: XlsxCellRange
     sheetIndex: number
@@ -1488,9 +1498,24 @@ function EditorToolbar({
       getActiveWorksheet() as XlsxWorksheetWithMergeRegions | null
     )
   }, [getActiveWorksheet, revision])
+  // A merge lands in the worksheet with a new revision, so applied merges count
+  // only on the sheet and at the revision they were applied at.
+  const pendingMergeRegions = React.useMemo(
+    () =>
+      appliedMerges?.sheetIndex === activeSheetIndex &&
+      appliedMerges.revision === revision
+        ? appliedMerges.regions
+        : [],
+    [activeSheetIndex, appliedMerges, revision]
+  )
+  const rememberAppliedMerges = React.useCallback(
+    (regions: XlsxMergeRegion[]) =>
+      setAppliedMerges({ regions, revision, sheetIndex: activeSheetIndex }),
+    [activeSheetIndex, revision]
+  )
   const mergeRegions = React.useMemo(
-    () => [...worksheetMergeRegions, ...appliedMergeRegions],
-    [appliedMergeRegions, worksheetMergeRegions]
+    () => [...worksheetMergeRegions, ...pendingMergeRegions],
+    [pendingMergeRegions, worksheetMergeRegions]
   )
   const selectionIntersectsMerge = Boolean(
     activeRange &&
@@ -1499,22 +1524,6 @@ function EditorToolbar({
       )
   )
 
-  const pendingMergeRegions = appliedMergeRegions.filter(
-    (currentRegion) =>
-      !worksheetMergeRegions.some((worksheetRegion) =>
-        rangesIntersect(currentRegion, worksheetRegion)
-      )
-  )
-  if (pendingMergeRegions.length !== appliedMergeRegions.length) {
-    setAppliedMergeRegions(pendingMergeRegions)
-  }
-
-  const [previousSheetIndex, setPreviousSheetIndex] =
-    React.useState(activeSheetIndex)
-  if (!Object.is(previousSheetIndex, activeSheetIndex)) {
-    setPreviousSheetIndex(activeSheetIndex)
-    setAppliedMergeRegions([])
-  }
   const selectionIsSingleCell = activeRange
     ? isSingleCellRange(activeRange)
     : true
@@ -1561,7 +1570,19 @@ function EditorToolbar({
     () => getFontToggleValuesFromStyle(activeCellStyle),
     [activeCellStyle]
   )
-  const fontFamilyValue = getFontFamilyValue(activeCellStyle) ?? fontFamily
+  // A cell without its own font shows the workbook's Normal style, as Excel does.
+  const workbookDefaultStyle =
+    activeSheet?.namedCellStyleByName.Normal ??
+    activeSheet?.styleById[0] ??
+    null
+  const fontFamilyValue =
+    getFontFamilyValue(activeCellStyle) ??
+    getFontFamilyValue(workbookDefaultStyle) ??
+    DEFAULT_FONT_FAMILY
+  const fontSizeValue =
+    getFontSizeValue(activeCellStyle) ??
+    getFontSizeValue(workbookDefaultStyle) ??
+    DEFAULT_FONT_SIZE
   const horizontalAlignmentValue = React.useMemo(
     () => getHorizontalAlignmentValue(activeCellStyle),
     [activeCellStyle]
@@ -1725,9 +1746,9 @@ function EditorToolbar({
   const mergeSelectedCells = React.useCallback(() => {
     if (!canMergeSelectedCells || !selection) return
 
-    setAppliedMergeRegions([normalizeCellRange(selection)])
+    rememberAppliedMerges([normalizeCellRange(selection)])
     mergeSelection()
-  }, [canMergeSelectedCells, mergeSelection, selection])
+  }, [canMergeSelectedCells, mergeSelection, rememberAppliedMerges, selection])
 
   const mergeAcrossSelectedCells = React.useCallback(() => {
     if (!activeCell || !canMergeAcross || !selection) return
@@ -1774,13 +1795,14 @@ function EditorToolbar({
 
     if (!didPaste) return
 
-    setAppliedMergeRegions(mergeRegionsByRow)
+    rememberAppliedMerges(mergeRegionsByRow)
     selectRange(normalizedRange)
   }, [
     activeCell,
     canMergeAcross,
     getActiveWorksheet,
     pasteStructuredClipboardData,
+    rememberAppliedMerges,
     selectRange,
     selection,
   ])
@@ -1788,10 +1810,16 @@ function EditorToolbar({
   const mergeAndCenterSelectedCells = React.useCallback(() => {
     if (!canMergeSelectedCells || !selection) return
 
-    setAppliedMergeRegions([normalizeCellRange(selection)])
+    rememberAppliedMerges([normalizeCellRange(selection)])
     setRangeStyle(selection, { alignment: { horizontal: "center" } })
     mergeSelection()
-  }, [canMergeSelectedCells, mergeSelection, selection, setRangeStyle])
+  }, [
+    canMergeSelectedCells,
+    mergeSelection,
+    rememberAppliedMerges,
+    selection,
+    setRangeStyle,
+  ])
 
   const unmergeSelectedCells = React.useCallback(() => {
     if (!canUnmergeSelectedCells || !activeRange) return
@@ -1803,13 +1831,11 @@ function EditorToolbar({
     const normalizedRange = normalizeCellRange(activeRange)
     const uniqueMergeRegions = new Map<string, XlsxMergeRegion>()
 
-    ;[...worksheetMergeRegions, ...appliedMergeRegions].forEach(
-      (mergeRegion) => {
-        if (!rangesIntersect(normalizedRange, mergeRegion)) return
+    mergeRegions.forEach((mergeRegion) => {
+      if (!rangesIntersect(normalizedRange, mergeRegion)) return
 
-        uniqueMergeRegions.set(getRangeKey(mergeRegion), mergeRegion)
-      }
-    )
+      uniqueMergeRegions.set(getRangeKey(mergeRegion), mergeRegion)
+    })
 
     let didUnmerge = false
 
@@ -1823,18 +1849,17 @@ function EditorToolbar({
       return
     }
 
-    setAppliedMergeRegions([])
+    setAppliedMerges(null)
     setRangeStyle(normalizedRange, {})
     selectRange(normalizedRange)
   }, [
     activeRange,
-    appliedMergeRegions,
     canUnmergeSelectedCells,
     getActiveWorksheet,
+    mergeRegions,
     selectRange,
     setRangeStyle,
     unmergeSelection,
-    worksheetMergeRegions,
   ])
 
   const applyFontToggleValues = React.useCallback(
@@ -1862,7 +1887,15 @@ function EditorToolbar({
   )
 
   // Cmd/Ctrl+B, I and U toggle the font on the selection while the grid has
-  // the keyboard, as in Sheets.
+  // the keyboard, as in Sheets. The listener is registered once and reads the
+  // current toggles through a ref.
+  const fontShortcutRef = React.useRef({
+    applyFontToggleValues,
+    fontToggleValues,
+  })
+  React.useEffect(() => {
+    fontShortcutRef.current = { applyFontToggleValues, fontToggleValues }
+  })
   React.useEffect(() => {
     if (readOnly) return
     const shortcuts: Record<string, XlsxFontToggleValue> = {
@@ -1882,6 +1915,8 @@ function EditorToolbar({
       )
         return
       event.preventDefault()
+      const { applyFontToggleValues, fontToggleValues } =
+        fontShortcutRef.current
       applyFontToggleValues(
         fontToggleValues.includes(value)
           ? fontToggleValues.filter((current) => current !== value)
@@ -1890,7 +1925,7 @@ function EditorToolbar({
     }
     document.addEventListener("keydown", handleKeyDown)
     return () => document.removeEventListener("keydown", handleKeyDown)
-  }, [applyFontToggleValues, fontToggleValues, readOnly])
+  }, [readOnly])
 
   return (
     <div className="xlsx-editor-toolbar border-b bg-background">
@@ -2073,9 +2108,7 @@ function EditorToolbar({
               onValueChange={(value) => {
                 if (!value) return
 
-                if (applyStyle({ font: { name: value } })) {
-                  setFontFamily(value)
-                }
+                applyStyle({ font: { name: value } })
               }}
               disabled={!canStyleSelection}
               modal={false}
@@ -2103,12 +2136,11 @@ function EditorToolbar({
               </SelectContent>
             </Select>
             <Select
-              value={String(fontSize)}
+              value={String(fontSizeValue)}
               onValueChange={(value) => {
                 const nextFontSize = Number(value)
                 if (!Number.isFinite(nextFontSize)) return
 
-                setFontSize(nextFontSize)
                 applyStyle({ font: { size: nextFontSize } })
               }}
               disabled={!canStyleSelection}
@@ -2122,7 +2154,7 @@ function EditorToolbar({
                 )}
                 aria-label="Font size"
               >
-                <SelectValue placeholder="Size" />
+                <SelectValue placeholder="Size">{fontSizeValue} pt</SelectValue>
               </SelectTrigger>
               <SelectContent
                 align="start"
@@ -2210,27 +2242,31 @@ function EditorToolbar({
               icon={TextColorGlyph}
               color={textColor}
               disabled={!canStyleSelection}
-              onChange={(color) => {
-                const nextColor = normalizeHexColor(color)
-                setTextColor(nextColor)
-                applyStyle({ font: { color: toXlsxRgbColor(nextColor) } })
-              }}
+              onChange={(color) => setTextColor(normalizeHexColor(color))}
+              onValueCommit={(color) =>
+                applyStyle({
+                  font: { color: toXlsxRgbColor(normalizeHexColor(color)) },
+                })
+              }
             />
             <ColorPicker
               label="Fill color"
               icon={PaintBucketGlyph}
               color={fillColor}
               disabled={!canStyleSelection}
-              onChange={(color) => {
-                const nextColor = normalizeHexColor(color, DEFAULT_FILL_COLOR)
-                setFillColor(nextColor)
+              onChange={(color) =>
+                setFillColor(normalizeHexColor(color, DEFAULT_FILL_COLOR))
+              }
+              onValueCommit={(color) =>
                 applyStyle({
                   fill: {
-                    color: toXlsxRgbColor(nextColor),
+                    color: toXlsxRgbColor(
+                      normalizeHexColor(color, DEFAULT_FILL_COLOR)
+                    ),
                     fillType: "solid",
                   },
                 })
-              }}
+              }
             />
             <ToolbarIconButton
               label="No fill"
@@ -3125,6 +3161,7 @@ export function XlsxEditorSurface({
   }
   const toolbarRef = React.useRef<HTMLDivElement>(null)
   const toolbarHeight = useElementHeight(toolbarRef)
+  const viewportWidth = useViewportWidth()
   const [commentTarget, setCommentTarget] =
     React.useState<XlsxCommentTarget | null>(null)
   // The viewer reports which thread was clicked; the click itself says where it is.
@@ -3154,6 +3191,55 @@ export function XlsxEditorSurface({
     () => <div ref={activeCellAnchorRef} className="size-full" />,
     []
   )
+  // The viewer's props keep their identity across renders, so the grid's
+  // callbacks that depend on them are not rebuilt on every toolbar change.
+  const fileTooLargeState = React.useMemo(
+    () => (
+      <div className="grid h-full w-full min-w-full place-items-center p-6">
+        <div className="max-w-sm rounded-lg border bg-background p-4 text-sm">
+          <p className="font-medium">File too large for editing</p>
+          <p className="mt-1 text-muted-foreground">
+            This workbook exceeds the editor limit. Download it or open a
+            smaller file to make changes.
+          </p>
+        </div>
+      </div>
+    ),
+    []
+  )
+  const loadingState = React.useMemo(() => <EditorLoadingSurface />, [])
+  const errorMessage = error?.message
+  const errorState = React.useMemo(
+    () => (
+      <div className="grid h-full w-full min-w-full place-items-center p-6 text-sm text-destructive">
+        {errorMessage ?? "Unable to edit workbook."}
+      </div>
+    ),
+    [errorMessage]
+  )
+  const handleHeaderContextMenu = React.useCallback(
+    (
+      axis: "column" | "row",
+      _index: number,
+      event: React.MouseEvent<HTMLDivElement>
+    ) => {
+      const rect = new DOMRect(event.clientX, event.clientY, 0, 0)
+      setContextMenu({ axis, getBoundingClientRect: () => rect })
+    },
+    []
+  )
+  const handleCellContextMenu = React.useCallback(
+    (_cell: XlsxCellAddress, event: React.MouseEvent<HTMLDivElement>) => {
+      const rect = new DOMRect(event.clientX, event.clientY, 0, 0)
+      setContextMenu({ getBoundingClientRect: () => rect })
+    },
+    []
+  )
+  const handleFind = React.useCallback(() => {
+    setFindOpen(true)
+    findInputRef.current?.focus()
+    findInputRef.current?.select()
+  }, [])
 
   const toolbar = (
     <>
@@ -3220,7 +3306,11 @@ export function XlsxEditorSurface({
       )}
     >
       {scrollsWindow ? (
-        <div ref={toolbarRef} className="sticky top-0 left-0 z-30 w-screen">
+        <div
+          ref={toolbarRef}
+          className="sticky top-0 left-0 z-30"
+          style={{ width: viewportWidth }}
+        >
           {toolbar}
         </div>
       ) : (
@@ -3247,41 +3337,17 @@ export function XlsxEditorSurface({
             rounded={false}
             showDefaultToolbar={false}
             showImages
-            fileTooLargeState={
-              <div className="grid h-full w-full min-w-full place-items-center p-6">
-                <div className="max-w-sm rounded-lg border bg-background p-4 text-sm">
-                  <p className="font-medium">File too large for editing</p>
-                  <p className="mt-1 text-muted-foreground">
-                    This workbook exceeds the editor limit. Download it or open
-                    a smaller file to make changes.
-                  </p>
-                </div>
-              </div>
-            }
-            loadingState={<EditorLoadingSurface />}
+            fileTooLargeState={fileTooLargeState}
+            loadingState={loadingState}
             renderScroller={scrollsWindow ? undefined : renderXlsxScroller}
             scrollTarget={scrollsWindow ? "window" : "element"}
             stickyTop={scrollsWindow ? toolbarHeight : undefined}
-            errorState={
-              <div className="grid h-full w-full min-w-full place-items-center p-6 text-sm text-destructive">
-                {error?.message ?? "Unable to edit workbook."}
-              </div>
-            }
+            errorState={errorState}
             renderTableHeaderMenu={renderTableHeaderMenu}
             onCommentClick={openThread}
-            onHeaderContextMenu={(axis, _index, event) => {
-              const rect = new DOMRect(event.clientX, event.clientY, 0, 0)
-              setContextMenu({ axis, getBoundingClientRect: () => rect })
-            }}
-            onCellContextMenu={(_cell, event) => {
-              const rect = new DOMRect(event.clientX, event.clientY, 0, 0)
-              setContextMenu({ getBoundingClientRect: () => rect })
-            }}
-            onFind={() => {
-              setFindOpen(true)
-              findInputRef.current?.focus()
-              findInputRef.current?.select()
-            }}
+            onHeaderContextMenu={handleHeaderContextMenu}
+            onCellContextMenu={handleCellContextMenu}
+            onFind={handleFind}
             scrollToCell={
               scrollRequest?.sheet === activeSheet?.name
                 ? scrollRequest?.cell
@@ -3367,7 +3433,10 @@ export function XlsxEditorSurface({
           ) : null}
         </div>
         {scrollsWindow ? (
-          <div className="xlsx-editor-sheet-tabs sticky bottom-0 left-0 z-30 w-screen bg-background">
+          <div
+            className="xlsx-editor-sheet-tabs sticky bottom-0 left-0 z-30 bg-background"
+            style={{ width: viewportWidth }}
+          >
             {sheetTabs}
           </div>
         ) : (
@@ -3394,6 +3463,25 @@ function useElementHeight(ref: React.RefObject<HTMLElement | null>) {
   }, [ref])
 
   return height
+}
+
+/**
+ * The window's width without its vertical scrollbar, which 100vw includes:
+ * the root element's width, so it follows the scrollbar appearing too.
+ */
+function useViewportWidth() {
+  const [width, setWidth] = React.useState<number>()
+
+  React.useLayoutEffect(() => {
+    const root = document.documentElement
+    const measure = () => setWidth(root.clientWidth)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(root)
+    return () => observer.disconnect()
+  }, [])
+
+  return width
 }
 
 export function XlsxEditorPreview({
