@@ -4,7 +4,7 @@
     { "at": 3, "camera": { "el": "#triangle", "zoom": 1.6 } },
     { "marks": [
       { "el": "#corner", "shape": "ring", "color": "blue" },
-      { "el": "#intro", "write": "a square corner", "color": "blue" }
+      { "el": "#triangle", "write": "a square corner", "color": "blue" }
     ] },
     { "clear": true, "camera": { "zoom": 1 } },
     { "at": 20.4, "camera": { "el": "#sum", "zoom": 1.5 } },

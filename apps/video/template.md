@@ -52,6 +52,7 @@ don't put `will-change: transform` on the camera. Video and canvas content does 
 
 - Space or K plays and pauses; arrows or J and L skip 5 seconds (with Shift, one frame); F is full screen.
 - While it plays, the controls fade when the pointer rests.
+- A link can start at a moment: `https://<site>.cool.computer/#t=22.5`.
 - Comments: press C or the Comment button. The video pauses, and the comment is left at that moment. Its pin shows near
   that moment, and opening it takes the video back there. Your agent reads the moment as `anchor.moment_ms` and
   `cool comments` prints it as `at 0:22 in the video`.

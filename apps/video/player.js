@@ -335,7 +335,9 @@ async function start() {
     show(now)
   })
   window.postMessage({ cool: 'video', type: 'ink', drawings: planned.drawings }, location.origin)
-  const from = Number(new URLSearchParams(location.search).get('t'))
+  // A link may start at a moment: #t=22.5. In the hash, not the query, so it never makes the page a different page for
+  // its comments.
+  const from = Number(new URLSearchParams(location.hash.slice(1)).get('t'))
   show(Number.isFinite(from) && from > 0 ? from * 1000 : 0)
   // For filming: the export seeks frame by frame and waits for this.
   window.__video = { duration, seek: show }
