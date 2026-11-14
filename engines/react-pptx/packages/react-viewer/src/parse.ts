@@ -32,35 +32,38 @@ function isPresentationDocument(source: PresentationSource): source is Presentat
   );
 }
 
-/** Reads a response chunk by chunk, so progress can be reported as it arrives. */
+/**
+ * Reads a response chunk by chunk, so progress can be reported as it arrives,
+ * into one buffer: sized up front when the server declares the length, grown
+ * when it does not.
+ */
 async function readBody(
   response: Response,
   totalBytes: number | undefined,
   onProgress: ParsePresentationOptions['onDownloadProgress'],
 ): Promise<ArrayBuffer> {
-  const chunks: Uint8Array[] = [];
+  let bytes = new Uint8Array(totalBytes ?? 64 * 1024);
   let loadedBytes = 0;
   const reader = response.body?.getReader();
   if (reader) {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      chunks.push(value);
-      loadedBytes += value.byteLength;
-      // A compressed response declares its encoded size, which the decoded bytes outgrow.
+      const nextLength = loadedBytes + value.byteLength;
+      if (nextLength > bytes.byteLength) {
+        const grown = new Uint8Array(Math.max(nextLength, bytes.byteLength * 2));
+        grown.set(bytes.subarray(0, loadedBytes));
+        bytes = grown;
+      }
+      bytes.set(value, loadedBytes);
+      loadedBytes = nextLength;
       onProgress?.(
         loadedBytes,
         totalBytes !== undefined && totalBytes >= loadedBytes ? totalBytes : undefined,
       );
     }
   }
-  const bytes = new Uint8Array(loadedBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes.buffer;
+  return loadedBytes === bytes.byteLength ? bytes.buffer : bytes.buffer.slice(0, loadedBytes);
 }
 
 async function readSource(
