@@ -182,6 +182,7 @@ function App() {
                 key={documentProps.src}
                 {...documentProps}
                 anchorIdPrefix=""
+                defaultZoom="automatic"
                 scrollsWindow
                 showUpload={false}
               />
