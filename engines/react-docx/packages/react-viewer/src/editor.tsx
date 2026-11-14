@@ -19366,6 +19366,9 @@ function runStyleToCss(
       : undefined,
     verticalAlign,
     display: borderStyle ? "inline-block" : undefined,
+    // An inline-block inherits the paragraph's first-line indent, which would
+    // push a bordered run's text out of its own box.
+    textIndent: borderStyle ? 0 : undefined,
     borderStyle,
     borderWidth: borderWidthPx ? `${borderWidthPx}px` : undefined,
     borderColor: borderStyle
