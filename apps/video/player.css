@@ -1,0 +1,210 @@
+/* The player: the stage fills the window like a film, on a dark surround, with one bar of controls floating at the
+   bottom. The bar sits above the Cool Computers Comment bar, which keeps the bottom edge. */
+
+:root {
+  --surround: #0d0d0f;
+  --glass: rgba(28, 28, 32, 0.72);
+  --glass-line: rgba(255, 255, 255, 0.1);
+  --on-glass: #f4f4f5;
+  --muted-on-glass: rgba(244, 244, 245, 0.62);
+  --rail: rgba(255, 255, 255, 0.22);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--surround);
+}
+
+/* The stage is drawn at 1280 by 720 and scaled to fit (player.js). */
+.stage {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: 1280px;
+  height: 720px;
+  overflow: hidden;
+  transform-origin: 50% 50%;
+}
+
+.camera {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+}
+
+/* Before the first play: one large button over the first frame. */
+.start {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--on-glass);
+  cursor: pointer;
+  transition: opacity 250ms var(--ease);
+}
+.start span {
+  display: grid;
+  place-items: center;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  background: var(--glass);
+  box-shadow: 0 0 0 1px var(--glass-line), 0 12px 40px rgba(0, 0, 0, 0.35);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  backdrop-filter: blur(20px) saturate(1.5);
+}
+.start svg {
+  width: 34px;
+  height: 34px;
+  margin-left: 4px;
+}
+.start.is-gone {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.controls {
+  position: fixed;
+  left: 50%;
+  bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  width: min(720px, calc(100vw - 32px));
+  height: 48px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 16px;
+  background: var(--glass);
+  box-shadow: 0 0 0 1px var(--glass-line), 0 12px 40px rgba(0, 0, 0, 0.35);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
+  color: var(--on-glass);
+  font: 500 13px/1 system-ui, -apple-system, sans-serif;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  transition: opacity 300ms var(--ease);
+}
+
+.controls button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border: 0;
+  border-radius: 10px;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background-color 150ms ease-out;
+}
+.controls button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.controls button:focus-visible,
+.controls [data-rail]:focus-visible,
+.start:focus-visible span {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.controls [data-time] {
+  flex: none;
+  min-width: 84px;
+  color: var(--muted-on-glass);
+}
+
+.controls [data-rail] {
+  position: relative;
+  flex: 1;
+  height: 36px;
+  cursor: pointer;
+  touch-action: none;
+  border-radius: 6px;
+}
+.controls [data-rail]::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 16px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--rail);
+}
+.controls [data-fill] {
+  position: absolute;
+  left: 0;
+  top: 16px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--on-glass);
+}
+.controls [data-thumb] {
+  position: absolute;
+  top: 12px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background: var(--on-glass);
+  transform: scale(0.75);
+  transition: transform 150ms var(--ease);
+}
+.controls [data-rail]:hover [data-thumb] {
+  transform: scale(1);
+}
+
+/* A comment's moment: a small amber dot above the rail. */
+.controls [data-dots] button {
+  position: absolute;
+  top: 3px;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  border-radius: 50%;
+  background: transparent;
+}
+.controls [data-dots] button::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: #f2a93b;
+  box-shadow: 0 0 0 1.5px rgba(28, 28, 32, 0.9);
+}
+
+/* Playing, with the pointer at rest: the controls and the pointer step out of the picture. */
+body.is-resting .controls {
+  opacity: 0;
+}
+body.is-resting {
+  cursor: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .start,
+  .controls,
+  .controls [data-thumb] {
+    transition: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .controls {
+    gap: 4px;
+  }
+  .controls [data-time] {
+    min-width: 0;
+  }
+}
