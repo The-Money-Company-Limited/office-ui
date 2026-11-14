@@ -11,19 +11,18 @@ see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 The document fills a framed editor with a small gap from the viewport edges.
 Its controls use a copy of RuntimeVM's light and dark appearance tokens, with
-glass surfaces on the XLSX, DOCX, and PDF toolbars. The workbook's own
+glass surfaces on the XLSX and PDF toolbars. The workbook's own
 appearance button persists the choice under RuntimeVM's
 `cool-computers-theme` key. There is no artifact header, logo, or wallpaper.
 
 | File | UI in this fork                                                               | Save path                 |
 | ---- | ----------------------------------------------------------------------------- | ------------------------- |
 | XLSX | Experimental spreadsheet editor, including chart selection and movement       | Automatic via page bridge |
-| DOCX | Experimental word processor                                                   | Automatic via page bridge |
 | PPTX | Presentation viewer only; this fork has no PPTX editor                        | Download original PPTX    |
 | PDF  | PDF editor for annotations, forms, signatures, redaction, and page operations | Automatic via page bridge |
 
-The PDF editor does not rewrite arbitrary existing page text. DOCX, XLSX, PDF,
-and HTML slide edits save through the injected `cool: "doc"` page bridge.
+The PDF editor does not rewrite arbitrary existing page text. XLSX, PDF, and
+HTML slide edits save through the injected `cool: "doc"` page bridge.
 Without an access response granting `canSave`, documents open in viewing mode.
 The XLSX editor switches to read-only above 5 MiB. The bundled PDFium WASM is
 served from the artifact itself; optional fonts and stamp resources may still
@@ -34,19 +33,18 @@ slide HTML files and `deck/deck.json` together; Download still offers ZIP and PP
 
 ## Engines
 
-The DOCX, XLSX, and PPTX forks live in `engines/react-docx`,
-`engines/react-xlsx`, and `engines/react-pptx`. They share the root pnpm 9.15.0
+The XLSX and PPTX forks live in `engines/react-xlsx` and
+`engines/react-pptx`. They share the root pnpm 9.15.0
 workspace and lockfile; v4 uses `workspace:*` dependencies. One root install
 and `pnpm build` build the engines in dependency order before the app.
 Their `dist` outputs are what this template bundles.
 
 See the root [development guide](../../../../README.md#development) for build-box
 commands, `git subtree pull`/`git subtree push`, and pnpm configuration decisions.
-Ordinary builds of all three engines reuse checked-in binaries and need no Rust.
+Ordinary builds of both engines reuse checked-in binaries and need no Rust.
 Explicit Rust/wasm rebuilds run on the build box, from the repository root:
 
 ```bash
-pnpm --filter @extend-ai/react-docx-wasm build:wasm
 pnpm --filter @extend-ai/react-pptx-wasm build:wasm
 (cd engines/react-xlsx && bash scripts/rebuild-duke-wasm.sh)
 ```
@@ -65,7 +63,7 @@ pnpm --filter v4 artifact-template:build
 pnpm --filter v4 artifact-template:stage /absolute/path/to/report.xlsx /absolute/path/to/new-release-directory
 ```
 
-The stage command accepts `.xlsx`, `.docx`, `.pptx`, `.pdf` and a deck folder. A
+The stage command accepts `.xlsx`, `.pptx`, `.pdf` and a deck folder. A
 spreadsheet, PDF or slides release is the template's TypeScript source, run in the browser
 with no build (see [Spreadsheet, PDF and slides releases are source](./ARCHITECTURE.md#spreadsheet-pdf-and-slides-releases-are-source));
 the other kinds are the Vite bundle. An omitted output directory stages

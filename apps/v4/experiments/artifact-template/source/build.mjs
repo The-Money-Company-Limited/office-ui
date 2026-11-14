@@ -92,9 +92,7 @@ const config = {
   prefixes: [["@/", served(v4) + "/"]],
 }
 const otherKinds = [
-  "@/components/extend/docx-editor",
   "@/components/extend/pptx-viewer",
-  "@extend-ai/react-docx/agent",
   ...Object.values(kinds).flatMap((other) => (other === own ? [] : other.lazy)),
 ]
 const left = otherKinds.map((spec) => resolve(spec, entry, config, () => false))

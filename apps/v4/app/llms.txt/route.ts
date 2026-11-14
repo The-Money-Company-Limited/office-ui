@@ -44,7 +44,7 @@ function buildLlmsTxt() {
 
   return `# ${siteConfig.name}
 
-> ${siteConfig.description} Extend UI is an MIT-licensed set of React and Tailwind components for PDF, DOCX, Excel, PowerPoint, and CSV viewers and editors, plus file upload, Finder-style file browsing, bounding box citations, layout blocks, e-signature, document splitting, and schema building. Components are installed as source through the shadcn registry under the \`@extend\` namespace.
+> ${siteConfig.description} Extend UI is an MIT-licensed set of React and Tailwind components for PDF, Excel, PowerPoint, and CSV viewers and editors, plus file upload, Finder-style file browsing, bounding box citations, layout blocks, e-signature, document splitting, and schema building. Components are installed as source through the shadcn registry under the \`@extend\` namespace.
 
 Every documentation page has a Markdown version at the same URL with \`.md\` appended. For example, ${absoluteUrl("/docs/components/pdf-viewer")} is available as Markdown at ${getMarkdownUrl("/docs/components/pdf-viewer")}. The links in the Documentation, Components, and Blocks sections below point at the Markdown versions.
 

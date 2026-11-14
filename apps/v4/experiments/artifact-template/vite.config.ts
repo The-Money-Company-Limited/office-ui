@@ -19,7 +19,6 @@ export default defineConfig({
           type: "asset",
           fileName: "template.json",
           source: templateJson([
-            "@extend-ai/react-docx",
             "@extend-ai/react-xlsx",
             "@extend-ai/react-pptx",
           ]),

@@ -132,12 +132,6 @@ const PdfEditorBlock = dynamic<BlockPreviewProps>(
   { loading: () => <BlockPreviewPlaceholder /> }
 )
 
-const DocxEditorBlock = dynamic<BlockPreviewProps>(
-  () =>
-    import("@/components/docx-editor-docs").then((mod) => mod.DocxEditorBlock),
-  { loading: () => <BlockPreviewPlaceholder /> }
-)
-
 const FileSystemFinderBlock = dynamic<BlockPreviewProps>(
   () =>
     import("@/components/file-system-docs").then(
@@ -153,7 +147,6 @@ const blockComponents = {
   "e-signature": ESignatureBlock,
   "document-splits": DocumentSplitsBlock,
   "excel-editor": XlsxEditorBlock,
-  "docx-editor-block": DocxEditorBlock,
   "pdf-editor-block": PdfEditorBlock,
   "file-system": FileSystemFinderBlock,
 } satisfies Record<PdfViewerBlockId, React.ComponentType>

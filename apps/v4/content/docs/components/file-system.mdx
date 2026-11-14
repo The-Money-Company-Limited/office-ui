@@ -102,9 +102,7 @@ A `ListObjectsV2` response maps directly onto the manifest:
 
 ## Thumbnails
 
-Like [File Thumbnail](/docs/components/file-thumbnail), the component never parses documents and has no renderer dependencies. Generate preview images with whichever stack you already use — EmbedPDF, `@extend-ai/react-docx`, `@extend-ai/react-xlsx`, or a server-side pipeline — then pass the result through `previewImageUrl`. Files without a preview fall back to a generic document tile, or to the node returned by `renderFilePreview`.
-
-One caveat for DOCX: `@extend-ai/react-docx` versions before 0.7.0 rasterize pages in a way that taints the canvas, blocking `toDataURL` export in the browser. On 0.7.0+ the demo generates DOCX thumbnails client-side like the PDFs; on older versions, render DOCX previews live via `renderFilePreview` or generate thumbnail images server-side.
+Like [File Thumbnail](/docs/components/file-thumbnail), the component never parses documents and has no renderer dependencies. Generate preview images with whichever stack you already use — EmbedPDF, `@extend-ai/react-xlsx`, `@extend-ai/react-pptx`, or a server-side pipeline — then pass the result through `previewImageUrl`. Files without a preview fall back to a generic document tile, or to the node returned by `renderFilePreview`.
 
 ## Lazy Loading
 
@@ -131,7 +129,7 @@ For large buckets, pass `hasChildren: true` on folder entries and provide `loadC
 - **Columns** — Miller columns with a preview-and-metadata pane for the selected file.
 - **Gallery** — a large preview with an information sidebar and a filmstrip of the current folder.
 
-Double-clicking a folder navigates into it. Double-clicking a file (in any view, including the list tree) opens the built-in viewer dialog — PDF, DOCX, PowerPoint (`.pptx`), and XLSX files open in their respective viewers, and images open in an image dialog; other file types open their resolved URL in a new tab. Pass `onFileOpen` to replace this behavior entirely. The registry item depends on the [PDF Viewer](/docs/components/pdf-viewer), [DOCX Viewer](/docs/components/docx-viewer), [PowerPoint Viewer](/docs/components/pptx-viewer), and [Excel Viewer](/docs/components/xlsx-viewer), so installing `@extend/file-system` brings the full preview experience.
+Double-clicking a folder navigates into it. Double-clicking a file (in any view, including the list tree) opens the built-in viewer dialog — PDF, PowerPoint (`.pptx`), and XLSX files open in their respective viewers, and images open in an image dialog; other file types open their resolved URL in a new tab. Pass `onFileOpen` to replace this behavior entirely. The registry item depends on the [PDF Viewer](/docs/components/pdf-viewer), [PowerPoint Viewer](/docs/components/pptx-viewer), and [Excel Viewer](/docs/components/xlsx-viewer), so installing `@extend/file-system` brings the full preview experience.
 
 The list view tree is derived from file paths, so lazy folders (`hasChildren` without loaded entries) appear there after their contents have been fetched — open them from the icon or column views first, or list them eagerly.
 
@@ -148,11 +146,11 @@ Finder-style shortcuts work everywhere in the component: <kbd>⌘↑</kbd> goes 
 
 When the component is narrower than 480px, the toolbar swaps the tabs view switcher for a compact select.
 
-The gallery view embeds the full viewers — PDF, DOCX, PowerPoint, and XLSX files render in their toolbar-less viewer (the XLSX sheet switcher stays), and images scale to fill the stage. While arrow keys are scrubbing the filmstrip the stage shows a spinner; the full viewer mounts once the selection settles, so holding an arrow key stays smooth.
+The gallery view embeds the full viewers — PDF, PowerPoint, and XLSX files render in their toolbar-less viewer (the XLSX sheet switcher stays), and images scale to fill the stage. While arrow keys are scrubbing the filmstrip the stage shows a spinner; the full viewer mounts once the selection settles, so holding an arrow key stays smooth.
 
 ### Multi-Page Thumbnails
 
-Pass `previewImageUrls` (an array of page thumbnails — page counts come from whichever renderer generates them, e.g. EmbedPDF, `@extend-ai/react-docx`, or `@extend-ai/react-xlsx`). Large thumbnails in the column preview show hover pager buttons to step through pages. `previewAspectRatio` on a file controls its thumbnail shape — e.g. natural ratios for images, landscape for spreadsheets.
+Pass `previewImageUrls` (an array of page thumbnails — page counts come from whichever renderer generates them, e.g. EmbedPDF, `@extend-ai/react-xlsx`, or `@extend-ai/react-pptx`). Large thumbnails in the column preview show hover pager buttons to step through pages. `previewAspectRatio` on a file controls its thumbnail shape — e.g. natural ratios for images, landscape for spreadsheets.
 
 For long documents, provide only the first page(s) eagerly plus `previewPageCount`, and implement `loadPreviewImageUrl(file, pageIndex)` — the pager renders the remaining pages on demand (the demo renders PDF pages lazily through the shared PDFium thumbnail utility).
 

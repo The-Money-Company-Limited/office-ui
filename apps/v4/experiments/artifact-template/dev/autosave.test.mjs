@@ -52,7 +52,7 @@ function setup(t) {
     serialize: () => ({
       files: [
         {
-          path: "document/test.docx",
+          path: "document/test.xlsx",
           bytes: new TextEncoder().encode(contents).buffer,
         },
       ],

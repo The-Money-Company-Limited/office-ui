@@ -17,15 +17,13 @@ import {
 } from "@/components/extend/file-system"
 import { FileSystemBlock } from "@/registry/new-york-v4/blocks/file-system-block"
 
-const DOCX_MIME_TYPE =
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 const XLSX_MIME_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 const PPTX_MIME_TYPE =
   "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 const THUMBNAIL_WIDTH = 360
 
-type DemoThumbnailKind = "docx" | "pdf" | "pptx" | "url" | "xlsx"
+type DemoThumbnailKind = "pdf" | "pptx" | "url" | "xlsx"
 
 type DemoSource = {
   contentType: string
@@ -66,17 +64,6 @@ const DEMO_SOURCES: DemoSource[] = [
     thumbnail: "pdf",
     updatedAt: "2026-04-05T21:56:00Z",
     url: withUiBasePath("/samples/loan-application.pdf"),
-  },
-  {
-    contentType: DOCX_MIME_TYPE,
-    createdAt: "2026-03-24T17:43:00Z",
-    path: "demo.docx",
-    size: 1311881,
-    // react-docx >= 0.7.0 rasterizes pages without tainting the canvas, so
-    // the thumbnail is generated client-side like the PDFs.
-    thumbnail: "docx",
-    updatedAt: "2026-03-24T17:43:00Z",
-    url: withUiBasePath("/samples/demo.docx"),
   },
   {
     contentType: XLSX_MIME_TYPE,
@@ -223,17 +210,9 @@ const AURORA_ITEMS = generateAuroraItems()
 // component's `loadPreviewImageUrl` as the pager reaches them.
 const EAGER_PAGE_THUMBNAILS = 2
 
-// The DOCX and XLSX generators are the only consumers of their viewer
+// The XLSX and PPTX generators are the only consumers of their viewer
 // engines here, so each lives in its own chunk that loads only when that
 // thumbnail kind actually needs to be generated.
-const DocxThumbnailUrlGenerator = dynamic(
-  () =>
-    import("@/components/file-system-docx-thumbnails").then(
-      (mod) => mod.DocxThumbnailUrlGenerator
-    ),
-  { ssr: false }
-)
-
 const XlsxThumbnailUrlGenerator = dynamic(
   () =>
     import("@/components/file-system-xlsx-thumbnails").then(
@@ -302,7 +281,7 @@ type DemoThumbnails = {
 
 // Generated data URLs survive remounts and route changes; without this every
 // FileSystem instance re-runs the full generator pipeline (PDF rasterization,
-// a hidden DOCX import + pagination, XLSX sheet paints).
+// XLSX sheet paints, PPTX slide renders).
 const demoThumbnailCache = new Map<string, DemoThumbnails>()
 
 export function useFileSystemDemoItems() {
@@ -376,17 +355,6 @@ export function useFileSystemDemoItems() {
       if (!pagePromise) {
         if (source.thumbnail === "pdf") {
           pagePromise = renderPdfPageThumbnail(source.url, pageIndex)
-        } else if (source.thumbnail === "docx") {
-          pagePromise = import("@/components/file-system-docx-thumbnails").then(
-            (module) =>
-              module
-                .renderDocxThumbnailUrl({
-                  fileName: source.path.split("/").pop() ?? source.path,
-                  pageIndex,
-                  url: source.url,
-                })
-                .then((thumbnail) => thumbnail?.url ?? null)
-          )
         } else if (source.thumbnail === "pptx") {
           pagePromise = import("@/components/file-system-pptx-thumbnails").then(
             (module) =>
@@ -411,18 +379,6 @@ export function useFileSystemDemoItems() {
       ).map((source) => (
         <PdfThumbnailUrlGenerator
           key={source.path}
-          url={source.url}
-          onUrls={(dataUrls, pageCount) =>
-            setPathThumbnails(source.path, dataUrls, pageCount)
-          }
-        />
-      ))}
-      {DEMO_SOURCES.filter(
-        (source) => source.thumbnail === "docx" && !thumbnails[source.path]
-      ).map((source) => (
-        <DocxThumbnailUrlGenerator
-          key={source.path}
-          fileName={source.path.split("/").pop() ?? source.path}
           url={source.url}
           onUrls={(dataUrls, pageCount) =>
             setPathThumbnails(source.path, dataUrls, pageCount)

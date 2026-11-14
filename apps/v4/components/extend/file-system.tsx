@@ -169,11 +169,6 @@ const LazyPDFViewer = React.lazy(() =>
     default: mod.PDFViewer,
   }))
 )
-const LazyDocxViewerPreview = React.lazy(() =>
-  import("@/components/extend/docx-viewer").then((mod) => ({
-    default: mod.DocxViewerPreview,
-  }))
-)
 const LazyPptxViewerPreview = React.lazy(() =>
   import("@/components/extend/pptx-viewer").then((mod) => ({
     default: mod.PptxViewerPreview,
@@ -257,7 +252,7 @@ export type FileSystemProps = {
   onSelectionChange?: (item: FileSystemItem | null) => void
   /**
    * Called on file open (double-click), replacing the built-in behavior. By
-   * default PDF, DOCX, PPTX, XLSX, and image files open in a viewer dialog and
+   * default PDF, PPTX, XLSX, and image files open in a viewer dialog and
    * other files open their resolved URL in a new tab.
    */
   onFileOpen?: (file: FileSystemFileItem, url: string | null) => void
@@ -506,7 +501,7 @@ function fileTypeFilterGroup(mime: string): FileTypeFilterGroup {
   return "Archives & binary"
 }
 
-export type FileSystemViewerKind = "docx" | "image" | "pdf" | "pptx" | "xlsx"
+export type FileSystemViewerKind = "image" | "pdf" | "pptx" | "xlsx"
 
 function viewerKindForFile(
   file: FileSystemFileItem
@@ -523,7 +518,6 @@ function viewerKindForFile(
   const name = (file.name ?? file.path).toLowerCase()
 
   if (name.endsWith(".pdf")) return "pdf"
-  if (name.endsWith(".docx")) return "docx"
   if (name.endsWith(".pptx")) return "pptx"
   if (name.endsWith(".xlsx")) return "xlsx"
   if (/\.(avif|gif|jpe?g|png|svg|webp)$/.test(name)) return "image"
@@ -531,10 +525,9 @@ function viewerKindForFile(
   return null
 }
 
-// PDF and Word pages want height; presentations and spreadsheets want width;
+// PDF pages want height; presentations and spreadsheets want width;
 // images get a roomy but contained frame.
 const VIEWER_DIALOG_CLASSNAMES: Record<FileSystemViewerKind, string> = {
-  docx: "h-[88vh] w-[min(96vw,68rem)] max-w-none",
   image: "max-h-[88vh] w-fit max-w-[min(96vw,64rem)]",
   pdf: "h-[88vh] w-[min(96vw,68rem)] max-w-none",
   pptx: "h-[88vh] w-[min(96vw,84rem)] max-w-none",
@@ -5043,27 +5036,6 @@ function FileSystemGalleryStage({
               isDialog && "min-h-0 overflow-hidden rounded-2xl"
             )}
             fileName={file.name}
-            showToolbar={isDialog}
-            showUpload={false}
-            toolbarActions={toolbarActions}
-          />
-        </React.Suspense>
-      </div>
-    )
-  }
-  if (viewerKind === "docx" && url) {
-    return (
-      <div className={viewerFrameClassName}>
-        <React.Suspense fallback={<FileSystemViewerLoading />}>
-          <LazyDocxViewerPreview
-            src={url}
-            fileName={file.name}
-            isDark={isDark}
-            className={cn(
-              "h-full min-h-0",
-              isDialog && "overflow-hidden rounded-2xl"
-            )}
-            onIsDarkChange={setIsDark}
             showToolbar={isDialog}
             showUpload={false}
             toolbarActions={toolbarActions}

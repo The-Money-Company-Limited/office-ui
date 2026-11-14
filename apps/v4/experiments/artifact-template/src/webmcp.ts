@@ -18,7 +18,7 @@ type Tool = {
   execute: (input: Record<string, unknown>) => Promise<unknown>
 }
 
-export type DocumentKind = "docx" | "xlsx" | "pptx" | "pdf" | "slides"
+export type DocumentKind = "xlsx" | "pptx" | "pdf" | "slides"
 
 const annotations = { readOnlyHint: true, untrustedContentHint: true }
 const noInput = { type: "object", properties: {} }
@@ -28,79 +28,6 @@ const optionalString = (input: Record<string, unknown>, name: string) => {
   if (value !== undefined && typeof value !== "string")
     throw new Error(`${name} must be a string.`)
   return value
-}
-
-function wordTools(bytes: () => Promise<Uint8Array>): Tool[] {
-  const open = async () =>
-    (await import("@extend-ai/react-docx/agent")).openDocx(await bytes())
-  return [
-    {
-      name: "doc_read",
-      title: "Read the document",
-      description:
-        "Returns the document as it is on the page now: the body's paragraphs in order, each with its id, body index and text; the body's tables, each with its body index and its rows of cell text; and the headers and footers, each with the pages it is on (default, first, even).",
-      inputSchema: noInput,
-      annotations,
-      execute: async () => {
-        const doc = await open()
-        return {
-          paragraphs: doc.paragraphs(),
-          tables: doc.tables(),
-          headersFooters: doc.headersFooters(),
-        }
-      },
-    },
-    {
-      name: "doc_find",
-      title: "Find text in the document",
-      description:
-        "Finds the text everywhere in the document; matching is exact and case-sensitive. Matches in body paragraphs come back as a paragraph id with start and end offsets into its text; matches in tables as the table's body index with the cell's row and column; matches in headers and footers as `part`, the index into doc_read's headersFooters.",
-      inputSchema: {
-        type: "object",
-        properties: { text: { type: "string", minLength: 1 } },
-        required: ["text"],
-      },
-      annotations,
-      execute: async (input) => {
-        const text = optionalString(input, "text")
-        if (!text) throw new Error("text must be a non-empty string.")
-        const doc = await open()
-        return {
-          matches: doc.find(text),
-          tableCells: doc.tables().flatMap(({ index, rows }) =>
-            rows.flatMap((cells, row) =>
-              cells.flatMap((cell, column) =>
-                cell.includes(text) ? [{ table: index, row, column }] : []
-              )
-            )
-          ),
-          headersFooters: doc
-            .headersFooters()
-            .flatMap(({ kind, pages, text: partText }, part) =>
-              partText.includes(text) ? [{ part, kind, pages }] : []
-            ),
-        }
-      },
-    },
-    {
-      name: "doc_comments",
-      title: "Read the document's comments",
-      description:
-        "Lists the Word comments saved in the document, replies included: each with its id, author, date, text, whether it is resolved, the comment it replies to, and, for a comment on a body paragraph, that paragraph's id and the text it covers. Comments left on the page itself are not included.",
-      inputSchema: noInput,
-      annotations,
-      execute: async () => ({ comments: (await open()).comments() }),
-    },
-    {
-      name: "doc_revisions",
-      title: "Read the document's tracked changes",
-      description:
-        "Lists the tracked changes (suggestions) in the body: each with its id, kind (insertion, deletion, or a suggested paragraph break or join), author, date, text and paragraph id. `unlisted` names the paragraphs and tables holding tracked changes this list cannot show, such as moves and changes inside tables.",
-      inputSchema: noInput,
-      annotations,
-      execute: async () => (await open()).revisions(),
-    },
-  ]
 }
 
 function sheetTools(bytes: () => Promise<Uint8Array>): Tool[] {
@@ -153,7 +80,7 @@ function sheetTools(bytes: () => Promise<Uint8Array>): Tool[] {
 
 const toolsByKind: Partial<
   Record<DocumentKind, (bytes: () => Promise<Uint8Array>) => Tool[]>
-> = { docx: wordTools, xlsx: sheetTools }
+> = { xlsx: sheetTools }
 
 // Registers the tools for this kind of document and returns their unregistration.
 export function registerDocumentTools(

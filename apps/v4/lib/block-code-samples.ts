@@ -30,7 +30,6 @@ export const blockIds = [
   "e-signature",
   "document-splits",
   "excel-editor",
-  "docx-editor-block",
   "pdf-editor-block",
   "file-system",
 ]
@@ -54,15 +53,8 @@ const blockCodeDependencies: Record<string, string[]> = {
     "pdf-viewer",
   ],
   "excel-editor": ["xlsx-editor"],
-  "docx-editor-block": ["docx-editor", "file-thumbnail"],
   "pdf-editor-block": ["pdf-editor", "document-viewer-sidebar", "color-picker"],
-  "file-system": [
-    "file-system",
-    "file-thumbnail",
-    "pdf-viewer",
-    "docx-viewer",
-    "xlsx-viewer",
-  ],
+  "file-system": ["file-system", "file-thumbnail", "pdf-viewer", "xlsx-viewer"],
 }
 
 const appRoot = process.cwd()

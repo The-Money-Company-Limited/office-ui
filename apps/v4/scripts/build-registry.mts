@@ -83,11 +83,6 @@ for (const family of ["base", "radix"] as const) {
           ),
           "utf8"
         )
-      if (item.name === "document-preview-card" && family === "radix")
-        content = await readFile(
-          path.join(appRoot, "registry/bases/radix/document-preview-card.tsx"),
-          "utf8"
-        )
       const isDocumentSource =
         file.target?.startsWith("@components/extend/") ||
         file.target?.startsWith("@components/blocks/")
@@ -145,10 +140,6 @@ for (const family of ["base", "radix"] as const) {
         }
       }
       files.push({ ...file, content })
-    }
-    if (family === "radix" && item.name === "document-preview-card") {
-      for (const dependency of dependencies)
-        if (dependency.startsWith("@base-ui/")) dependencies.delete(dependency)
     }
     const result = {
       ...item,

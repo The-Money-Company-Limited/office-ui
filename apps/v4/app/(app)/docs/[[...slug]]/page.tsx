@@ -14,7 +14,6 @@ import { ExtendDeployCta } from "@/components/extend-deploy-cta"
 
 export const revalidate = false
 export const dynamic = "force-static"
-export const dynamicParams = false
 
 export function generateStaticParams() {
   return source.generateParams()

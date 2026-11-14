@@ -37,8 +37,6 @@ import {
   DocumentViewerSidebarDemo,
   DocumentViewerSidebarSource,
 } from "@/components/document-viewer-sidebar-docs"
-import { DocxEditorDemo, DocxEditorSource } from "@/components/docx-editor-docs"
-import { DocxViewerDemo, DocxViewerSource } from "@/components/docx-viewer-docs"
 import { ESignatureDemo, ESignatureSource } from "@/components/e-signature-docs"
 import { FileSystemDemo } from "@/components/file-system-docs"
 import { FileSystemSource } from "@/components/file-system-source-code"
@@ -389,10 +387,6 @@ export const mdxComponents = {
   DocumentViewerSidebarSource,
   DocumentSplitsDemo,
   DocumentSplitsSource,
-  DocxEditorDemo,
-  DocxEditorSource,
-  DocxViewerDemo,
-  DocxViewerSource,
   ESignatureDemo,
   ESignatureSource,
   FileSystemDemo,

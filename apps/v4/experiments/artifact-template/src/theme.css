@@ -202,8 +202,7 @@ html:has(.artifact-slides) {
   height: 100%;
 }
 
-.artifact-xlsx .xlsx-editor-toolbar,
-.artifact-docx .docx-editor-toolbar {
+.artifact-xlsx .xlsx-editor-toolbar {
   position: relative;
   z-index: 1;
   background: transparent;
@@ -217,8 +216,6 @@ html:has(.artifact-slides) {
 .artifact-xlsx .xlsx-editor-ribbon,
 .artifact-xlsx .xlsx-editor-formula,
 .artifact-pptx [data-slot="pptx-viewer-toolbar"],
-.artifact-docx .docx-editor-header,
-.artifact-docx .docx-editor-ribbon,
 .artifact-pdf [data-slot="pdf-editor-toolbar"],
 .artifact-pdf [data-slot="pdf-editor-ribbon"] {
   position: relative;
@@ -232,14 +229,12 @@ html:has(.artifact-slides) {
   -webkit-backdrop-filter: var(--surface-blur);
 }
 
-.artifact-xlsx .xlsx-editor-header,
-.artifact-docx .docx-editor-header {
+.artifact-xlsx .xlsx-editor-header {
   min-height: 48px;
 }
 
 .artifact-xlsx .xlsx-editor-header [data-slot="button"],
 .artifact-xlsx .xlsx-editor-header .xlsx-editor-file-action,
-.artifact-docx .docx-editor-header [data-slot="button"],
 .artifact-pptx [data-slot="pptx-viewer-toolbar"] [data-slot="button"],
 .artifact-pdf [data-slot="pdf-editor-toolbar"] [data-slot="button"] {
   background: var(--raised-fill);
@@ -248,7 +243,6 @@ html:has(.artifact-slides) {
 
 .artifact-xlsx .xlsx-editor-header [data-slot="button"]:hover,
 .artifact-xlsx .xlsx-editor-header .xlsx-editor-file-action:hover,
-.artifact-docx .docx-editor-header [data-slot="button"]:hover,
 .artifact-pptx [data-slot="pptx-viewer-toolbar"] [data-slot="button"]:hover,
 .artifact-pdf [data-slot="pdf-editor-toolbar"] [data-slot="button"]:hover {
   background: var(--raised-fill-hover);
@@ -256,7 +250,6 @@ html:has(.artifact-slides) {
 
 .artifact-xlsx .xlsx-editor-header [data-slot="button"]:active,
 .artifact-xlsx .xlsx-editor-header .xlsx-editor-file-action:active,
-.artifact-docx .docx-editor-header [data-slot="button"]:active,
 .artifact-pptx [data-slot="pptx-viewer-toolbar"] [data-slot="button"]:active,
 .artifact-pdf [data-slot="pdf-editor-toolbar"] [data-slot="button"]:active {
   background: var(--raised-fill-pressed);

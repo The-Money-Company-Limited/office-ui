@@ -46,8 +46,6 @@ const types = {
   ".css": "text/css; charset=utf-8",
   ".json": "application/json",
   ".wasm": "application/wasm",
-  ".docx":
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   ".pptx":
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",

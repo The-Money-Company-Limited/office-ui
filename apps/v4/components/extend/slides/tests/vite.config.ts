@@ -9,7 +9,6 @@ export default mergeConfig(template, {
     outDir: fileURLToPath(new URL("./results/bundle", import.meta.url)),
     rollupOptions: {
       external: [
-        "@/components/extend/docx-editor",
         "@/components/extend/pptx-viewer",
         "@/components/extend/pdf-editor",
         "./xlsx-artifact",
