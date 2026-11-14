@@ -39779,6 +39779,15 @@ export function DocxEditorViewer({
   React.useLayoutEffect(() => {
     setMeasuredParagraphOuterHeightsPxByBlockId(new Map());
   }, [editor.documentLoadNonce]);
+  // The prune below reads the latest measurements without re-running on them:
+  // stale block ids appear only when the model changes.
+  const measuredParagraphOuterHeightsRef = React.useRef(
+    measuredParagraphOuterHeightsPxByBlockId
+  );
+  React.useLayoutEffect(() => {
+    measuredParagraphOuterHeightsRef.current =
+      measuredParagraphOuterHeightsPxByBlockId;
+  }, [measuredParagraphOuterHeightsPxByBlockId]);
   React.useEffect(() => {
     // Prune measurements for blocks no longer in the document; surviving
     // blocks keep their measured heights across structural edits. A typed
@@ -39790,7 +39799,7 @@ export function DocxEditorViewer({
       }
     }
     const isGone = (blockId: string): boolean => !liveBlockIds.has(blockId);
-    if (![...measuredParagraphOuterHeightsPxByBlockId.keys()].some(isGone)) {
+    if (![...measuredParagraphOuterHeightsRef.current.keys()].some(isGone)) {
       return;
     }
     setMeasuredParagraphOuterHeightsPxByBlockId((current) => {
@@ -39800,7 +39809,7 @@ export function DocxEditorViewer({
       });
       return next;
     });
-  }, [editor.model.nodes, measuredParagraphOuterHeightsPxByBlockId]);
+  }, [editor.model.nodes]);
 
   const schedulePaginationMeasurementResume = React.useCallback(
     (delayMs?: number): void => {
