@@ -15,7 +15,7 @@ The [Vite config](./vite.config.ts) emits relative URLs (`base: "./"`), so the
 same build can be copied into separate releases. The app
 [loads `artifact.json`](./src/main.tsx) at startup, selects the editor by
 `kind`, then loads the document from `./document/<filename>`. Editor modules
-are lazy loaded by file type; the release still includes all three.
+are lazy loaded by kind; the release still includes all of them.
 
 | Format | Browser component                                                                     | Current capability                                                                                 |
 | ------ | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
