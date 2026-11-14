@@ -237,10 +237,10 @@ await run("polish header and download menu", async (page) => {
   assert.equal((await header.innerText()).includes("deck.json"), false)
   assert.equal(
     await header.locator("svg").count(),
-    3,
-    "file, theme and download icons"
+    5,
+    "file, undo, redo, theme and download icons"
   )
-  assert.equal(await header.getByRole("button").count(), 3)
+  assert.equal(await header.getByRole("button").count(), 5)
   assert.equal(
     await page.getByText("Click to select", { exact: false }).count(),
     0

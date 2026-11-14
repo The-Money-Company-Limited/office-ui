@@ -428,7 +428,7 @@ export function SlideCanvas({
                   ? {
                       position: "fixed",
                       right: 0,
-                      top: 108,
+                      top: 60,
                       bottom: 0,
                       width: chartLayout.width,
                     }
