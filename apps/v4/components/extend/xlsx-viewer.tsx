@@ -1173,12 +1173,37 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
   const previewOpenDelayMs = 500
 
   // The active tab is always in view, including a sheet just added at the end.
+  // Only the strip scrolls: scrollIntoView would scroll the page as well.
   React.useEffect(() => {
-    itemRefs.current[activeSheetIndex]?.scrollIntoView({
-      block: "nearest",
-      inline: "nearest",
-    })
+    const strip = scrollRef.current
+    const item = itemRefs.current[activeSheetIndex]
+    if (!strip || !item) return
+    const stripRect = strip.getBoundingClientRect()
+    const itemRect = item.getBoundingClientRect()
+    if (itemRect.left < stripRect.left) {
+      strip.scrollLeft -= stripRect.left - itemRect.left
+    } else if (itemRect.right > stripRect.right) {
+      strip.scrollLeft += itemRect.right - stripRect.right
+    }
   }, [activeSheetIndex, sheets.length])
+
+  // A wheel or a vertical trackpad swipe over the tabs scrolls them sideways,
+  // momentum included; a sideways swipe scrolls them natively.
+  React.useEffect(() => {
+    const strip = scrollRef.current
+    if (!strip) return
+    const handleWheel = (event: WheelEvent) => {
+      if (
+        Math.abs(event.deltaY) <= Math.abs(event.deltaX) ||
+        strip.scrollWidth <= strip.clientWidth
+      )
+        return
+      event.preventDefault()
+      strip.scrollLeft += event.deltaY
+    }
+    strip.addEventListener("wheel", handleWheel, { passive: false })
+    return () => strip.removeEventListener("wheel", handleWheel)
+  }, [sheets.length])
 
   const clearOpenTimeout = React.useCallback(() => {
     if (openTimeoutRef.current) {
@@ -1415,6 +1440,7 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
       >
         <ScrollArea
           orientation="horizontal"
+          scrollFade
           className="h-full w-full"
           viewportClassName="overflow-y-hidden"
           viewportRef={scrollRef}
