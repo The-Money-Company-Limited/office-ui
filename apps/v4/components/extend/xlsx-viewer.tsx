@@ -1192,12 +1192,14 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
   React.useEffect(() => {
     const strip = scrollRef.current
     if (!strip) return
+    // At the end it would scroll toward, the strip lets the page scroll instead.
     const handleWheel = (event: WheelEvent) => {
-      if (
-        Math.abs(event.deltaY) <= Math.abs(event.deltaX) ||
-        strip.scrollWidth <= strip.clientWidth
-      )
-        return
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+      const canMove =
+        event.deltaY < 0
+          ? strip.scrollLeft > 0
+          : strip.scrollLeft < strip.scrollWidth - strip.clientWidth - 1
+      if (!canMove) return
       event.preventDefault()
       strip.scrollLeft += event.deltaY
     }
