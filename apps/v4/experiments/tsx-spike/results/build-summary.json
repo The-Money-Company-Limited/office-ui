@@ -1,0 +1,66 @@
+{
+ "sourceFiles": 70,
+ "sourceLines": 61413,
+ "sourceBytes": 2248574,
+ "servedFiles": 83,
+ "bareSpecifiers": [
+  "@base-ui/react/input",
+  "@base-ui/react/menu",
+  "@base-ui/react/merge-props",
+  "@base-ui/react/popover",
+  "@base-ui/react/scroll-area",
+  "@base-ui/react/select",
+  "@base-ui/react/separator",
+  "@base-ui/react/tabs",
+  "@base-ui/react/toggle",
+  "@base-ui/react/toggle-group",
+  "@base-ui/react/tooltip",
+  "@base-ui/react/use-render",
+  "@hugeicons/core-free-icons",
+  "@hugeicons/react",
+  "@tanstack/react-virtual",
+  "class-variance-authority",
+  "clsx",
+  "d3-geo",
+  "d3-hierarchy",
+  "d3-scale",
+  "d3-shape",
+  "fflate",
+  "react",
+  "react-dom",
+  "react-dom/client",
+  "react/jsx-runtime",
+  "regl",
+  "tailwind-merge",
+  "topojson-client",
+  "us-atlas/counties-albers-10m.json",
+  "world-atlas/countries-50m.json"
+ ],
+ "vendorSw": {
+  "count": 82,
+  "total": 4261774
+ },
+ "optionbSw": {
+  "count": 172,
+  "total": 11806788
+ },
+ "optionb": {
+  "count": 100,
+  "total": 11817972
+ },
+ "vendorFile": "vendor/vendor-3f03acf76e.js",
+ "compilerFile": "vendor/compiler-79ad2482c8.js",
+ "workerVendorFile": "vendor/vendor-worker-ee24ff656f.js",
+ "workerModules": 10,
+ "workerSpecifiers": [
+  "fflate"
+ ],
+ "baseline": {
+  "count": 44,
+  "total": 21678760
+ },
+ "baselineAssets": {
+  "count": 39,
+  "total": 21644436
+ }
+}

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document artifact</title>
+    <script>
+      try {
+        const theme =
+          localStorage.getItem("cool-computers-theme") === "light"
+            ? "light"
+            : "dark"
+        document.documentElement.classList.toggle("dark", theme === "dark")
+        document.documentElement.style.colorScheme = theme
+      } catch {
+        document.documentElement.classList.add("dark")
+        document.documentElement.style.colorScheme = "dark"
+      }
+    </script>
+    <link rel="stylesheet" href="./vendor/app.css" data-app-css />
+  </head>
+  <body class="artifact-page">
+    <div id="root"></div>
+    <script type="module">
+      // The loader: the service worker turns src/**/*.tsx into JS on request.
+      performance.mark("loader")
+      const sw = navigator.serviceWorker
+      await sw.register("./sw.js", { scope: "./" })
+      if (!sw.controller)
+        await new Promise((done) =>
+          sw.addEventListener("controllerchange", done, { once: true })
+        )
+      performance.mark("controlled")
+      await import("./src/apps/v4/experiments/artifact-template/src/main.tsx")
+      performance.mark("main-evaluated")
+
+    </script>
+  </body>
+</html>

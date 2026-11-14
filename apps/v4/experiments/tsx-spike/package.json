@@ -1,0 +1,11 @@
+{
+  "name": "tsx-spike",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "es-module-lexer": "1.7.0",
+    "esbuild": "0.25.12",
+    "esbuild-wasm": "0.25.12",
+    "sucrase": "3.35.0"
+  }
+}

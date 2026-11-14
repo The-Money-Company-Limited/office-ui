@@ -1,0 +1,1077 @@
+{
+ "results": {
+  "baseline/public": {
+   "cold": {
+    "ms": 1673,
+    "bytes": 2933472,
+    "requests": 15,
+    "notModified": 0,
+    "all": [
+     1735,
+     1673,
+     1562
+    ],
+    "marks": [
+     {},
+     {},
+     {}
+    ],
+    "serviceWorker": [
+     null,
+     null,
+     null
+    ],
+    "loader": [
+     null,
+     null,
+     null
+    ]
+   },
+   "warm": {
+    "ms": 1096,
+    "bytes": 69,
+    "requests": 15,
+    "notModified": 14,
+    "all": [
+     1018,
+     1220,
+     1096
+    ],
+    "marks": [
+     {},
+     {},
+     {}
+    ],
+    "serviceWorker": [
+     null,
+     null,
+     null
+    ],
+    "loader": [
+     null,
+     null,
+     null
+    ]
+   }
+  },
+  "baseline/private": {
+   "cold": {
+    "ms": 1357,
+    "bytes": 2933472,
+    "requests": 15,
+    "notModified": 0,
+    "all": [
+     1592,
+     1357,
+     1205
+    ],
+    "marks": [
+     {},
+     {},
+     {}
+    ],
+    "serviceWorker": [
+     null,
+     null,
+     null
+    ],
+    "loader": [
+     null,
+     null,
+     null
+    ]
+   },
+   "warm": {
+    "ms": 1111,
+    "bytes": 2933472,
+    "requests": 15,
+    "notModified": 0,
+    "all": [
+     1111,
+     1189,
+     1004
+    ],
+    "marks": [
+     {},
+     {},
+     {}
+    ],
+    "serviceWorker": [
+     null,
+     null,
+     null
+    ],
+    "loader": [
+     null,
+     null,
+     null
+    ]
+   }
+  },
+  "optionb-sw/public": {
+   "cold": {
+    "ms": 2850,
+    "bytes": 4884815,
+    "requests": 151,
+    "notModified": 0,
+    "all": [
+     2850,
+     2688,
+     2956
+    ],
+    "marks": [
+     {
+      "loader": 48,
+      "controlled": 133,
+      "main-evaluated": 519
+     },
+     {
+      "loader": 68,
+      "controlled": 143,
+      "main-evaluated": 568
+     },
+     {
+      "loader": 51,
+      "controlled": 161,
+      "main-evaluated": 536
+     }
+    ],
+    "serviceWorker": [
+     {
+      "compiled": 68,
+      "cached": 0,
+      "compileMs": 794.5999999903142,
+      "doneAt": 2087
+     },
+     {
+      "compiled": 68,
+      "cached": 0,
+      "compileMs": 802.5999999940395,
+      "doneAt": 2039
+     },
+     {
+      "compiled": 68,
+      "cached": 0,
+      "compileMs": 1035.0000000149012,
+      "doneAt": 2294
+     }
+    ],
+    "loader": [
+     null,
+     null,
+     null
+    ]
+   },
+   "warm": {
+    "ms": 1778,
+    "bytes": 142452,
+    "requests": 151,
+    "notModified": 148,
+    "all": [
+     1908,
+     1778,
+     1240
+    ],
+    "marks": [
+     {
+      "loader": 190,
+      "controlled": 196,
+      "main-evaluated": 433
+     },
+     {
+      "loader": 91,
+      "controlled": 99,
+      "main-evaluated": 288
+     },
+     {
+      "loader": 90,
+      "controlled": 101,
+      "main-evaluated": 242
+     }
+    ],
+    "serviceWorker": [
+     {
+      "compiled": 0,
+      "cached": 68,
+      "compileMs": 0,
+      "doneAt": 1398
+     },
+     {
+      "compiled": 0,
+      "cached": 68,
+      "compileMs": 0,
+      "doneAt": 1386
+     },
+     {
+      "compiled": 0,
+      "cached": 68,
+      "compileMs": 0,
+      "doneAt": 864
+     }
+    ],
+    "loader": [
+     null,
+     null,
+     null
+    ]
+   }
+  },
+  "optionb-sw/private": {
+   "cold": {
+    "ms": 2838,
+    "bytes": 4884815,
+    "requests": 151,
+    "notModified": 0,
+    "all": [
+     2838,
+     2740,
+     3715
+    ],
+    "marks": [
+     {
+      "loader": 41,
+      "controlled": 106,
+      "main-evaluated": 448
+     },
+     {
+      "loader": 55,
+      "controlled": 139,
+      "main-evaluated": 605
+     },
+     {
+      "loader": 51,
+      "controlled": 127,
+      "main-evaluated": 662
+     }
+    ],
+    "serviceWorker": [
+     {
+      "compiled": 68,
+      "cached": 0,
+      "compileMs": 1065.6000000089407,
+      "doneAt": 2224
+     },
+     {
+      "compiled": 68,
+      "cached": 0,
+      "compileMs": 816.5000000111759,
+      "doneAt": 2088
+     },
+     {
+      "compiled": 68,
+      "cached": 0,
+      "compileMs": 1116.8000000044703,
+      "doneAt": 2956
+     }
+    ],
+    "loader": [
+     null,
+     null,
+     null
+    ]
+   },
+   "warm": {
+    "ms": 1355,
+    "bytes": 232527,
+    "requests": 151,
+    "notModified": 145,
+    "all": [
+     1355,
+     1681,
+     1279
+    ],
+    "marks": [
+     {
+      "loader": 76,
+      "controlled": 83,
+      "main-evaluated": 213
+     },
+     {
+      "loader": 161,
+      "controlled": 181,
+      "main-evaluated": 491
+     },
+     {
+      "loader": 68,
+      "controlled": 75,
+      "main-evaluated": 197
+     }
+    ],
+    "serviceWorker": [
+     {
+      "compiled": 0,
+      "cached": 68,
+      "compileMs": 0,
+      "doneAt": 900
+     },
+     {
+      "compiled": 0,
+      "cached": 68,
+      "compileMs": 0,
+      "doneAt": 1278
+     },
+     {
+      "compiled": 0,
+      "cached": 68,
+      "compileMs": 0,
+      "doneAt": 918
+     }
+    ],
+    "loader": [
+     null,
+     null,
+     null
+    ]
+   }
+  },
+  "optionb/public": {
+   "cold": {
+    "ms": 2928,
+    "bytes": 4918611,
+    "requests": 81,
+    "notModified": 0,
+    "all": [
+     2928,
+     3012,
+     2616
+    ],
+    "marks": [
+     {
+      "loader": 53,
+      "revalidated": 327,
+      "bundled": 1297,
+      "scripts-ready": 1560,
+      "main-evaluated": 1563
+     },
+     {
+      "loader": 51,
+      "revalidated": 284,
+      "bundled": 1338,
+      "scripts-ready": 1823,
+      "main-evaluated": 1827
+     },
+     {
+      "loader": 82,
+      "revalidated": 386,
+      "bundled": 1217,
+      "scripts-ready": 1476,
+      "main-evaluated": 1480
+     }
+    ],
+    "serviceWorker": [
+     null,
+     null,
+     null
+    ],
+    "loader": [
+     {
+      "compiled": 71,
+      "compileMs": 763,
+      "changed": [
+       "src/apps/v4/components/extend/toolbar-overflow.tsx",
+       "src/apps/v4/components/extend/xlsx-editor.tsx",
+       "src/apps/v4/components/extend/xlsx-regional-format.tsx",
+       "src/apps/v4/components/extend/xlsx-viewer.tsx",
+       "src/apps/v4/components/icon-placeholder.tsx",
+       "src/apps/v4/components/ui/button.tsx",
+       "src/apps/v4/components/ui/color-picker.tsx",
+       "src/apps/v4/components/ui/dropdown-menu.tsx",
+       "src/apps/v4/components/ui/group.tsx",
+       "src/apps/v4/components/ui/input.tsx",
+       "src/apps/v4/components/ui/popover.tsx",
+       "src/apps/v4/components/ui/scroll-area.tsx",
+       "src/apps/v4/components/ui/select.tsx",
+       "src/apps/v4/components/ui/separator.tsx",
+       "src/apps/v4/components/ui/spinner.tsx",
+       "src/apps/v4/components/ui/tabs.tsx",
+       "src/apps/v4/components/ui/toggle.tsx",
+       "src/apps/v4/components/ui/tooltip.tsx",
+       "src/apps/v4/experiments/artifact-template/src/autosave-context.tsx",
+       "src/apps/v4/experiments/artifact-template/src/autosave.ts",
+       "src/apps/v4/experiments/artifact-template/src/main.tsx",
+       "src/apps/v4/experiments/artifact-template/src/webmcp.ts",
+       "src/apps/v4/experiments/artifact-template/src/xlsx-artifact.tsx",
+       "src/apps/v4/lib/color-picker-utils.ts",
+       "src/apps/v4/lib/config.ts",
+       "src/apps/v4/lib/utils.ts",
+       "src/apps/v4/registry/new-york-v4/ui/dropdown-menu.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/input.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/popover.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/select.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/separator.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/spinner.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/tabs.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/tooltip.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/CellInput.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaAssist.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaEditing.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaInput.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/XlsxViewer.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/agent.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/builtin-table-styles.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-anchors.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-history.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-text-clip.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/chart-renderer.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/charts.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/clipboard-html.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/colors.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/comments.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/controller.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/formula-assist.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/formula-functions.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/images.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/index.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/range-highlight.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/range-reference.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/safe-calculate.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/scroll-display-limit.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/scroll-viewport.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/selection-tools.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/structural-edits.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/surface-regl.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/user-entry.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/viewer-palette.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/wasm.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/workbook-save.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/worker-client.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/worksheet-batch.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/xlsx-worker.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/zip-entry-names.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/vendor/sheets-wasm/duke_sheets_wasm.js"
+      ],
+      "bundle": "rebuilt",
+      "css": "shipped"
+     },
+     {
+      "compiled": 71,
+      "compileMs": 813,
+      "changed": [
+       "src/apps/v4/components/extend/toolbar-overflow.tsx",
+       "src/apps/v4/components/extend/xlsx-editor.tsx",
+       "src/apps/v4/components/extend/xlsx-regional-format.tsx",
+       "src/apps/v4/components/extend/xlsx-viewer.tsx",
+       "src/apps/v4/components/icon-placeholder.tsx",
+       "src/apps/v4/components/ui/button.tsx",
+       "src/apps/v4/components/ui/color-picker.tsx",
+       "src/apps/v4/components/ui/dropdown-menu.tsx",
+       "src/apps/v4/components/ui/group.tsx",
+       "src/apps/v4/components/ui/input.tsx",
+       "src/apps/v4/components/ui/popover.tsx",
+       "src/apps/v4/components/ui/scroll-area.tsx",
+       "src/apps/v4/components/ui/select.tsx",
+       "src/apps/v4/components/ui/separator.tsx",
+       "src/apps/v4/components/ui/spinner.tsx",
+       "src/apps/v4/components/ui/tabs.tsx",
+       "src/apps/v4/components/ui/toggle.tsx",
+       "src/apps/v4/components/ui/tooltip.tsx",
+       "src/apps/v4/experiments/artifact-template/src/autosave-context.tsx",
+       "src/apps/v4/experiments/artifact-template/src/autosave.ts",
+       "src/apps/v4/experiments/artifact-template/src/main.tsx",
+       "src/apps/v4/experiments/artifact-template/src/webmcp.ts",
+       "src/apps/v4/experiments/artifact-template/src/xlsx-artifact.tsx",
+       "src/apps/v4/lib/color-picker-utils.ts",
+       "src/apps/v4/lib/config.ts",
+       "src/apps/v4/lib/utils.ts",
+       "src/apps/v4/registry/new-york-v4/ui/dropdown-menu.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/input.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/popover.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/select.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/separator.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/spinner.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/tabs.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/tooltip.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/CellInput.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaAssist.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaEditing.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaInput.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/XlsxViewer.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/agent.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/builtin-table-styles.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-anchors.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-history.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-text-clip.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/chart-renderer.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/charts.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/clipboard-html.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/colors.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/comments.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/controller.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/formula-assist.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/formula-functions.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/images.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/index.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/range-highlight.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/range-reference.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/safe-calculate.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/scroll-display-limit.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/scroll-viewport.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/selection-tools.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/structural-edits.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/surface-regl.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/user-entry.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/viewer-palette.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/wasm.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/workbook-save.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/worker-client.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/worksheet-batch.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/xlsx-worker.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/zip-entry-names.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/vendor/sheets-wasm/duke_sheets_wasm.js"
+      ],
+      "bundle": "rebuilt",
+      "css": "shipped"
+     },
+     {
+      "compiled": 71,
+      "compileMs": 670,
+      "changed": [
+       "src/apps/v4/components/extend/toolbar-overflow.tsx",
+       "src/apps/v4/components/extend/xlsx-editor.tsx",
+       "src/apps/v4/components/extend/xlsx-regional-format.tsx",
+       "src/apps/v4/components/extend/xlsx-viewer.tsx",
+       "src/apps/v4/components/icon-placeholder.tsx",
+       "src/apps/v4/components/ui/button.tsx",
+       "src/apps/v4/components/ui/color-picker.tsx",
+       "src/apps/v4/components/ui/dropdown-menu.tsx",
+       "src/apps/v4/components/ui/group.tsx",
+       "src/apps/v4/components/ui/input.tsx",
+       "src/apps/v4/components/ui/popover.tsx",
+       "src/apps/v4/components/ui/scroll-area.tsx",
+       "src/apps/v4/components/ui/select.tsx",
+       "src/apps/v4/components/ui/separator.tsx",
+       "src/apps/v4/components/ui/spinner.tsx",
+       "src/apps/v4/components/ui/tabs.tsx",
+       "src/apps/v4/components/ui/toggle.tsx",
+       "src/apps/v4/components/ui/tooltip.tsx",
+       "src/apps/v4/experiments/artifact-template/src/autosave-context.tsx",
+       "src/apps/v4/experiments/artifact-template/src/autosave.ts",
+       "src/apps/v4/experiments/artifact-template/src/main.tsx",
+       "src/apps/v4/experiments/artifact-template/src/webmcp.ts",
+       "src/apps/v4/experiments/artifact-template/src/xlsx-artifact.tsx",
+       "src/apps/v4/lib/color-picker-utils.ts",
+       "src/apps/v4/lib/config.ts",
+       "src/apps/v4/lib/utils.ts",
+       "src/apps/v4/registry/new-york-v4/ui/dropdown-menu.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/input.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/popover.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/select.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/separator.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/spinner.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/tabs.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/tooltip.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/CellInput.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaAssist.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaEditing.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaInput.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/XlsxViewer.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/agent.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/builtin-table-styles.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-anchors.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-history.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-text-clip.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/chart-renderer.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/charts.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/clipboard-html.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/colors.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/comments.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/controller.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/formula-assist.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/formula-functions.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/images.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/index.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/range-highlight.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/range-reference.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/safe-calculate.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/scroll-display-limit.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/scroll-viewport.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/selection-tools.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/structural-edits.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/surface-regl.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/user-entry.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/viewer-palette.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/wasm.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/workbook-save.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/worker-client.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/worksheet-batch.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/xlsx-worker.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/zip-entry-names.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/vendor/sheets-wasm/duke_sheets_wasm.js"
+      ],
+      "bundle": "rebuilt",
+      "css": "shipped"
+     }
+    ]
+   },
+   "warm": {
+    "ms": 1688,
+    "bytes": 1457,
+    "requests": 78,
+    "notModified": 76,
+    "all": [
+     1688,
+     1475,
+     1770
+    ],
+    "marks": [
+     {
+      "loader": 20,
+      "revalidated": 139,
+      "bundled": 141,
+      "scripts-ready": 433,
+      "main-evaluated": 436
+     },
+     {
+      "loader": 19,
+      "revalidated": 123,
+      "bundled": 124,
+      "scripts-ready": 452,
+      "main-evaluated": 455
+     },
+     {
+      "loader": 24,
+      "revalidated": 145,
+      "bundled": 148,
+      "scripts-ready": 416,
+      "main-evaluated": 419
+     }
+    ],
+    "serviceWorker": [
+     null,
+     null,
+     null
+    ],
+    "loader": [
+     {
+      "compiled": 0,
+      "compileMs": 0,
+      "changed": [],
+      "bundle": "hit",
+      "css": "shipped"
+     },
+     {
+      "compiled": 0,
+      "compileMs": 0,
+      "changed": [],
+      "bundle": "hit",
+      "css": "shipped"
+     },
+     {
+      "compiled": 0,
+      "compileMs": 0,
+      "changed": [],
+      "bundle": "hit",
+      "css": "shipped"
+     }
+    ]
+   }
+  },
+  "optionb/private": {
+   "cold": {
+    "ms": 2674,
+    "bytes": 4918611,
+    "requests": 81,
+    "notModified": 0,
+    "all": [
+     2665,
+     2674,
+     3345
+    ],
+    "marks": [
+     {
+      "loader": 71,
+      "revalidated": 275,
+      "bundled": 1126,
+      "scripts-ready": 1393,
+      "main-evaluated": 1396
+     },
+     {
+      "loader": 56,
+      "revalidated": 274,
+      "bundled": 1261,
+      "scripts-ready": 1527,
+      "main-evaluated": 1530
+     },
+     {
+      "loader": 51,
+      "revalidated": 289,
+      "bundled": 1239,
+      "scripts-ready": 1593,
+      "main-evaluated": 1602
+     }
+    ],
+    "serviceWorker": [
+     null,
+     null,
+     null
+    ],
+    "loader": [
+     {
+      "compiled": 71,
+      "compileMs": 694,
+      "changed": [
+       "src/apps/v4/components/extend/toolbar-overflow.tsx",
+       "src/apps/v4/components/extend/xlsx-editor.tsx",
+       "src/apps/v4/components/extend/xlsx-regional-format.tsx",
+       "src/apps/v4/components/extend/xlsx-viewer.tsx",
+       "src/apps/v4/components/icon-placeholder.tsx",
+       "src/apps/v4/components/ui/button.tsx",
+       "src/apps/v4/components/ui/color-picker.tsx",
+       "src/apps/v4/components/ui/dropdown-menu.tsx",
+       "src/apps/v4/components/ui/group.tsx",
+       "src/apps/v4/components/ui/input.tsx",
+       "src/apps/v4/components/ui/popover.tsx",
+       "src/apps/v4/components/ui/scroll-area.tsx",
+       "src/apps/v4/components/ui/select.tsx",
+       "src/apps/v4/components/ui/separator.tsx",
+       "src/apps/v4/components/ui/spinner.tsx",
+       "src/apps/v4/components/ui/tabs.tsx",
+       "src/apps/v4/components/ui/toggle.tsx",
+       "src/apps/v4/components/ui/tooltip.tsx",
+       "src/apps/v4/experiments/artifact-template/src/autosave-context.tsx",
+       "src/apps/v4/experiments/artifact-template/src/autosave.ts",
+       "src/apps/v4/experiments/artifact-template/src/main.tsx",
+       "src/apps/v4/experiments/artifact-template/src/webmcp.ts",
+       "src/apps/v4/experiments/artifact-template/src/xlsx-artifact.tsx",
+       "src/apps/v4/lib/color-picker-utils.ts",
+       "src/apps/v4/lib/config.ts",
+       "src/apps/v4/lib/utils.ts",
+       "src/apps/v4/registry/new-york-v4/ui/dropdown-menu.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/input.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/popover.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/select.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/separator.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/spinner.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/tabs.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/tooltip.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/CellInput.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaAssist.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaEditing.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaInput.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/XlsxViewer.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/agent.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/builtin-table-styles.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-anchors.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-history.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-text-clip.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/chart-renderer.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/charts.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/clipboard-html.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/colors.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/comments.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/controller.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/formula-assist.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/formula-functions.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/images.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/index.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/range-highlight.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/range-reference.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/safe-calculate.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/scroll-display-limit.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/scroll-viewport.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/selection-tools.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/structural-edits.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/surface-regl.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/user-entry.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/viewer-palette.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/wasm.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/workbook-save.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/worker-client.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/worksheet-batch.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/xlsx-worker.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/zip-entry-names.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/vendor/sheets-wasm/duke_sheets_wasm.js"
+      ],
+      "bundle": "rebuilt",
+      "css": "shipped"
+     },
+     {
+      "compiled": 71,
+      "compileMs": 813,
+      "changed": [
+       "src/apps/v4/components/extend/toolbar-overflow.tsx",
+       "src/apps/v4/components/extend/xlsx-editor.tsx",
+       "src/apps/v4/components/extend/xlsx-regional-format.tsx",
+       "src/apps/v4/components/extend/xlsx-viewer.tsx",
+       "src/apps/v4/components/icon-placeholder.tsx",
+       "src/apps/v4/components/ui/button.tsx",
+       "src/apps/v4/components/ui/color-picker.tsx",
+       "src/apps/v4/components/ui/dropdown-menu.tsx",
+       "src/apps/v4/components/ui/group.tsx",
+       "src/apps/v4/components/ui/input.tsx",
+       "src/apps/v4/components/ui/popover.tsx",
+       "src/apps/v4/components/ui/scroll-area.tsx",
+       "src/apps/v4/components/ui/select.tsx",
+       "src/apps/v4/components/ui/separator.tsx",
+       "src/apps/v4/components/ui/spinner.tsx",
+       "src/apps/v4/components/ui/tabs.tsx",
+       "src/apps/v4/components/ui/toggle.tsx",
+       "src/apps/v4/components/ui/tooltip.tsx",
+       "src/apps/v4/experiments/artifact-template/src/autosave-context.tsx",
+       "src/apps/v4/experiments/artifact-template/src/autosave.ts",
+       "src/apps/v4/experiments/artifact-template/src/main.tsx",
+       "src/apps/v4/experiments/artifact-template/src/webmcp.ts",
+       "src/apps/v4/experiments/artifact-template/src/xlsx-artifact.tsx",
+       "src/apps/v4/lib/color-picker-utils.ts",
+       "src/apps/v4/lib/config.ts",
+       "src/apps/v4/lib/utils.ts",
+       "src/apps/v4/registry/new-york-v4/ui/dropdown-menu.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/input.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/popover.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/select.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/separator.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/spinner.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/tabs.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/tooltip.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/CellInput.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaAssist.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaEditing.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaInput.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/XlsxViewer.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/agent.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/builtin-table-styles.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-anchors.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-history.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-text-clip.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/chart-renderer.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/charts.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/clipboard-html.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/colors.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/comments.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/controller.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/formula-assist.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/formula-functions.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/images.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/index.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/range-highlight.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/range-reference.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/safe-calculate.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/scroll-display-limit.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/scroll-viewport.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/selection-tools.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/structural-edits.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/surface-regl.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/user-entry.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/viewer-palette.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/wasm.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/workbook-save.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/worker-client.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/worksheet-batch.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/xlsx-worker.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/zip-entry-names.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/vendor/sheets-wasm/duke_sheets_wasm.js"
+      ],
+      "bundle": "rebuilt",
+      "css": "shipped"
+     },
+     {
+      "compiled": 71,
+      "compileMs": 719,
+      "changed": [
+       "src/apps/v4/components/extend/toolbar-overflow.tsx",
+       "src/apps/v4/components/extend/xlsx-editor.tsx",
+       "src/apps/v4/components/extend/xlsx-regional-format.tsx",
+       "src/apps/v4/components/extend/xlsx-viewer.tsx",
+       "src/apps/v4/components/icon-placeholder.tsx",
+       "src/apps/v4/components/ui/button.tsx",
+       "src/apps/v4/components/ui/color-picker.tsx",
+       "src/apps/v4/components/ui/dropdown-menu.tsx",
+       "src/apps/v4/components/ui/group.tsx",
+       "src/apps/v4/components/ui/input.tsx",
+       "src/apps/v4/components/ui/popover.tsx",
+       "src/apps/v4/components/ui/scroll-area.tsx",
+       "src/apps/v4/components/ui/select.tsx",
+       "src/apps/v4/components/ui/separator.tsx",
+       "src/apps/v4/components/ui/spinner.tsx",
+       "src/apps/v4/components/ui/tabs.tsx",
+       "src/apps/v4/components/ui/toggle.tsx",
+       "src/apps/v4/components/ui/tooltip.tsx",
+       "src/apps/v4/experiments/artifact-template/src/autosave-context.tsx",
+       "src/apps/v4/experiments/artifact-template/src/autosave.ts",
+       "src/apps/v4/experiments/artifact-template/src/main.tsx",
+       "src/apps/v4/experiments/artifact-template/src/webmcp.ts",
+       "src/apps/v4/experiments/artifact-template/src/xlsx-artifact.tsx",
+       "src/apps/v4/lib/color-picker-utils.ts",
+       "src/apps/v4/lib/config.ts",
+       "src/apps/v4/lib/utils.ts",
+       "src/apps/v4/registry/new-york-v4/ui/dropdown-menu.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/input.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/popover.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/select.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/separator.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/spinner.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/tabs.tsx",
+       "src/apps/v4/registry/new-york-v4/ui/tooltip.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/CellInput.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaAssist.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaEditing.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/FormulaInput.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/XlsxViewer.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/agent.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/builtin-table-styles.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-anchors.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-history.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/cell-text-clip.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/chart-renderer.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/charts.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/clipboard-html.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/colors.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/comments.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/controller.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/formula-assist.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/formula-functions.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/images.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/index.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/range-highlight.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/range-reference.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/safe-calculate.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/scroll-display-limit.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/scroll-viewport.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/selection-tools.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/structural-edits.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/surface-regl.tsx",
+       "src/engines/react-xlsx/packages/react-xlsx/src/user-entry.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/viewer-palette.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/wasm.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/workbook-save.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/worker-client.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/worksheet-batch.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/xlsx-worker.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/src/zip-entry-names.ts",
+       "src/engines/react-xlsx/packages/react-xlsx/vendor/sheets-wasm/duke_sheets_wasm.js"
+      ],
+      "bundle": "rebuilt",
+      "css": "shipped"
+     }
+    ]
+   },
+   "warm": {
+    "ms": 1702,
+    "bytes": 1932347,
+    "requests": 78,
+    "notModified": 71,
+    "all": [
+     1575,
+     1941,
+     1702
+    ],
+    "marks": [
+     {
+      "loader": 53,
+      "revalidated": 176,
+      "bundled": 177,
+      "scripts-ready": 452,
+      "main-evaluated": 455
+     },
+     {
+      "loader": 98,
+      "revalidated": 241,
+      "bundled": 241,
+      "scripts-ready": 528,
+      "main-evaluated": 531
+     },
+     {
+      "loader": 64,
+      "revalidated": 155,
+      "bundled": 157,
+      "scripts-ready": 433,
+      "main-evaluated": 437
+     }
+    ],
+    "serviceWorker": [
+     null,
+     null,
+     null
+    ],
+    "loader": [
+     {
+      "compiled": 0,
+      "compileMs": 0,
+      "changed": [],
+      "bundle": "hit",
+      "css": "shipped"
+     },
+     {
+      "compiled": 0,
+      "compileMs": 0,
+      "changed": [],
+      "bundle": "hit",
+      "css": "shipped"
+     },
+     {
+      "compiled": 0,
+      "compileMs": 0,
+      "changed": [],
+      "bundle": "hit",
+      "css": "shipped"
+     }
+    ]
+   }
+  }
+ },
+ "checks": {
+  "baseline": {
+   "before": {
+    "D2": "21",
+    "formulaD2": "=B2*C2"
+   },
+   "after": {
+    "D2": "700",
+    "formulaD202": "=SUM(D2:D201)",
+    "budgetD2AfterTabs": "=B2*C2"
+   },
+   "sheetUrl": "http://127.0.0.1:46847/?sheet=Notes"
+  },
+  "optionb": {
+   "before": {
+    "D2": "21",
+    "formulaD2": "=B2*C2"
+   },
+   "after": {
+    "D2": "700",
+    "formulaD202": "=SUM(D2:D201)",
+    "budgetD2AfterTabs": "=B2*C2"
+   },
+   "sheetUrl": "http://127.0.0.1:38093/?sheet=Notes"
+  },
+  "edit": {
+   "reloadMs": 3679,
+   "server": {
+    "requests": 92,
+    "bytes": 263974,
+    "notModified": 75
+   },
+   "loader": {
+    "compiled": 1,
+    "compileMs": 114,
+    "changed": [
+     "src/apps/v4/components/extend/xlsx-editor.tsx"
+    ],
+    "bundle": "rebuilt",
+    "css": "rebuilt",
+    "cssMs": 1800
+   },
+   "labelShown": true,
+   "letterSpacing": {
+    "beforeTailwindRebuild": "5.18px",
+    "after": "5.18px"
+   }
+  },
+  "editWarm": {
+   "ms": 2802,
+   "loader": {
+    "compiled": 0,
+    "compileMs": 0,
+    "changed": [],
+    "bundle": "hit",
+    "css": "cached"
+   },
+   "letterSpacing": "5.18px",
+   "server": {
+    "requests": 78,
+    "bytes": 1457,
+    "notModified": 76
+   }
+  }
+ }
+}

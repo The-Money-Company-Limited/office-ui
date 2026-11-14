@@ -1,0 +1,64 @@
+{
+ "sizes": {
+  "sucrase.js": {
+   "raw": 206045,
+   "gzip": 47804
+  },
+  "esbuild.js": {
+   "raw": 49892,
+   "gzip": 14043
+  },
+  "esbuild.wasm": {
+   "raw": 12332677,
+   "gzip": 3293101
+  }
+ },
+ "sucrase": [
+  {
+   "startup": 38.19999999925494,
+   "transform": 681.0999999977648,
+   "files": 70,
+   "outBytes": 2022484
+  },
+  {
+   "startup": 23,
+   "transform": 676.1999999992549,
+   "files": 70,
+   "outBytes": 2022484
+  },
+  {
+   "startup": 23.799999997019768,
+   "transform": 979.1000000014901,
+   "files": 70,
+   "outBytes": 2022484
+  }
+ ],
+ "esbuild": [
+  {
+   "startup": 645.4000000022352,
+   "transform": 2799.599999997765,
+   "files": 70,
+   "outBytes": 1980124
+  },
+  {
+   "startup": 343.20000000298023,
+   "transform": 2270,
+   "files": 70,
+   "outBytes": 1980124
+  },
+  {
+   "startup": 266.6000000014901,
+   "transform": 2421.699999999255,
+   "files": 70,
+   "outBytes": 1980124
+  }
+ ],
+ "sucraseMedian": {
+  "startupMs": 24,
+  "transformMs": 681
+ },
+ "esbuildMedian": {
+  "startupMs": 343,
+  "transformMs": 2422
+ }
+}
