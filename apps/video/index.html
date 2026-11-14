@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pythagoras, counted</title>
+<link rel="stylesheet" href="player.css">
+<style>
+  /* The lesson itself: everything below is this video's content. Replace it with yours. */
+  .lesson {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: 520px 1fr;
+    grid-template-rows: auto 1fr;
+    column-gap: 64px;
+    padding: 48px 72px 88px;
+    background: #fbfaf7;
+    color: #1f2328;
+    font: 400 20px/1.35 system-ui, -apple-system, sans-serif;
+  }
+  h1 { grid-column: 1 / -1; margin: 0 0 8px; font-size: 32px; font-weight: 600; letter-spacing: -0.02em; width: fit-content; }
+  .diagram { width: 100%; height: 100%; min-height: 0; overflow: visible; }
+  .steps { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; padding-top: 24px; }
+  .steps p { margin: 0; width: fit-content; }
+  .say { color: #6b7078; }
+  .eq { display: inline-flex; align-items: center; gap: 10px; font-size: 22px; font-variant-numeric: tabular-nums; }
+  .eq i { width: 14px; height: 14px; border-radius: 3px; background: var(--chip); }
+  #sum { margin-top: 14px; font-size: 38px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  #law { margin-top: 40px; font-size: 27px; font-style: italic; }
+  svg text { font: 500 15px system-ui, -apple-system, sans-serif; fill: #1f2328; text-anchor: middle; }
+  .edge { fill: none; stroke: #1f2328; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+  .frame { fill: none; stroke: #cfcbc2; stroke-width: 2; stroke-linejoin: round; }
+
+  /* When things happen: each animation's delay is its moment in the video. The player holds them and sets their time. */
+  .reveal { animation: reveal 0.6s cubic-bezier(0.22, 1, 0.36, 1) var(--at) both; }
+  @keyframes reveal { from { opacity: 0; transform: translateY(12px); filter: blur(3px); } to { opacity: 1; transform: none; filter: none; } }
+  .fade { animation: fade 0.5s ease-in-out var(--at) both; }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+  .draw { stroke-dasharray: 1; animation: draw 1.4s cubic-bezier(0.22, 1, 0.36, 1) var(--at) both; }
+  @keyframes draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  .pop { transform-box: fill-box; transform-origin: center; animation: pop 0.45s cubic-bezier(0.34, 1.36, 0.64, 1) var(--at) both; }
+  @keyframes pop { from { opacity: 0; transform: scale(0.4); } to { opacity: 1; transform: scale(1); } }
+</style>
+</head>
+<body>
+<main class="stage">
+  <div class="camera">
+    <!-- The video's content: an ordinary page, 1280 by 720. -->
+    <div class="lesson">
+      <h1 id="title" class="reveal" style="--at: 0.2s">Pythagoras, counted square by square</h1>
+      <svg id="diagram" class="diagram" viewBox="20 -15 440 470" aria-label="The diagram">
+        <polygon id="big-square" class="frame draw" style="--at: 14.6s" pathLength="1" points="160,160 320,280 440,120 280,0" aria-label="The square on the long side" />
+        <g id="cells"></g>
+        <path id="triangle" class="edge draw" style="--at: 1.2s" pathLength="1" d="M160 160 L160 280 L320 280 Z" aria-label="The triangle" />
+        <rect id="corner" class="fade" style="--at: 2.4s" x="160" y="264" width="16" height="16" fill="none" stroke="#1f2328" stroke-width="1.5" aria-label="The square corner" />
+        <text class="fade" style="--at: 2.3s" x="172" y="222">3</text>
+        <text class="fade" style="--at: 2.5s" x="232" y="274">4</text>
+        <text class="fade" style="--at: 2.7s" x="238" y="231">5</text>
+      </svg>
+      <div class="steps">
+        <p id="intro" class="say reveal" style="--at: 1.4s">A triangle with sides 3, 4 and 5.</p>
+        <p class="say reveal" style="--at: 8.4s">Build a square on each side.</p>
+        <p id="nine" class="eq reveal" style="--at: 9.8s; --chip: #f2a93b"><i></i>3 × 3 = 9</p>
+        <p id="sixteen" class="eq reveal" style="--at: 12.4s; --chip: #2f6fec"><i></i>4 × 4 = 16</p>
+        <p class="eq reveal" style="--at: 15.6s; --chip: #cfcbc2"><i></i>5 × 5 = 25</p>
+        <p class="say reveal" style="--at: 17s">Move the small squares into the big one.</p>
+        <p id="sum" class="reveal" style="--at: 21.4s">9 + 16 = 25</p>
+        <p id="law" class="reveal" style="--at: 28s">a² + b² = c²</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<button class="start" type="button" aria-label="Play"><span><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.6v14.8a1 1 0 0 0 1.5.86l12.3-7.4a1 1 0 0 0 0-1.72L8.5 3.74A1 1 0 0 0 7 4.6Z"/></svg></span></button>
+<div class="controls" role="group" aria-label="Video">
+  <button type="button" data-play></button>
+  <span data-time aria-live="off"></span>
+  <div data-rail role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0"><div data-fill></div><div data-thumb></div><div data-dots></div></div>
+  <button type="button" data-screen></button>
+</div>
+
+<script>
+  // The unit squares, 9 and 16, and each one's flight into the square on the long side. Made by script, but timed like
+  // the CSS above: each animation's delay is its moment in the video.
+  const cells = document.getElementById('cells')
+  const squares = []
+  for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) squares.push({ x: 60 + 40 * i, y: 180 + 40 * j, color: '#f2a93b', at: 9.4 + (j * 3 + i) * 0.07 })
+  for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) squares.push({ x: 180 + 40 * i, y: 300 + 40 * j, color: '#2f6fec', at: 12 + (j * 4 + i) * 0.05 })
+  squares.forEach((square, n) => {
+    const i = n % 5
+    const j = Math.floor(n / 5)
+    const to = { x: 160 + (i + 0.5) * 32 + (j + 0.5) * 24, y: 160 + (i + 0.5) * 24 - (j + 0.5) * 32 }
+    const fly = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+    Object.entries({ x: -18, y: -18, width: 36, height: 36, rx: 5, fill: square.color, class: 'pop' }).forEach(([name, value]) => rect.setAttribute(name, value))
+    rect.style.setProperty('--at', square.at + 's')
+    fly.append(rect)
+    cells.append(fly)
+    fly.animate(
+      [{ transform: `translate(${square.x}px, ${square.y}px)` }, { transform: `translate(${to.x}px, ${to.y}px) rotate(36.87deg)` }],
+      { delay: 17800 + n * 70, duration: 1500, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'both' }
+    )
+  })
+</script>
+<script src="player.js"></script>
+</body>
+</html>
