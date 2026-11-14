@@ -19366,6 +19366,9 @@ function runStyleToCss(
       : undefined,
     verticalAlign,
     display: borderStyle ? "inline-block" : undefined,
+    // An inline-block inherits the paragraph's first-line indent, which would
+    // push a bordered run's text out of its own box.
+    textIndent: borderStyle ? 0 : undefined,
     borderStyle,
     borderWidth: borderWidthPx ? `${borderWidthPx}px` : undefined,
     borderColor: borderStyle
@@ -36528,6 +36531,8 @@ class DocxDetachedThumbnailSurfaceRenderer {
 // thumbnail-scale canvas (~0.1-0.2 MB), so 64 stays well under a few MB.
 const DOCX_THUMBNAIL_SURFACE_CACHE_MAX_ENTRIES = 64;
 const DOCX_THUMBNAIL_MIN_RASTER_INTERVAL_MS = 200;
+// Thumbnails catch up once edits pause, so a typed key never waits for them.
+const DOCX_THUMBNAIL_REFRESH_DELAY_MS = 250;
 const DOCX_THUMBNAIL_RENDER_PRIORITY_VISIBLE = 0;
 const DOCX_THUMBNAIL_RENDER_PRIORITY_ATTACHED = 1;
 const DOCX_THUMBNAIL_RENDER_PRIORITY_PREFETCH = 2;
@@ -36677,9 +36682,21 @@ export function useDocxPageThumbnails(
     () => {
       if (!hasRequestedThumbnails) return;
       setPageSurfaceEpoch((current) => current + 1);
-      return subscribeDocxViewerPageSurfaces(pageSurfaceRegistryEditor, () => {
-        setPageSurfaceEpoch((current) => current + 1);
-      });
+      let timeoutId: number | undefined;
+      const unsubscribe = subscribeDocxViewerPageSurfaces(
+        pageSurfaceRegistryEditor,
+        () => {
+          window.clearTimeout(timeoutId);
+          timeoutId = window.setTimeout(
+            () => setPageSurfaceEpoch((current) => current + 1),
+            DOCX_THUMBNAIL_REFRESH_DELAY_MS
+          );
+        }
+      );
+      return () => {
+        window.clearTimeout(timeoutId);
+        unsubscribe();
+      };
     },
     [hasRequestedThumbnails, pageSurfaceRegistryEditor]
   );
@@ -36689,24 +36706,25 @@ export function useDocxPageThumbnails(
     [pageSurfaceEpoch, pageSurfaceRegistry.pageElements]
   );
 
+  // Mirrors the state so an unchanged status schedules no render.
+  const pageThumbnailStatesRef = React.useRef(pageThumbnailStates);
   const updatePageThumbnailState = React.useCallback(
     (
       pageIndex: number,
       status: DocxPageThumbnailStatus,
       error?: Error
     ): void => {
-      setPageThumbnailStates((current) => {
-        const next = new Map(current);
-        const previous = next.get(pageIndex);
-        if (
-          previous?.status === status &&
-          previous?.error?.message === error?.message
-        ) {
-          return current;
-        }
-        next.set(pageIndex, { status, error });
-        return next;
-      });
+      const previous = pageThumbnailStatesRef.current.get(pageIndex);
+      if (
+        previous?.status === status &&
+        previous?.error?.message === error?.message
+      ) {
+        return;
+      }
+      const next = new Map(pageThumbnailStatesRef.current);
+      next.set(pageIndex, { status, error });
+      pageThumbnailStatesRef.current = next;
+      setPageThumbnailStates(next);
     },
     []
   );
@@ -37201,7 +37219,11 @@ export function useDocxPageThumbnails(
     ]);
 
   React.useEffect(() => {
-    void requestPrefetchThumbnailRenders();
+    const timeoutId = window.setTimeout(
+      () => void requestPrefetchThumbnailRenders(),
+      DOCX_THUMBNAIL_REFRESH_DELAY_MS
+    );
+    return () => window.clearTimeout(timeoutId);
   }, [
     editor.documentLoadNonce,
     editor.documentTheme,
@@ -37237,7 +37259,11 @@ export function useDocxPageThumbnails(
   // changes. Requests are cheap: pages whose synced content key still matches
   // the last painted key skip without touching the raster pipeline.
   React.useEffect(() => {
-    void requestAttachedThumbnailRenders();
+    const timeoutId = window.setTimeout(
+      () => void requestAttachedThumbnailRenders(),
+      DOCX_THUMBNAIL_REFRESH_DELAY_MS
+    );
+    return () => window.clearTimeout(timeoutId);
   }, [
     editor.documentLoadNonce,
     editor.documentTheme,
@@ -39506,6 +39532,27 @@ export function DocxEditorViewer({
     pageCount: 0,
     totalHeightPx: 0,
   });
+  // The reservation as last set, ahead of the render that shows it. A load's
+  // reset and the reservation effect run in the same commit, so the effect
+  // must compare against this, not its render's value; and it must not hand
+  // React an updater on every key, which queues a render each time.
+  const initialPaginationReservedLayoutRef = React.useRef(
+    initialPaginationReservedLayoutState
+  );
+  const setInitialPaginationReservedLayout = React.useCallback(
+    (next: { pageCount: number; totalHeightPx: number }): void => {
+      const current = initialPaginationReservedLayoutRef.current;
+      if (
+        current.pageCount === next.pageCount &&
+        current.totalHeightPx === next.totalHeightPx
+      ) {
+        return;
+      }
+      initialPaginationReservedLayoutRef.current = next;
+      setInitialPaginationReservedLayoutState(next);
+    },
+    []
+  );
   const [disableMeasuredImportPagination, setDisableMeasuredImportPagination] =
     React.useState(false);
   const initialPaginationPageCountOscillationRef = React.useRef<{
@@ -39583,7 +39630,7 @@ export function DocxEditorViewer({
     pendingSectionParagraphFocusRef.current = undefined;
     setActiveEditableParagraphSegment(undefined);
     setPostImportPaginationUnlocked(false);
-    setInitialPaginationReservedLayoutState({
+    setInitialPaginationReservedLayout({
       pageCount: 0,
       totalHeightPx: 0,
     });
@@ -39753,26 +39800,35 @@ export function DocxEditorViewer({
   React.useLayoutEffect(() => {
     setMeasuredParagraphOuterHeightsPxByBlockId(new Map());
   }, [editor.documentLoadNonce]);
+  // The prune below reads the latest measurements without re-running on them:
+  // stale block ids appear only when the model changes.
+  const measuredParagraphOuterHeightsRef = React.useRef(
+    measuredParagraphOuterHeightsPxByBlockId
+  );
+  React.useLayoutEffect(() => {
+    measuredParagraphOuterHeightsRef.current =
+      measuredParagraphOuterHeightsPxByBlockId;
+  }, [measuredParagraphOuterHeightsPxByBlockId]);
   React.useEffect(() => {
     // Prune measurements for blocks no longer in the document; surviving
-    // blocks keep their measured heights across structural edits.
+    // blocks keep their measured heights across structural edits. A typed
+    // key keeps every block, so it schedules no second render.
+    const liveBlockIds = new Set<string>();
+    for (const node of editor.model.nodes) {
+      if (node.blockId) {
+        liveBlockIds.add(node.blockId);
+      }
+    }
+    const isGone = (blockId: string): boolean => !liveBlockIds.has(blockId);
+    if (![...measuredParagraphOuterHeightsRef.current.keys()].some(isGone)) {
+      return;
+    }
     setMeasuredParagraphOuterHeightsPxByBlockId((current) => {
-      if (current.size === 0) {
-        return current;
-      }
-      const liveBlockIds = new Set<string>();
-      for (const node of editor.model.nodes) {
-        if (node.blockId) {
-          liveBlockIds.add(node.blockId);
-        }
-      }
-      let next: Map<string, number> | undefined;
-      current.forEach((_, blockId) => {
-        if (!liveBlockIds.has(blockId)) {
-          (next ??= new Map(current)).delete(blockId);
-        }
+      const next = new Map(current);
+      next.forEach((_, blockId) => {
+        if (isGone(blockId)) next.delete(blockId);
       });
-      return next ?? current;
+      return next;
     });
   }, [editor.model.nodes]);
 
@@ -41447,46 +41503,32 @@ export function DocxEditorViewer({
     },
     [documentLayout, pageSectionInfoByIndex]
   );
+  // Each typed key re-runs the effect below; it sets state only on a change.
   React.useEffect(() => {
     if (!hideDocumentUntilPaginationSettled) {
-      setInitialPaginationReservedLayoutState((current) => {
-        if (current.pageCount === 0 && current.totalHeightPx === 0) {
-          return current;
-        }
-        return {
-          pageCount: 0,
-          totalHeightPx: 0,
-        };
-      });
+      setInitialPaginationReservedLayout({ pageCount: 0, totalHeightPx: 0 });
       return;
     }
 
-    const baselinePageCount = Math.max(
+    const current = initialPaginationReservedLayoutRef.current;
+    const nextPageCount = Math.max(
+      current.pageCount,
       1,
       pageCount,
       storedDocumentPageCount ?? 0
     );
-    setInitialPaginationReservedLayoutState((current) => {
-      const nextPageCount = Math.max(current.pageCount, baselinePageCount);
-      const nextTotalHeightPx = Math.max(
+    setInitialPaginationReservedLayout({
+      pageCount: nextPageCount,
+      totalHeightPx: Math.max(
         current.totalHeightPx,
         estimateDocumentStackHeightPx(nextPageCount)
-      );
-      if (
-        current.pageCount === nextPageCount &&
-        current.totalHeightPx === nextTotalHeightPx
-      ) {
-        return current;
-      }
-      return {
-        pageCount: nextPageCount,
-        totalHeightPx: nextTotalHeightPx,
-      };
+      ),
     });
   }, [
     estimateDocumentStackHeightPx,
     hideDocumentUntilPaginationSettled,
     pageCount,
+    setInitialPaginationReservedLayout,
     storedDocumentPageCount,
   ]);
   const preRevealStablePageCount =
@@ -42431,70 +42473,77 @@ export function DocxEditorViewer({
       return;
     }
 
-    setMeasuredParagraphOuterHeightsPxByBlockId((current) => {
-      const next = new Map(current);
-      let changed = false;
+    // Measure here and set state only when a height moved: measuring inside
+    // an updater forced a second render of every block on each commit, even
+    // when nothing changed, and a typed key paid for it before it painted.
+    // Block ids are never reused, so the rendered map decides what moved.
+    const rendered = measuredParagraphOuterHeightsPxByBlockId;
+    const moved = new Map<string, number>();
 
-      // Client rects scale with the CSS zoom applied above the viewer, but
-      // pagination operates in unzoomed page space — normalize, or every zoom
-      // change rewrites measurements and re-paginates (laggy zoom, blank
-      // virtualized pages).
-      const rootElement = viewerRootRef.current;
-      const zoomScale = resolveViewerMeasurementZoomScale(rootElement, 1);
+    // Client rects scale with the CSS zoom applied above the viewer, but
+    // pagination operates in unzoomed page space — normalize, or every zoom
+    // change rewrites measurements and re-paginates (laggy zoom, blank
+    // virtualized pages).
+    const rootElement = viewerRootRef.current;
+    const zoomScale = resolveViewerMeasurementZoomScale(rootElement, 1);
 
-      paragraphElementsRef.current.forEach((element, nodeIndex) => {
-        const node = editor.model.nodes[nodeIndex];
-        if (node?.type !== "paragraph" || !node.blockId) {
-          return;
-        }
+    paragraphElementsRef.current.forEach((element, nodeIndex) => {
+      const node = editor.model.nodes[nodeIndex];
+      if (node?.type !== "paragraph" || !node.blockId) {
+        return;
+      }
 
-        if (
-          !element.isConnected ||
-          element.dataset.docxParagraphPartialLineRange === "true" ||
-          element.closest('[data-docx-header-footer-region="footer"]') ||
-          element.closest('[data-docx-header-footer-region="header"]')
-        ) {
-          return;
-        }
+      if (
+        !element.isConnected ||
+        element.dataset.docxParagraphPartialLineRange === "true" ||
+        element.closest('[data-docx-header-footer-region="footer"]') ||
+        element.closest('[data-docx-header-footer-region="header"]')
+      ) {
+        return;
+      }
 
-        const rect = element.getBoundingClientRect();
-        if (rect.width <= 0 && rect.height <= 0) {
-          return;
-        }
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 && rect.height <= 0) {
+        return;
+      }
 
-        const style = window.getComputedStyle(element);
-        // Keep page-start suppression out of reusable measurements while
-        // preserving spacing determined by the surrounding paragraphs.
-        const marginTop = effectiveParagraphBeforeSpacingPx(
-          editor.model,
-          nodeIndex,
-          node,
-          nodeIndex > 0 ? 1 : 0,
-          false
-        );
-        const marginBottom = Number.parseFloat(style.marginBottom || "0");
-        const outerHeightPx = Math.max(
-          1,
-          Math.round(
-            rect.height / zoomScale +
-              (Number.isFinite(marginTop) ? marginTop : 0) +
-              (Number.isFinite(marginBottom) ? marginBottom : 0)
-          )
-        );
-        const previousHeightPx = next.get(node.blockId);
-        // 1px hysteresis: zoom-division rounding must not oscillate
-        // measurements and churn pagination.
-        if (
-          previousHeightPx === undefined ||
-          Math.abs(previousHeightPx - outerHeightPx) > 1
-        ) {
-          next.set(node.blockId, outerHeightPx);
-          changed = true;
-        }
-      });
-
-      return changed ? next : current;
+      const style = window.getComputedStyle(element);
+      // Keep page-start suppression out of reusable measurements while
+      // preserving spacing determined by the surrounding paragraphs.
+      const marginTop = effectiveParagraphBeforeSpacingPx(
+        editor.model,
+        nodeIndex,
+        node,
+        nodeIndex > 0 ? 1 : 0,
+        false
+      );
+      const marginBottom = Number.parseFloat(style.marginBottom || "0");
+      const outerHeightPx = Math.max(
+        1,
+        Math.round(
+          rect.height / zoomScale +
+            (Number.isFinite(marginTop) ? marginTop : 0) +
+            (Number.isFinite(marginBottom) ? marginBottom : 0)
+        )
+      );
+      const previousHeightPx = rendered.get(node.blockId);
+      // 1px hysteresis: zoom-division rounding must not oscillate
+      // measurements and churn pagination.
+      if (
+        previousHeightPx === undefined ||
+        Math.abs(previousHeightPx - outerHeightPx) > 1
+      ) {
+        moved.set(node.blockId, outerHeightPx);
+      }
     });
+
+    if (moved.size > 0) {
+      setMeasuredParagraphOuterHeightsPxByBlockId((current) => {
+        const next = new Map(current);
+        moved.forEach((heightPx, blockId) => next.set(blockId, heightPx));
+        return next;
+      });
+    }
   }, [
     editor.documentLoadNonce,
     editor.model.nodes,
@@ -43151,9 +43200,9 @@ export function DocxEditorViewer({
 
     const rootElement = viewerRootRef.current;
     if (!rootElement || pageCount === 0) {
-      setHeaderBodyClearanceByPage((current) =>
-        Object.keys(current).length === 0 ? current : {}
-      );
+      if (Object.keys(headerBodyClearanceByPage).length > 0) {
+        setHeaderBodyClearanceByPage({});
+      }
       return;
     }
 
@@ -43232,27 +43281,22 @@ export function DocxEditorViewer({
       next[pageIndex] = boundedClearancePx;
     }
 
-    setHeaderBodyClearanceByPage((current) => {
-      const currentKeys = Object.keys(current).map((key) =>
-        Number.parseInt(key, 10)
-      );
-      const nextKeys = Object.keys(next).map((key) => Number.parseInt(key, 10));
-      if (currentKeys.length === nextKeys.length) {
-        let equal = true;
-        for (const key of nextKeys) {
-          if ((current[key] ?? 0) !== (next[key] ?? 0)) {
-            equal = false;
-            break;
-          }
-        }
-        if (equal) {
-          return current;
-        }
-      }
-      return next;
-    });
+    // Unchanged clearances set no state, so a typed key renders once.
+    const current = headerBodyClearanceByPage;
+    const currentKeys = Object.keys(current).map((key) =>
+      Number.parseInt(key, 10)
+    );
+    const nextKeys = Object.keys(next).map((key) => Number.parseInt(key, 10));
+    if (
+      currentKeys.length === nextKeys.length &&
+      nextKeys.every((key) => (current[key] ?? 0) === (next[key] ?? 0))
+    ) {
+      return;
+    }
+    setHeaderBodyClearanceByPage(next);
   }, [
     documentLayout,
+    headerBodyClearanceByPage,
     isPageVisible,
     paginationMeasurementEnabled,
     pageCount,
@@ -43636,7 +43680,12 @@ export function DocxEditorViewer({
       changeCount: 0,
       distinctPageCounts: new Set<number>(),
     };
-    setDisableMeasuredImportPagination(false);
+    // Setting it unconditionally would cost every typed key a second render.
+    // The flag is read, not a dependency: flipping it must not reset the
+    // oscillation count above.
+    if (disableMeasuredImportPagination) {
+      setDisableMeasuredImportPagination(false);
+    }
   }, [editor.model, paginationMeasurementContextSignature]);
   React.useEffect(() => {
     const canonicalMeasurementsSignature = JSON.stringify([
@@ -51168,7 +51217,9 @@ export function DocxEditorViewer({
       nextMeasuredHeights[nodeIndex] = measuredHeights;
     });
 
-    setTableMeasuredRowHeights((current) => {
+    const reconcileMeasuredRowHeights = (
+      current: typeof tableMeasuredRowHeights
+    ): typeof tableMeasuredRowHeights => {
       let changed = false;
       const next: Record<string, MeasuredTableRowHeightsEntry> = {};
       const tableNodesByBlockId = new Map<string, TableNode>();
@@ -51229,7 +51280,15 @@ export function DocxEditorViewer({
       );
 
       return changed ? next : current;
-    });
+    };
+    // Setting state when nothing moved would re-render every block before a
+    // typed key paints. The rendered value is current: it is a dependency.
+    const reconciledRowHeights = reconcileMeasuredRowHeights(
+      tableMeasuredRowHeights
+    );
+    if (reconciledRowHeights !== tableMeasuredRowHeights) {
+      setTableMeasuredRowHeights(reconciledRowHeights);
+    }
   }, [
     disableMeasuredImportPagination,
     docGridLinePitchPxByNodeIndex,
