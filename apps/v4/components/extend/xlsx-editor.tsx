@@ -52,7 +52,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Group, GroupSeparator, GroupText } from "@/components/ui/group"
 import { Input } from "@/components/ui/input"
 import { Popover, PopoverPopup } from "@/components/ui/popover"
 import {
@@ -2514,7 +2513,7 @@ function EditorToolbar({
           </div>
         </ToolbarOverflow>
         <div className="xlsx-editor-formula relative border-t bg-background px-2 py-1">
-          <Group className="w-full">
+          <div className="flex w-full items-center gap-1.5">
             <Input
               className={cn(
                 "h-8 w-[92px] shrink-0 font-mono text-xs",
@@ -2568,11 +2567,12 @@ function EditorToolbar({
                 onNavigate(parsed.range)
               }}
             />
-            <GroupSeparator />
-            <GroupText className="h-8 w-9 shrink-0 justify-center px-0 text-[11px] font-semibold italic">
+            <span
+              aria-hidden="true"
+              className="w-5 shrink-0 text-center text-[11px] font-semibold text-muted-foreground italic"
+            >
               fx
-            </GroupText>
-            <GroupSeparator />
+            </span>
             <Input
               type="text"
               aria-label="Formula bar"
@@ -2609,7 +2609,7 @@ function EditorToolbar({
               }}
               placeholder="Select a cell, then enter a value or formula"
             />
-          </Group>
+          </div>
           {formulaFocused ? (
             <XlsxFormulaAssistPopup
               palette={viewerPalette}
