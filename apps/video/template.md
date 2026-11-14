@@ -12,6 +12,7 @@ recorded and there is no build step: edit the files and publish.
 | `video.json` | What to draw, and where the camera goes, in order | Yes |
 | `player.js` | The clock, the camera and the controls | Only to change how the player works |
 | `player.css` | How the player looks | Only to change how the player looks |
+| `artifact.json` | Declares the site a video | No |
 
 ## video.json
 
@@ -55,4 +56,5 @@ don't put `will-change: transform` on the camera. Video and canvas content does 
   that moment, and opening it takes the video back there. Your agent reads the moment as `anchor.moment_ms` and
   `cool comments` prints it as `at 0:22 in the video`.
 
-The drawings are drawn by the Cool Computers comment script, so they need a Cool Computers site with comments on.
+The drawings are drawn by the Cool Computers comment script. `artifact.json` declares the site a video, so they show
+even when the site's comments are switched off. Keep it, and keep `video.json` at the site's root.
