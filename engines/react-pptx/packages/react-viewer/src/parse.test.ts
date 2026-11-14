@@ -185,6 +185,37 @@ describe('parsePresentation download progress', () => {
     expect(progress.at(-1)?.[0]).toBe(fixture.byteLength);
   });
 
+  it('reads a response without a readable body whole, without progress', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const response = new Response(fixture.slice(), { status: 200 });
+        Object.defineProperty(response, 'body', { value: null });
+        return response;
+      }),
+    );
+
+    const { progress } = await downloadWithProgress();
+
+    expect(progress).toEqual([]);
+    expect(vi.mocked(parseWithWasm).mock.calls[0]?.[0]).toEqual(fixture);
+  });
+
+  it('applies the input limit to a response without a readable body', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const response = new Response(fixture.slice(), { status: 200 });
+        Object.defineProperty(response, 'body', { value: null });
+        return response;
+      }),
+    );
+
+    await expect(downloadWithProgress({ maxInputBytes: 10_000 })).rejects.toMatchObject({
+      code: 'resource-limit',
+    } satisfies Partial<PptxViewerError>);
+  });
+
   it('stops a download of undeclared length once it passes the input limit', async () => {
     respondWithFixture({});
     const maxInputBytes = 10_000;

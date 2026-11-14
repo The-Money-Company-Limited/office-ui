@@ -51,30 +51,30 @@ async function readBody(
   maximum: number,
   onProgress: ParsePresentationOptions['onDownloadProgress'],
 ): Promise<ArrayBuffer> {
+  const reader = response.body?.getReader();
+  // A response without a readable body is read whole; readSource checks its size.
+  if (!reader) return response.arrayBuffer();
   let bytes = new Uint8Array(totalBytes ?? 64 * 1024);
   let loadedBytes = 0;
-  const reader = response.body?.getReader();
-  if (reader) {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const nextLength = loadedBytes + value.byteLength;
-      if (nextLength > maximum) {
-        await reader.cancel();
-        throw inputLimitError(nextLength, maximum);
-      }
-      if (nextLength > bytes.byteLength) {
-        const grown = new Uint8Array(Math.min(maximum, Math.max(nextLength, bytes.byteLength * 2)));
-        grown.set(bytes.subarray(0, loadedBytes));
-        bytes = grown;
-      }
-      bytes.set(value, loadedBytes);
-      loadedBytes = nextLength;
-      onProgress?.(
-        loadedBytes,
-        totalBytes !== undefined && totalBytes >= loadedBytes ? totalBytes : undefined,
-      );
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const nextLength = loadedBytes + value.byteLength;
+    if (nextLength > maximum) {
+      await reader.cancel();
+      throw inputLimitError(nextLength, maximum);
     }
+    if (nextLength > bytes.byteLength) {
+      const grown = new Uint8Array(Math.min(maximum, Math.max(nextLength, bytes.byteLength * 2)));
+      grown.set(bytes.subarray(0, loadedBytes));
+      bytes = grown;
+    }
+    bytes.set(value, loadedBytes);
+    loadedBytes = nextLength;
+    onProgress?.(
+      loadedBytes,
+      totalBytes !== undefined && totalBytes >= loadedBytes ? totalBytes : undefined,
+    );
   }
   return loadedBytes === bytes.byteLength ? bytes.buffer : bytes.buffer.slice(0, loadedBytes);
 }
@@ -120,7 +120,9 @@ async function readSource(
     const encoding = response.headers.get('content-encoding')?.trim().toLowerCase();
     buffer = await readBody(
       response,
-      (!encoding || encoding === 'identity') && Number.isFinite(declaredLength) && declaredLength > 0
+      (!encoding || encoding === 'identity') &&
+        Number.isFinite(declaredLength) &&
+        declaredLength > 0
         ? declaredLength
         : undefined,
       maximum,
