@@ -1,8 +1,9 @@
 # Office artifact template experiment
 
 This fork builds a static release for a Cool Computer artifact. Each release
-contains the viewer/editor bundle (with `template.json`, its version), one
-document, `artifact.json`, and `cool.json`. It runs in the browser without a computer VM or a RuntimeVM
+contains the viewer/editor (the Vite bundle, or for a spreadsheet the
+template's TSX source with `loader.js`), `template.json` naming its version,
+one document, `artifact.json`, and `cool.json`. It runs in the browser without a computer VM or a RuntimeVM
 code change.
 
 For the build pipeline, Cloudflare request path, and later integration contract,

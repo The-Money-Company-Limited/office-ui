@@ -242,11 +242,14 @@ async function bundle(contents, name, format) {
 // 5. The CSS for first paint, built the way the page rebuilds it.
 const text = (file) => readFile(path.join(out, file), "utf8")
 const shippedCss = await buildCss(css, [...page.codes.values()], text)
-const modules = [...page.files].filter((file) => codeFile.test(file)).sort()
+const modules = [...page.files].filter((file) => codeFile.test(file))
+// The loader hashes the same files (modules and stylesheets) to tell whether
+// the shipped CSS still matches the site's source.
 const sources = await Promise.all(
-  modules.map(
-    async (file) => file + "\0" + (await readFile(onDisk(file), "utf8"))
-  )
+  [...sourceFiles]
+    .sort()
+    .filter((file) => codeFile.test(file) || file.endsWith(".css"))
+    .map(async (file) => file + "\0" + (await readFile(onDisk(file), "utf8")))
 )
 
 const manifest = {
@@ -272,10 +275,13 @@ const manifest = {
     sourceHash: createHash("sha1").update(sources.join("\0")).digest("hex"),
   },
 }
+// The loader's cache is per version, so a new loader never reads an older
+// loader's records.
 manifest.version = createHash("sha256")
   .update(
     JSON.stringify({ ...manifest, css: { ...manifest.css, sourceHash: "" } })
   )
+  .update(await readFile(path.join(here, "loader.js")))
   .digest("hex")
   .slice(0, 12)
 await write("loader-manifest.json", JSON.stringify(manifest, null, 1) + "\n")

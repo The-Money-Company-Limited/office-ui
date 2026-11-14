@@ -34,6 +34,10 @@ yet guaranteed.
 
 ## Make a release
 
+A spreadsheet release is source, not this bundle: see
+[Spreadsheet releases are source](#spreadsheet-releases-are-source). The
+steps below are the same for it, and its files are listed there.
+
 From the repository root, with Node and pnpm installed:
 
 ```sh
@@ -119,8 +123,8 @@ The shipped CSS is built by [`tailwind.js`](./source/tailwind.js) from the
 compiled modules, and the page runs the same code when a module changed:
 the first load after an edit uses the shipped CSS, then swaps in the rebuilt
 CSS, and later loads read it from the cache. Both flatten Tailwind's nested
-variants with postcss-nested, as Lightning CSS does in Vite's build; Chrome
-lays out the editor several times slower with nested rules.
+variants with postcss-nested in `buildCss`; Chrome lays out the editor
+several times slower with nested rules.
 
 RuntimeVM's content-type table has no `.ts` or `.tsx`, so those files are
 served without a type. The loader reads them as text, so this costs only
