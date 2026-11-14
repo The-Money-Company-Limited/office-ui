@@ -50,6 +50,8 @@ async function run() {
   const files = new Set(manifest.files)
   const entries = new Map() // path -> {code, specs, hash}
   const jobs = []
+  // Cache writes never hold up the page; nothing waits for them.
+  const writes = []
   async function load(path) {
     const hint = await (await store.match(hintKey(path)))?.text()
     let response = await fetch(at(path), {
@@ -73,8 +75,12 @@ async function run() {
     const hash = await sha1(source)
     const etag = response.headers.get("etag") || hash
     const cached = await store.match(entryKey(path, etag))
-    if (cached) entries.set(path, await cached.json())
-    else jobs.push({ path, etag, source, hash })
+    if (!cached) jobs.push({ path, etag, source, hash })
+    else {
+      entries.set(path, await cached.json())
+      if (etag !== hint)
+        writes.push(store.put(hintKey(path), new Response(etag)))
+    }
     return true
   }
   await Promise.all(manifest.files.filter(sourceFile).map(load))
@@ -152,10 +158,14 @@ async function run() {
     if (cssKey !== manifest.css.key) {
       stats.css = "rebuilding"
       const codes = modules.map((path) => entries.get(path).code)
+      const texts = Object.fromEntries(
+        page.css.map((path) => [path, entries.get(path).code])
+      )
       setTimeout(async () => {
         const css = await rebuildCss(
           manifest.css,
           page.sheets,
+          texts,
           codes,
           immutable
         )
@@ -245,8 +255,11 @@ onmessage = ({ data }) => postMessage(data.map(({ path, source }) => self.compil
     for (const [job, result] of results.flat()) {
       const entry = { ...result, hash: job.hash }
       entries.set(job.path, entry)
-      await store.put(entryKey(job.path, job.etag), Response.json(entry))
-      await store.put(hintKey(job.path), new Response(job.etag))
+      writes.push(
+        store
+          .put(entryKey(job.path, job.etag), Response.json(entry))
+          .then(() => store.put(hintKey(job.path), new Response(job.etag)))
+      )
     }
     stats.compiled += jobs.length
   }
@@ -273,11 +286,14 @@ async function sha1(text) {
 }
 
 // Runs Tailwind in a worker, so the page starts while it works.
-async function rebuildCss(css, sheets, codes, immutable) {
+// It reads the stylesheets the loader fetched (texts), and fetches only the
+// CSS packages' files in vendor/.
+async function rebuildCss(css, sheets, texts, codes, immutable) {
   const compiler = URL.createObjectURL(await immutable(css.compiler))
   const boot = `import { buildCss } from ${JSON.stringify(compiler)}
-onmessage = async ({ data: { sheets, packages, codes, root } }) => {
+onmessage = async ({ data: { sheets, texts, packages, codes, root } }) => {
   const text = async (path) => {
+    if (path in texts) return texts[path]
     const response = await fetch(new URL(path, root), { cache: "no-store" })
     if (!response.ok) throw new Error(path + ": HTTP " + response.status)
     return response.text()
@@ -296,6 +312,7 @@ onmessage = async ({ data: { sheets, packages, codes, root } }) => {
       worker.onerror = (event) => fail(new Error(event.message))
       worker.postMessage({
         sheets,
+        texts,
         packages: css.packages,
         codes,
         root: root.href,

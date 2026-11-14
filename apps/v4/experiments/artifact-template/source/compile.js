@@ -10,7 +10,9 @@ import { codeFile, cssImports } from "./resolve.js"
 export { candidates } from "./resolve.js"
 
 export function compileFile(path, source) {
-  if (!codeFile.test(path)) return { code: "", specs: cssImports(source) }
+  // A stylesheet's entry keeps its text, so a CSS rebuild uses exactly the
+  // revision its key was computed from.
+  if (!codeFile.test(path)) return { code: source, specs: cssImports(source) }
   const transforms = ["imports"]
   if (/\.tsx?$/.test(path)) transforms.push("typescript")
   if (/\.(tsx|jsx)$/.test(path)) transforms.push("jsx")

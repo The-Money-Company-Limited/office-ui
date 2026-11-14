@@ -73,7 +73,16 @@ export function link(entry, specsOf, config, exists) {
     if (!specs) return needed.add(path)
     const map = {}
     for (const spec of specs) {
-      const target = resolve(spec, path, config, exists)
+      // In a stylesheet, @import "extra.css" is a URL relative to it; a bare
+      // name without .css (tailwindcss) is a package.
+      const relative =
+        path.endsWith(".css") && spec.endsWith(".css") && !/^[./]/.test(spec)
+      const target = resolve(
+        relative ? "./" + spec : spec,
+        path,
+        config,
+        exists
+      )
       if (target.missing) missing.add(target.missing)
       else if (target.vendor) map[spec] = "~" + target.vendor
       else {
