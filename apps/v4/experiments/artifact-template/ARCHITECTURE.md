@@ -100,7 +100,7 @@ index.html               # the template's index.html, running loader.js
 loader.js, resolve.js    # fetch, compile, cache, link and run src/**
 loader-manifest.json     # entry, worker, aliases, files, vendor and CSS names
 src/apps/v4/...          # the page and editor source, at repository paths
-src/engines/react-xlsx/packages/react-xlsx/...   # the grid, and its calc wasm
+src/engines/react-xlsx/packages/react-xlsx/...   # a spreadsheet release: the grid, and its calc wasm
 vendor/vendor-*.js       # npm packages, prebuilt; vendor-worker-*.js for the worker
 vendor/pdfium-*.wasm     # a PDF release: pdfium, from npm (its ?url import has an alias)
 vendor/compiler-*.js     # sucrase and compile.js, for the loader's workers

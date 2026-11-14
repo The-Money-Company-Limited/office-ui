@@ -5,9 +5,11 @@ change a file under `src/`, save it on the site, and reload the page.
 
 ## The data
 
-- `document/<name>.pdf` is the document. Replace it to change the data.
-  Annotations, form fields and page edits people make on the page are saved
-  back to this file.
+- `document/<name>.pdf` is the document. Replace it to change the data;
+  `<name>` uses only ASCII letters, numbers, dots, underscores and dashes,
+  and starts with a letter or number. Annotations, form field values and
+  page changes (such as rotating or removing pages) people make on the page
+  are saved back to this file; the page's own text is not editable.
 - `artifact.json` names it: `{"kind":"pdf","title":"…","file":"document/<name>.pdf"}`.
   `title` is the page title; `file` must point at the PDF.
 
@@ -22,11 +24,11 @@ All paths are under `src/`.
 - `apps/v4/components/extend/pdf-editor-workspace.tsx`: the layout of the
   side panels around the pages.
 - `apps/v4/components/extend/pdf-editor-panels.tsx`: the side panels
-  (thumbnails, outline, comments, forms, stamps, signatures, redactions).
+  (thumbnails, pages, outline, attachments, comments, forms, stamps,
+  signatures, redactions).
 - `apps/v4/components/extend/pdf-editor-properties.tsx`: the properties of
   the selected annotation or form field.
-- `apps/v4/components/extend/pdf-editor-dialogs.tsx`: print, security,
-  signature, link and shortcut dialogs.
+- `apps/v4/components/extend/pdf-editor-dialogs.tsx`: every dialog.
 - `apps/v4/components/extend/pdf-editor-shared.tsx`: the editor's shared
   state and glyphs.
 - `apps/v4/components/ui/`: buttons, menus, inputs and tabs.

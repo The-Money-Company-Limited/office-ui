@@ -24,7 +24,8 @@ named.
   and editing text.
 - `chart-panel.tsx` and `charts.js`: charts and their data.
 - `validate.js`: what a deck and a slide may contain.
-- `export.ts`: saving the deck and downloading it as PowerPoint.
+- `export.ts`: saving the deck, and downloading it as a ZIP of its files
+  or as PowerPoint.
 - `slides.css`: how slides look.
 - `src/apps/v4/components/ui/`: buttons, menus, inputs and selects.
 - `src/apps/v4/experiments/artifact-template/src/main.tsx`: the page. It

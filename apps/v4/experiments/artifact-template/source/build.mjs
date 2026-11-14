@@ -66,11 +66,7 @@ const kinds = {
         path.join(template, "src/pdf-engine.ts")
       ),
     },
-    wasm: {
-      "@embedpdf/pdfium/pdfium.wasm": packageWasm(
-        "@embedpdf/pdfium/pdfium.wasm"
-      ),
-    },
+    wasm: ["@embedpdf/pdfium/pdfium.wasm"],
     workers: [],
     engines: [],
   },
@@ -87,7 +83,7 @@ if (!kinds[kind])
 const own = kinds[kind]
 const out = path.join(template, `dist-${kind}`)
 const entry = served(path.join(template, "src/main.tsx"))
-const wasm = Object.entries(own.wasm ?? {})
+const wasm = (own.wasm ?? []).map((spec) => [spec, packageWasm(spec)])
 const config = {
   aliases: {
     ...own.aliases,
