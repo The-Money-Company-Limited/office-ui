@@ -309,7 +309,8 @@ function SaturationValueArea({
   s: number
   v: number
   color: string
-  onMove: (s: number, v: number) => void
+  /** `final` is false while a drag moves and true when it ends or a key moves. */
+  onMove: (s: number, v: number, final: boolean) => void
 }) {
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null)
   // Avoid redraws for imperceptible hue changes.
@@ -326,7 +327,10 @@ function SaturationValueArea({
     context.putImageData(image, 0, 0)
   }, [quantizedHue])
 
-  const update = (event: React.PointerEvent<HTMLButtonElement>) => {
+  const update = (
+    event: React.PointerEvent<HTMLButtonElement>,
+    final: boolean
+  ) => {
     const rect = event.currentTarget.getBoundingClientRect()
     const inset = 7
     onMove(
@@ -341,7 +345,8 @@ function SaturationValueArea({
             100,
         0,
         100
-      )
+      ),
+      final
     )
   }
 
@@ -357,11 +362,15 @@ function SaturationValueArea({
         event.preventDefault()
         event.currentTarget.setPointerCapture(event.pointerId)
         event.currentTarget.focus()
-        update(event)
+        update(event, false)
       }}
       onPointerMove={(event) => {
         if ((event.buttons & 1) === 0) return
-        update(event)
+        update(event, false)
+      }}
+      onPointerUp={(event) => {
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+        update(event, true)
       }}
       onKeyDown={(event) => {
         const delta = event.shiftKey ? 10 : 1
@@ -372,7 +381,7 @@ function SaturationValueArea({
         if (event.key === "ArrowDown") next = [s, v - delta]
         if (next) {
           event.preventDefault()
-          onMove(clamp(next[0], 0, 100), clamp(next[1], 0, 100))
+          onMove(clamp(next[0], 0, 100), clamp(next[1], 0, 100), true)
         }
       }}
     >
@@ -413,11 +422,15 @@ function VerticalSlider({
   ariaValueNow: number
   ariaValueText?: string
   fraction: number
-  onFraction: (fraction: number) => void
+  /** `final` is false while a drag moves and true when it ends. */
+  onFraction: (fraction: number, final: boolean) => void
   onStep: (direction: 1 | -1, big: boolean) => void
   track: React.ReactNode
 }) {
-  const update = (event: React.PointerEvent<HTMLButtonElement>) => {
+  const update = (
+    event: React.PointerEvent<HTMLButtonElement>,
+    final: boolean
+  ) => {
     const rect = event.currentTarget.getBoundingClientRect()
     const inset = 2.5
     onFraction(
@@ -425,7 +438,8 @@ function VerticalSlider({
         (event.clientY - rect.top - inset) / (rect.height - inset * 2),
         0,
         1
-      )
+      ),
+      final
     )
   }
 
@@ -447,11 +461,15 @@ function VerticalSlider({
         event.preventDefault()
         event.currentTarget.setPointerCapture(event.pointerId)
         event.currentTarget.focus()
-        update(event)
+        update(event, false)
       }}
       onPointerMove={(event) => {
         if ((event.buttons & 1) === 0) return
-        update(event)
+        update(event, false)
+      }}
+      onPointerUp={(event) => {
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+        update(event, true)
       }}
       onKeyDown={(event) => {
         let direction: 1 | -1 | null = null
@@ -630,6 +648,12 @@ export type ColorPickerProps = {
   value?: string
   color?: string
   onChange?: (value: string) => void
+  /**
+   * Called once per final change: when a drag on the panel ends, or at once
+   * for a click, a key or a typed value. `onChange` also reports every step of
+   * a drag.
+   */
+  onValueCommit?: (value: string) => void
   label?: string
   disabled?: boolean
   showAlpha?: boolean
@@ -646,6 +670,7 @@ export function ColorPicker({
   value: valueProp,
   color,
   onChange,
+  onValueCommit,
   label = "Choose color",
   disabled = false,
   showAlpha = false,
@@ -716,7 +741,10 @@ export function ColorPicker({
     }
   }
 
-  const applyState = (next: { plane: HsvColor; rgb: RgbColor; a: number }) => {
+  const applyState = (
+    next: { plane: HsvColor; rgb: RgbColor; a: number },
+    final = true
+  ) => {
     setPicker(next)
     const hex = rgbaToHex(next.rgb, next.a)
     if ((valueProp !== undefined || color !== undefined) && onChange) {
@@ -726,19 +754,23 @@ export function ColorPicker({
       }))
     }
     onChange?.(hex)
+    if (final) onValueCommit?.(hex)
   }
 
-  const commitHsva = (next: HsvaColor) => {
+  const commitHsva = (next: HsvaColor, final = true) => {
     const plane: HsvColor = {
       h: clamp(next.h, 0, 360),
       s: clamp(next.s, 0, 100),
       v: clamp(next.v, 0, 100),
     }
-    applyState({
-      plane,
-      rgb: oklchPlaneToRgb(plane),
-      a: showAlpha ? clamp(next.a, 0, 1) : 1,
-    })
+    applyState(
+      {
+        plane,
+        rgb: oklchPlaneToRgb(plane),
+        a: showAlpha ? clamp(next.a, 0, 1) : 1,
+      },
+      final
+    )
   }
 
   const hsva: HsvaColor = { ...picker.plane, a: picker.a }
@@ -891,7 +923,7 @@ export function ColorPicker({
         s={hsva.s}
         v={hsva.v}
         color={opaqueColor}
-        onMove={(s, v) => commitHsva({ ...hsva, s, v })}
+        onMove={(s, v, final) => commitHsva({ ...hsva, s, v }, final)}
       />
 
       <div className="flex shrink-0 flex-col items-center gap-1.5 self-stretch">
@@ -903,8 +935,8 @@ export function ColorPicker({
               ariaValueNow={Math.round(hsva.a * 100)}
               ariaValueText={`${Math.round(hsva.a * 100)}%`}
               fraction={1 - hsva.a}
-              onFraction={(fraction) =>
-                commitHsva({ ...hsva, a: 1 - fraction })
+              onFraction={(fraction, final) =>
+                commitHsva({ ...hsva, a: 1 - fraction }, final)
               }
               onStep={(direction, big) =>
                 commitHsva({
@@ -931,8 +963,8 @@ export function ColorPicker({
             ariaValueMax={360}
             ariaValueNow={Math.round(hsva.h)}
             fraction={clamp(hsva.h, 0, 360) / 360}
-            onFraction={(fraction) =>
-              commitHsva({ ...hsva, h: fraction * 360 })
+            onFraction={(fraction, final) =>
+              commitHsva({ ...hsva, h: fraction * 360 }, final)
             }
             onStep={(direction, big) =>
               commitHsva({
