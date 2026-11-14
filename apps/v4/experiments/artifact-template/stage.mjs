@@ -19,7 +19,7 @@ const source = process.argv[2]
 
 if (!source || process.argv.length > 4) {
   throw new Error(
-    "Usage: pnpm --filter v4 artifact-template:stage /path/to/file.docx|xlsx|pptx|pdf|deck-folder [new-output-directory]"
+    "Usage: pnpm --filter v4 artifact-template:stage /path/to/file.xlsx|pptx|pdf|deck-folder [new-output-directory]"
   )
 }
 
@@ -27,9 +27,9 @@ const info = await lstat(source)
 const kind = info.isDirectory()
   ? "slides"
   : path.extname(source).slice(1).toLowerCase()
-if (!["docx", "xlsx", "pptx", "pdf", "slides"].includes(kind)) {
+if (!["xlsx", "pptx", "pdf", "slides"].includes(kind)) {
   throw new Error(
-    "Only deck folders and DOCX, XLSX, PPTX and PDF files are supported"
+    "Only deck folders and XLSX, PPTX and PDF files are supported"
   )
 }
 // A spreadsheet, a PDF or a deck ships as source (source/build.mjs); the
@@ -44,7 +44,7 @@ const output = process.argv[3] ? path.resolve(process.argv[3]) : dist
 const name = path.basename(source)
 if (
   kind !== "slides" &&
-  (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*\.(docx|xlsx|pptx|pdf)$/.test(name) ||
+  (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*\.(xlsx|pptx|pdf)$/.test(name) ||
     !name.endsWith(`.${kind}`))
 ) {
   throw new Error(

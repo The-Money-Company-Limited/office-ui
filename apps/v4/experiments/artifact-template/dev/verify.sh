@@ -5,7 +5,7 @@ cd apps/v4
 node node_modules/eslint/bin/eslint.js \
   experiments/artifact-template/src/*.ts experiments/artifact-template/src/*.tsx \
   experiments/artifact-template/dev/*.mjs \
-  components/extend/docx-editor.tsx components/extend/xlsx-editor.tsx \
+  components/extend/xlsx-editor.tsx \
   components/extend/pdf-editor.tsx components/extend/pdf-editor-dialogs.tsx \
   components/extend/pdf-editor-panels.tsx components/extend/pptx-viewer.tsx \
   components/extend/appearance-toggle.tsx \

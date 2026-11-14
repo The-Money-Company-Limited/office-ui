@@ -84,7 +84,7 @@ export function MobileRootPreview() {
 // server HTML, but CSS only ever shows one. Each viewer parses a real
 // document on mount, so the hidden twin grid (and the mobile viewport, which
 // shows a static image instead) must not mount the previews — that doubles
-// every PDF/DOCX/XLSX parse and rasterization pass.
+// every PDF/XLSX parse and rasterization pass.
 function useCollageBreakpoint() {
   const [breakpoint, setBreakpoint] = React.useState<"mobile" | "md" | "lg">()
 

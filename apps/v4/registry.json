@@ -574,7 +574,6 @@
       "description": "A macOS Finder-style file browser for flat object-store manifests with icon, list, column, and gallery views.",
       "dependencies": ["@pierre/trees@1.0.0-beta.4"],
       "registryDependencies": [
-        "@extend/docx-viewer",
         "@extend/file-thumbnail",
         "@extend/pdf-viewer",
         "@extend/pptx-viewer",
@@ -594,7 +593,7 @@
       "name": "file-system-block",
       "type": "registry:block",
       "title": "File System (Finder)",
-      "description": "A Finder-style file browser block that opens PDF, DOCX, PowerPoint, XLSX, and image files in large viewer dialogs.",
+      "description": "A Finder-style file browser block that opens PDF, PowerPoint, XLSX, and image files in large viewer dialogs.",
       "registryDependencies": ["@extend/file-system"],
       "categories": ["documents", "blocks"],
       "files": [
@@ -723,59 +722,6 @@
           "path": "lib/pdf-thumbnail-utils.ts",
           "type": "registry:lib",
           "target": "@lib/pdf-thumbnail-utils.ts"
-        }
-      ]
-    },
-    {
-      "name": "docx-viewer",
-      "type": "registry:ui",
-      "title": "DOCX Viewer",
-      "description": "A DOCX viewer with upload, zoom, theme controls, and read-only rendering.",
-      "dependencies": [
-        "@extend-ai/react-docx@^0.9.2",
-        "@tanstack/react-virtual@^3.13.12"
-      ],
-      "registryDependencies": [
-        "@extend/document-viewer-sidebar",
-        "@extend/file-thumbnail",
-        "utils"
-      ],
-      "categories": ["documents"],
-      "files": [
-        {
-          "path": "components/extend/docx-viewer.tsx",
-          "type": "registry:ui",
-          "target": "@components/extend/docx-viewer.tsx"
-        },
-        {
-          "path": "components/extend/docx-annotation-card.tsx",
-          "type": "registry:ui",
-          "target": "@components/extend/docx-annotation-card.tsx"
-        }
-      ]
-    },
-    {
-      "name": "docx-editor",
-      "type": "registry:ui",
-      "title": "DOCX Editor",
-      "description": "An experimental DOCX editor with a Word-style toolbar, page thumbnails, import, export, and live document mutation.",
-      "dependencies": ["@extend-ai/react-docx@^0.9.2"],
-      "registryDependencies": [
-        "@extend/document-viewer-sidebar",
-        "@extend/file-thumbnail",
-        "utils"
-      ],
-      "categories": ["documents"],
-      "files": [
-        {
-          "path": "components/extend/docx-editor.tsx",
-          "type": "registry:ui",
-          "target": "@components/extend/docx-editor.tsx"
-        },
-        {
-          "path": "components/extend/docx-annotation-card.tsx",
-          "type": "registry:ui",
-          "target": "@components/extend/docx-annotation-card.tsx"
         }
       ]
     },
@@ -1041,21 +987,6 @@
           "path": "registry/new-york-v4/blocks/excel-editor.tsx",
           "type": "registry:component",
           "target": "@components/blocks/excel-editor.tsx"
-        }
-      ]
-    },
-    {
-      "name": "docx-editor-block",
-      "type": "registry:block",
-      "title": "DOCX Editor",
-      "description": "A full DOCX editor block with a Word-style toolbar, page thumbnails, and export controls.",
-      "registryDependencies": ["@extend/docx-editor"],
-      "categories": ["documents", "blocks"],
-      "files": [
-        {
-          "path": "registry/new-york-v4/blocks/docx-editor.tsx",
-          "type": "registry:component",
-          "target": "@components/blocks/docx-editor.tsx"
         }
       ]
     },

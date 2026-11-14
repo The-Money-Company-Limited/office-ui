@@ -38,7 +38,7 @@ export const PDF_VIEWER_BLOCKS = [
     id: "file-system",
     title: "File System (Finder)",
     description:
-      "A Finder-style file browser that opens PDF, DOCX, XLSX, and image files in viewer dialogs.",
+      "A Finder-style file browser that opens PDF, PowerPoint, XLSX, and image files in viewer dialogs.",
     command: getRegistryAddCommand("file-system-block"),
     docsHref: "/docs/components/file-system",
     viewHref: "/view/blocks/file-system",
@@ -90,17 +90,6 @@ export const PDF_VIEWER_BLOCKS = [
     docsHref: "/docs/components/pdf-editor",
     viewHref: "/view/blocks/pdf-editor-block",
     previewHeightClassName: "h-[760px]",
-  },
-  {
-    id: "docx-editor-block",
-    title: "DOCX Editor",
-    badge: "Experimental",
-    description:
-      "A Word-style document editor with formatting controls, page thumbnails, and DOCX export.",
-    command: getRegistryAddCommand("docx-editor-block"),
-    docsHref: "/docs/components/docx-editor",
-    viewHref: "/view/blocks/docx-editor-block",
-    previewHeightClassName: "h-[720px]",
   },
 ] as const satisfies readonly PdfViewerBlockConfig[]
 

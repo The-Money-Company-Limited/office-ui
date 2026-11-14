@@ -23,9 +23,8 @@ package so consumers do not need internal workspace packages or repository patch
 
 3. Commit and merge the version changes to `main`.
 
-Every push to `main` triggers `.github/workflows/publish.yml`. Like the `react-docx` release
-workflow, it reads the current public package version and checks whether that exact version
-already exists on npm. Existing versions stop after the check, without installing dependencies,
+Every push to `main` triggers `.github/workflows/publish.yml`. It reads the current public
+package version and checks whether that exact version already exists on npm. Existing versions stop after the check, without installing dependencies,
 building, publishing, or entering the privileged release job. If the version is new, an
 unprivileged job builds, typechecks, and verifies one tarball, stamps it with the release commit,
 then a minimal privileged job publishes those exact bytes, pushes a matching `v<version>` Git

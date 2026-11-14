@@ -27,7 +27,7 @@ than silently removed.
 
 ## Responsive zoom
 
-The viewer accepts the same responsive zoom shape as `@extend-ai/react-docx`. Numeric values are
+The viewer accepts a responsive zoom shape. Numeric values are
 percentages, while `automatic`, `fit-page`, and `fit-width` remain active as the viewport changes.
 For example, the shared API can be expressed as:
 

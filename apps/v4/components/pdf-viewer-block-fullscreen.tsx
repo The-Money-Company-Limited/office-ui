@@ -67,12 +67,6 @@ const PdfEditorBlock = dynamic<PdfViewerBlockFullscreenPreviewProps>(
   { loading: () => <BlockViewPlaceholder /> }
 )
 
-const DocxEditorBlock = dynamic<PdfViewerBlockFullscreenPreviewProps>(
-  () =>
-    import("@/components/docx-editor-docs").then((mod) => mod.DocxEditorBlock),
-  { loading: () => <BlockViewPlaceholder /> }
-)
-
 const FileSystemFinderBlock = dynamic<PdfViewerBlockFullscreenPreviewProps>(
   () =>
     import("@/components/file-system-docs").then(
@@ -90,7 +84,6 @@ const blockComponents = {
   "e-signature": ESignatureBlock,
   "document-splits": DocumentSplitsBlock,
   "excel-editor": XlsxEditorBlock,
-  "docx-editor-block": DocxEditorBlock,
   "pdf-editor-block": PdfEditorBlock,
   "file-system": FileSystemFinderBlock,
 } satisfies Record<

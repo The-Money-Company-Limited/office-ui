@@ -10,12 +10,6 @@ overrides:
   lodash: 4.18.1
   picomatch@>=4.0.0 <4.0.4: 4.0.4
   esbuild: 0.28.1
-  react-docx-monorepo>vite: 6.4.2
-
-patchedDependencies:
-  '@chenglou/pretext@0.0.8':
-    hash: 4bpai3ljegzxf3kheyn3xjnikm
-    path: engines/react-docx/patches/@chenglou__pretext@0.0.8.patch
 
 importers:
 
@@ -135,9 +129,6 @@ importers:
       '@embedpdf/utils':
         specifier: 2.15.0
         version: 2.15.0(preact@11.0.0-beta.0)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(svelte@5.56.3(@typescript-eslint/types@8.59.1))(vue@3.5.38(typescript@5.9.2))
-      '@extend-ai/react-docx':
-        specifier: workspace:*
-        version: link:../../engines/react-docx/packages/react-viewer
       '@extend-ai/react-pptx':
         specifier: workspace:*
         version: link:../../engines/react-pptx/packages/react-viewer
@@ -352,211 +343,6 @@ importers:
       vite:
         specifier: 7.3.2
         version: 7.3.2(@types/node@20.19.10)(jiti@2.6.1)(lightningcss@1.33.0)(tsx@4.20.3)(yaml@2.8.1)
-
-  engines/react-docx:
-    devDependencies:
-      '@changesets/cli':
-        specifier: ^2.29.5
-        version: 2.31.1(@types/node@22.20.5)
-      '@extend-ai/react-docx-doc-model':
-        specifier: workspace:*
-        version: link:packages/doc-model
-      '@extend-ai/react-docx-editor-ops':
-        specifier: workspace:*
-        version: link:packages/editor-ops
-      '@extend-ai/react-docx-layout-core':
-        specifier: workspace:*
-        version: link:packages/layout-core
-      '@extend-ai/react-docx-layout-engine':
-        specifier: workspace:*
-        version: link:packages/layout-engine
-      '@extend-ai/react-docx-ooxml-core':
-        specifier: workspace:*
-        version: link:packages/ooxml-core
-      '@extend-ai/react-docx-serializer':
-        specifier: workspace:*
-        version: link:packages/serializer
-      '@playwright/test':
-        specifier: ^1.52.0
-        version: 1.56.1
-      '@types/node':
-        specifier: ^22.15.3
-        version: 22.20.5
-      '@types/react':
-        specifier: 19.2.2
-        version: 19.2.2
-      '@types/react-dom':
-        specifier: 19.2.2
-        version: 19.2.2(@types/react@19.2.2)
-      react:
-        specifier: ^19.1.0
-        version: 19.2.3
-      react-dom:
-        specifier: ^19.1.0
-        version: 19.2.3(react@19.2.3)
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(jiti@2.6.1)(postcss@8.5.30)(tsx@4.20.3)(typescript@5.9.2)(yaml@2.8.1)
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.2
-      vite:
-        specifier: 6.4.2
-        version: 6.4.2(@types/node@22.20.5)(jiti@2.6.1)(lightningcss@1.33.0)(tsx@4.20.3)(yaml@2.8.1)
-      vite-tsconfig-paths:
-        specifier: ^5.1.4
-        version: 5.1.4(typescript@5.9.2)(vite@6.4.2(@types/node@22.20.5)(jiti@2.6.1)(lightningcss@1.33.0)(tsx@4.20.3)(yaml@2.8.1))
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.12(@opentelemetry/api@1.9.0)(@types/node@22.20.5)(jsdom@26.1.0)(msw@2.14.6(@types/node@22.20.5)(typescript@5.9.2))(vite@6.4.2(@types/node@22.20.5)(jiti@2.6.1)(lightningcss@1.33.0)(tsx@4.20.3)(yaml@2.8.1))
-
-  engines/react-docx/packages/doc-model:
-    dependencies:
-      '@extend-ai/react-docx-ooxml-core':
-        specifier: workspace:*
-        version: link:../ooxml-core
-      '@extend-ai/react-docx-wasm':
-        specifier: workspace:*
-        version: link:../wasm
-    devDependencies:
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(jiti@2.6.1)(postcss@8.5.30)(tsx@4.20.3)(typescript@5.9.2)(yaml@2.8.1)
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.2
-
-  engines/react-docx/packages/editor-ops:
-    dependencies:
-      '@extend-ai/react-docx-doc-model':
-        specifier: workspace:*
-        version: link:../doc-model
-    devDependencies:
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(jiti@2.6.1)(postcss@8.5.30)(tsx@4.20.3)(typescript@5.9.2)(yaml@2.8.1)
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.2
-
-  engines/react-docx/packages/layout-core:
-    dependencies:
-      '@extend-ai/react-docx-doc-model':
-        specifier: workspace:*
-        version: link:../doc-model
-      '@extend-ai/react-docx-layout-engine':
-        specifier: workspace:*
-        version: link:../layout-engine
-    devDependencies:
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(jiti@2.6.1)(postcss@8.5.30)(tsx@4.20.3)(typescript@5.9.2)(yaml@2.8.1)
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.2
-
-  engines/react-docx/packages/layout-engine:
-    dependencies:
-      '@extend-ai/react-docx-doc-model':
-        specifier: workspace:*
-        version: link:../doc-model
-    devDependencies:
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(jiti@2.6.1)(postcss@8.5.30)(tsx@4.20.3)(typescript@5.9.2)(yaml@2.8.1)
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.2
-
-  engines/react-docx/packages/ooxml-core:
-    dependencies:
-      '@extend-ai/react-docx-wasm':
-        specifier: workspace:*
-        version: link:../wasm
-    devDependencies:
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(jiti@2.6.1)(postcss@8.5.30)(tsx@4.20.3)(typescript@5.9.2)(yaml@2.8.1)
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.2
-
-  engines/react-docx/packages/react-viewer:
-    dependencies:
-      '@chenglou/pretext':
-        specifier: ^0.0.8
-        version: 0.0.8(patch_hash=4bpai3ljegzxf3kheyn3xjnikm)
-      '@tanstack/react-virtual':
-        specifier: ^3.14.14
-        version: 3.14.21(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
-      fast-png:
-        specifier: ^8.0.0
-        version: 8.0.0
-      react:
-        specifier: '>=18'
-        version: 19.2.3
-      react-dom:
-        specifier: '>=18'
-        version: 19.2.3(react@19.2.3)
-      utif:
-        specifier: ^3.1.0
-        version: 3.1.0
-    devDependencies:
-      '@extend-ai/react-docx-doc-model':
-        specifier: workspace:*
-        version: link:../doc-model
-      '@extend-ai/react-docx-editor-ops':
-        specifier: workspace:*
-        version: link:../editor-ops
-      '@extend-ai/react-docx-layout-core':
-        specifier: workspace:*
-        version: link:../layout-core
-      '@extend-ai/react-docx-layout-engine':
-        specifier: workspace:*
-        version: link:../layout-engine
-      '@extend-ai/react-docx-ooxml-core':
-        specifier: workspace:*
-        version: link:../ooxml-core
-      '@extend-ai/react-docx-serializer':
-        specifier: workspace:*
-        version: link:../serializer
-      '@extend-ai/react-docx-wasm':
-        specifier: workspace:*
-        version: link:../wasm
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(jiti@2.6.1)(postcss@8.5.30)(tsx@4.20.3)(typescript@5.9.2)(yaml@2.8.1)
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.2
-
-  engines/react-docx/packages/serializer:
-    dependencies:
-      '@extend-ai/react-docx-doc-model':
-        specifier: workspace:*
-        version: link:../doc-model
-      '@extend-ai/react-docx-ooxml-core':
-        specifier: workspace:*
-        version: link:../ooxml-core
-      '@extend-ai/react-docx-wasm':
-        specifier: workspace:*
-        version: link:../wasm
-    devDependencies:
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(jiti@2.6.1)(postcss@8.5.30)(tsx@4.20.3)(typescript@5.9.2)(yaml@2.8.1)
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.2
-
-  engines/react-docx/packages/wasm:
-    devDependencies:
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(jiti@2.6.1)(postcss@8.5.30)(tsx@4.20.3)(typescript@5.9.2)(yaml@2.8.1)
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.2
 
   engines/react-pptx:
     devDependencies:
@@ -1104,9 +890,6 @@ packages:
 
   '@changesets/write@0.4.0':
     resolution: {integrity: sha512-CdTLvIOPiCNuH71pyDu3rA+Q0n65cmAbXnwWH84rKGiFumFzkmHNT8KHTMEchcxN+Kl8I54xGUhJ7l3E7X396Q==}
-
-  '@chenglou/pretext@0.0.8':
-    resolution: {integrity: sha512-yqm2GMxnPI7VHcHwe84P8ZF0JK/2d2DMKPqMN+s95jQhwDMYYXKVFVJUMEaVWckQStdsjdLav/0Vu+d9YbtGxA==}
 
   '@csstools/color-helpers@5.1.0':
     resolution: {integrity: sha512-S11EXWJyy0Mz5SYvRmY8nJYTFFd1LCNV+7cXyAgQtOOuzb4EsgfqDufL+9esx72/eLhsRdGZwaldu/h+E4t4BA==}
@@ -4763,9 +4546,6 @@ packages:
   fast-levenshtein@2.0.6:
     resolution: {integrity: sha512-DCXu6Ifhqcks7TZKY3Hxp3y6qphY5SJZmrWMDrKcERSOXWQdMhU9Ig/PYrzyw/ul9jOIyh0N4M0tbC5hodg8dw==}
 
-  fast-png@8.0.0:
-    resolution: {integrity: sha512-gCysNasJ8KEMgfdYIKd/wTDo6ENK1PWT0RJO7O+0pgmuHPw2O6tA1WvdxFRJoLf9V8yFYpG0FA1YgI8X97OhJA==}
-
   fast-string-truncated-width@3.0.3:
     resolution: {integrity: sha512-0jjjIEL6+0jag3l2XWWizO64/aZVtpiGE3t0Zgqxv0DPuxiMjvB3M24fCyhZUO4KomJQPj3LTSUnDP3GpdwC0g==}
 
@@ -5195,9 +4975,6 @@ packages:
   internmap@2.0.3:
     resolution: {integrity: sha512-5Hh7Y1wQbvY5ooGgPbDaL5iYLAPzMTUrjMulskHLH6wnv/A+1q5rgEaiuqEjB+oxGXIVZs1FF+R/KPN3ZSQYYg==}
     engines: {node: '>=12'}
-
-  iobuffer@6.0.1:
-    resolution: {integrity: sha512-SZWYkWNfjIXIBYSDpXDYIgshqtbOPsi4lviawAEceR1Kqk+sHDlcQjWrzNQsii80AyBY0q5c8HCTNjqo74ul+Q==}
 
   ip-address@10.2.0:
     resolution: {integrity: sha512-/+S6j4E9AHvW9SWMSEY9Xfy66O5PWvVEJ08O0y5JGyEKQpojb0K0GKpz/v5HJ/G0vi3D2sjGK78119oXZeE0qA==}
@@ -7353,9 +7130,6 @@ packages:
     peerDependencies:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
-  utif@3.1.0:
-    resolution: {integrity: sha512-WEo4D/xOvFW53K5f5QTaTbbiORcm2/pCL9P6qmJnup+17eYfKaEhDeX9PeQkuyEoIxlbGklDuGl8xwuXYMrrXQ==}
-
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
 
@@ -7382,46 +7156,6 @@ packages:
       vite: '*'
     peerDependenciesMeta:
       vite:
-        optional: true
-
-  vite@6.4.2:
-    resolution: {integrity: sha512-2N/55r4JDJ4gdrCvGgINMy+HH3iRpNIz8K6SFwVsA+JbQScLiC+clmAxBgwiSPgcG9U15QmvqCGWzMbqda5zGQ==}
-    engines: {node: ^18.0.0 || ^20.0.0 || >=22.0.0}
-    hasBin: true
-    peerDependencies:
-      '@types/node': ^18.0.0 || ^20.0.0 || >=22.0.0
-      jiti: '>=1.21.0'
-      less: '*'
-      lightningcss: ^1.21.0
-      sass: '*'
-      sass-embedded: '*'
-      stylus: '*'
-      sugarss: '*'
-      terser: ^5.16.0
-      tsx: ^4.8.1
-      yaml: ^2.4.2
-    peerDependenciesMeta:
-      '@types/node':
-        optional: true
-      jiti:
-        optional: true
-      less:
-        optional: true
-      lightningcss:
-        optional: true
-      sass:
-        optional: true
-      sass-embedded:
-        optional: true
-      stylus:
-        optional: true
-      sugarss:
-        optional: true
-      terser:
-        optional: true
-      tsx:
-        optional: true
-      yaml:
         optional: true
 
   vite@7.3.2:
@@ -8171,8 +7905,6 @@ snapshots:
       fs-extra: 7.0.1
       human-id: 4.2.2
       prettier: 2.8.8
-
-  '@chenglou/pretext@0.0.8(patch_hash=4bpai3ljegzxf3kheyn3xjnikm)': {}
 
   '@csstools/color-helpers@5.1.0': {}
 
@@ -10736,15 +10468,6 @@ snapshots:
       chai: 6.3.0
       tinyrainbow: 3.2.0
 
-  '@vitest/mocker@4.1.12(msw@2.14.6(@types/node@22.20.5)(typescript@5.9.2))(vite@6.4.2(@types/node@22.20.5)(jiti@2.6.1)(lightningcss@1.33.0)(tsx@4.20.3)(yaml@2.8.1))':
-    dependencies:
-      '@vitest/spy': 4.1.12
-      estree-walker: 3.0.3
-      magic-string: 0.30.21
-    optionalDependencies:
-      msw: 2.14.6(@types/node@22.20.5)(typescript@5.9.2)
-      vite: 6.4.2(@types/node@22.20.5)(jiti@2.6.1)(lightningcss@1.33.0)(tsx@4.20.3)(yaml@2.8.1)
-
   '@vitest/mocker@4.1.12(msw@2.14.6(@types/node@22.20.5)(typescript@5.9.2))(vite@8.3.4(@types/node@22.20.5)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.20.3)(yaml@2.8.1))':
     dependencies:
       '@vitest/spy': 4.1.12
@@ -11924,11 +11647,6 @@ snapshots:
 
   fast-levenshtein@2.0.6: {}
 
-  fast-png@8.0.0:
-    dependencies:
-      fflate: 0.8.3
-      iobuffer: 6.0.1
-
   fast-string-truncated-width@3.0.3: {}
 
   fast-string-width@3.0.2:
@@ -12440,8 +12158,6 @@ snapshots:
       side-channel: 1.1.0
 
   internmap@2.0.3: {}
-
-  iobuffer@6.0.1: {}
 
   ip-address@10.2.0: {}
 
@@ -15083,10 +14799,6 @@ snapshots:
     dependencies:
       react: 19.2.3
 
-  utif@3.1.0:
-    dependencies:
-      pako: 1.0.11
-
   util-deprecate@1.0.2: {}
 
   validate-npm-package-name@7.0.2: {}
@@ -15108,17 +14820,6 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
 
-  vite-tsconfig-paths@5.1.4(typescript@5.9.2)(vite@6.4.2(@types/node@22.20.5)(jiti@2.6.1)(lightningcss@1.33.0)(tsx@4.20.3)(yaml@2.8.1)):
-    dependencies:
-      debug: 4.4.3
-      globrex: 0.1.2
-      tsconfck: 3.1.6(typescript@5.9.2)
-    optionalDependencies:
-      vite: 6.4.2(@types/node@22.20.5)(jiti@2.6.1)(lightningcss@1.33.0)(tsx@4.20.3)(yaml@2.8.1)
-    transitivePeerDependencies:
-      - supports-color
-      - typescript
-
   vite-tsconfig-paths@5.1.4(typescript@5.9.2)(vite@8.3.4(@types/node@22.20.5)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.20.3)(yaml@2.8.1)):
     dependencies:
       debug: 4.4.3
@@ -15129,22 +14830,6 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
       - typescript
-
-  vite@6.4.2(@types/node@22.20.5)(jiti@2.6.1)(lightningcss@1.33.0)(tsx@4.20.3)(yaml@2.8.1):
-    dependencies:
-      esbuild: 0.28.1
-      fdir: 6.5.0(picomatch@4.0.4)
-      picomatch: 4.0.4
-      postcss: 8.5.30
-      rollup: 4.63.1
-      tinyglobby: 0.2.17
-    optionalDependencies:
-      '@types/node': 22.20.5
-      fsevents: 2.3.3
-      jiti: 2.6.1
-      lightningcss: 1.33.0
-      tsx: 4.20.3
-      yaml: 2.8.1
 
   vite@7.3.2(@types/node@20.19.10)(jiti@2.6.1)(lightningcss@1.33.0)(tsx@4.20.3)(yaml@2.8.1):
     dependencies:
@@ -15176,35 +14861,6 @@ snapshots:
       jiti: 2.6.1
       tsx: 4.20.3
       yaml: 2.8.1
-
-  vitest@4.1.12(@opentelemetry/api@1.9.0)(@types/node@22.20.5)(jsdom@26.1.0)(msw@2.14.6(@types/node@22.20.5)(typescript@5.9.2))(vite@6.4.2(@types/node@22.20.5)(jiti@2.6.1)(lightningcss@1.33.0)(tsx@4.20.3)(yaml@2.8.1)):
-    dependencies:
-      '@vitest/expect': 4.1.12
-      '@vitest/mocker': 4.1.12(msw@2.14.6(@types/node@22.20.5)(typescript@5.9.2))(vite@6.4.2(@types/node@22.20.5)(jiti@2.6.1)(lightningcss@1.33.0)(tsx@4.20.3)(yaml@2.8.1))
-      '@vitest/pretty-format': 4.1.12
-      '@vitest/runner': 4.1.12
-      '@vitest/snapshot': 4.1.12
-      '@vitest/spy': 4.1.12
-      '@vitest/utils': 4.1.12
-      es-module-lexer: 2.3.2
-      expect-type: 1.4.0
-      magic-string: 0.30.21
-      obug: 2.2.1
-      pathe: 2.0.3
-      picomatch: 4.0.4
-      std-env: 4.3.0
-      tinybench: 2.9.0
-      tinyexec: 1.0.2
-      tinyglobby: 0.2.17
-      tinyrainbow: 3.2.0
-      vite: 6.4.2(@types/node@22.20.5)(jiti@2.6.1)(lightningcss@1.33.0)(tsx@4.20.3)(yaml@2.8.1)
-      why-is-node-running: 2.3.0
-    optionalDependencies:
-      '@opentelemetry/api': 1.9.0
-      '@types/node': 22.20.5
-      jsdom: 26.1.0
-    transitivePeerDependencies:
-      - msw
 
   vitest@4.1.12(@opentelemetry/api@1.9.0)(@types/node@22.20.5)(jsdom@26.1.0)(msw@2.14.6(@types/node@22.20.5)(typescript@5.9.2))(vite@8.3.4(@types/node@22.20.5)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.20.3)(yaml@2.8.1)):
     dependencies:

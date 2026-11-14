@@ -27,11 +27,10 @@ const scenarioKinds = {
   alignment: ["xlsx"],
   "slide-ids": ["slides"],
   header: ["pptx", "pdf"],
-  undo: ["docx", "xlsx"],
-  webmcp: ["docx", "xlsx", "pdf"],
+  undo: ["xlsx"],
+  webmcp: ["xlsx", "pdf"],
 }
 const kinds = process.env.AUTOSAVE_KINDS?.split(",") ?? [
-  "docx",
   "xlsx",
   "slides",
   "pdf",
@@ -46,11 +45,6 @@ async function properties(page) {
   await page.getByLabel("Title", { exact: true }).waitFor()
 }
 async function ready(page, kind, readOnly = false) {
-  if (kind === "docx")
-    await page
-      .getByText("Autosave original", { exact: false })
-      .first()
-      .waitFor()
   if (kind === "xlsx" && !readOnly)
     await page
       .getByRole("textbox", { name: "Formula bar", exact: true })
@@ -66,20 +60,7 @@ async function ready(page, kind, readOnly = false) {
   if (readOnly) await page.getByText("View only", { exact: true }).waitFor()
 }
 async function edit(page, kind, text) {
-  if (kind === "docx") {
-    const mode = page.getByRole("button", { name: /Mode: Viewing/ })
-    if (await mode.count()) {
-      await mode.click()
-      await page.getByRole("menuitem", { name: "Editing", exact: true }).click()
-    }
-    const editor = page.locator('[data-docx-paragraph-node-index="0"]').first()
-    await editor.click()
-    await page.keyboard.press("Home")
-    await page.keyboard.insertText(text + " ")
-    await page
-      .getByRole("button", { name: /Use light appearance|Use dark appearance/ })
-      .click()
-  } else if (kind === "xlsx") {
+  if (kind === "xlsx") {
     const name = page.getByRole("textbox", { name: "Name box", exact: true })
     await name.fill("A1")
     await name.press("Enter")
@@ -106,8 +87,6 @@ async function edit(page, kind, text) {
   }
 }
 async function assertEdit(page, kind, text) {
-  if (kind === "docx")
-    await page.getByText(text, { exact: false }).first().waitFor()
   if (kind === "xlsx") {
     await page
       .getByRole("textbox", { name: "Name box", exact: true })
@@ -138,11 +117,6 @@ async function checkBytes(kind, buffer, text) {
     assert.equal((await PDFDocument.load(buffer)).getTitle(), text)
   else {
     const zip = await JSZip.loadAsync(buffer)
-    if (kind === "docx")
-      assert.match(
-        await zip.file("word/document.xml").async("string"),
-        new RegExp(text)
-      )
     if (kind === "xlsx") {
       const xml = await Promise.all(
         Object.keys(zip.files)
@@ -280,47 +254,7 @@ async function run(kind, scenario) {
           }))
         )
       const readOnly = { readOnlyHint: true, untrustedContentHint: true }
-      if (kind === "docx") {
-        await page.waitForFunction(() => window.webmcpTools.size === 4)
-        assert.deepEqual(await tools(), [
-          { name: "doc_read", annotations: readOnly },
-          { name: "doc_find", annotations: readOnly },
-          { name: "doc_comments", annotations: readOnly },
-          { name: "doc_revisions", annotations: readOnly },
-        ])
-        const found = await call("doc_find", { text: "original" })
-        assert.deepEqual(
-          found.matches.map(({ start, end }) => [start, end]),
-          [[9, 17]]
-        )
-        assert.deepEqual(found.tableCells, [{ table: 1, row: 0, column: 0 }])
-        assert.deepEqual(found.headersFooters, [])
-        await edit(page, kind, "Unsaved")
-        const read = await call("doc_read")
-        assert.equal(read.paragraphs[0].text, "Unsaved Autosave original")
-        assert.deepEqual(read.tables, [{ index: 1, rows: [["Cell original"]] }])
-        assert.deepEqual(read.headersFooters, [])
-        assert.deepEqual(await call("doc_comments"), { comments: [] })
-        assert.deepEqual((await call("doc_revisions")).revisions, [])
-        // A read sees a table cell's in-progress text and leaves it with the editor, which saves it.
-        await page.getByText("Cell original", { exact: true }).first().click()
-        await page.keyboard.press("End")
-        await page.keyboard.type(" draft")
-        for (const _ of [1, 2])
-          assert.deepEqual((await call("doc_read")).tables[0].rows, [
-            ["Cell original draft"],
-          ])
-        await page.locator('[data-docx-paragraph-node-index="0"]').first().click()
-        for (let attempt = 0; ; attempt++) {
-          try {
-            await checkBytes(kind, await readFile(file), "Cell original draft")
-            break
-          } catch (error) {
-            if (attempt > 100) throw error
-            await page.waitForTimeout(100)
-          }
-        }
-      } else if (kind === "xlsx") {
+      if (kind === "xlsx") {
         await page.waitForFunction(() => window.webmcpTools.size === 3)
         assert.deepEqual(await tools(), [
           { name: "sheet_read", annotations: readOnly },
@@ -342,35 +276,6 @@ async function run(kind, scenario) {
         await page.waitForTimeout(1000)
         assert.deepEqual(await tools(), [])
       }
-    } else if (scenario === "undo" && kind === "docx") {
-      // Undo takes back the last word typed, as in Google Docs, not one key or the whole burst.
-      const mode = page.getByRole("button", { name: /Mode: Viewing/ })
-      if (await mode.count()) {
-        await mode.click()
-        await page.getByRole("menuitem", { name: "Editing", exact: true }).click()
-      }
-      const paragraph = page
-        .locator('[data-docx-paragraph-node-index="0"]')
-        .first()
-      await paragraph.click()
-      await page.keyboard.press("End")
-      await page.keyboard.type(" alpha beta", { delay: 40 })
-      const text = async () => (await paragraph.innerText()).trimEnd()
-      await page.waitForFunction(
-        () => document.body.innerText.includes("alpha beta")
-      )
-      await page.keyboard.press("ControlOrMeta+z")
-      assert.equal(await text(), "Autosave original alpha")
-      await page.keyboard.press("ControlOrMeta+z")
-      assert.equal(await text(), "Autosave original")
-      await page.keyboard.press("ControlOrMeta+Shift+z")
-      assert.equal(await text(), "Autosave original alpha")
-      // Held-down Backspace is one step too.
-      await page.keyboard.press("End")
-      for (let i = 0; i < 3; i++) await page.keyboard.press("Backspace")
-      assert.equal(await text(), "Autosave original alp")
-      await page.keyboard.press("ControlOrMeta+z")
-      assert.equal(await text(), "Autosave original alpha")
     } else if (scenario === "undo" && kind === "xlsx") {
       // One undo takes back one committed cell edit.
       const name = page.getByRole("textbox", { name: "Name box", exact: true })
@@ -468,13 +373,6 @@ async function run(kind, scenario) {
       await navigation
       await assertEdit(page, kind, "Unsaved edit")
     } else if (scenario === "read-only") {
-      if (kind === "docx") {
-        assert.equal(await page.locator('[contenteditable="true"]').count(), 0)
-        assert.equal(
-          await page.getByRole("button", { name: /Mode:/ }).count(),
-          0
-        )
-      }
       if (kind === "xlsx") {
         assert.equal(
           await page.getByRole("textbox", { name: "Formula bar" }).count(),
@@ -710,32 +608,21 @@ async function run(kind, scenario) {
           })
           await writeFile(file, before)
           await control({ changed: true })
-          if (kind === "docx") {
-            await page
-              .getByText(text, { exact: false })
-              .first()
-              .waitFor({ state: "hidden" })
-            await page
-              .getByText("Autosave original", { exact: false })
-              .first()
-              .waitFor()
-          } else {
-            // Wait for the new document to finish loading before opening a dialog or typing a cell address.
+          // Wait for the new document to finish loading before opening a dialog or typing a cell address.
+          await page.waitForFunction(
+            () =>
+              document.querySelector("[data-autosave-status]") &&
+              !document.body.innerText.includes("Opening document")
+          )
+          if (kind === "slides")
             await page.waitForFunction(
-              () =>
-                document.querySelector("[data-autosave-status]") &&
-                !document.body.innerText.includes("Opening document")
+              (title) =>
+                document.getElementById("welcome-title")?.textContent ===
+                title,
+              originalTitle
             )
-            if (kind === "slides")
-              await page.waitForFunction(
-                (title) =>
-                  document.getElementById("welcome-title")?.textContent ===
-                  title,
-                originalTitle
-              )
-            else await page.waitForTimeout(1500)
-            await assertEdit(page, kind, originalTitle)
-          }
+          else await page.waitForTimeout(1500)
+          await assertEdit(page, kind, originalTitle)
           assert.equal(
             await page.evaluate(() => window.autosaveReloadSentinel),
             true

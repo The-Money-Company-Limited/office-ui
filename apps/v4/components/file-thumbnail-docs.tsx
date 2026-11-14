@@ -2,12 +2,6 @@
 
 import * as React from "react"
 import {
-  DocxEditorViewer,
-  useDocxEditor,
-  useDocxViewerThumbnails,
-  type DocxEditorController,
-} from "@extend-ai/react-docx"
-import {
   useXlsxViewerController,
   useXlsxViewerThumbnails,
   XlsxViewerProvider,
@@ -25,28 +19,17 @@ import {
   type ThumbnailFile,
 } from "@/components/extend/file-thumbnail"
 
-const DOCX_MIME_TYPE =
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 const XLSX_MIME_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 const PDF_THUMBNAIL_WIDTH = 240
-const DOCX_THUMBNAIL_WIDTH = 240
 const XLSX_THUMBNAIL_WIDTH = 520
 
-type DemoFileKind = "image" | "pdf" | "docx" | "xlsx"
+type DemoFileKind = "image" | "pdf" | "xlsx"
 
 type DemoFile = ThumbnailFile & {
   description: string
   kind: DemoFileKind
   url: string
-}
-
-type DocxThumbnailRenderState = {
-  aspectRatio: number
-  isMounted: boolean
-  pixelHeightPx: number
-  pixelWidthPx: number
-  status: string
 }
 
 export const SAMPLE_FILES: DemoFile[] = [
@@ -63,13 +46,6 @@ export const SAMPLE_FILES: DemoFile[] = [
     description: "PDF",
     kind: "pdf",
     url: withUiBasePath("/samples/attention.pdf"),
-  },
-  {
-    name: "demo.docx",
-    type: DOCX_MIME_TYPE,
-    description: "DOCX",
-    kind: "docx",
-    url: withUiBasePath("/samples/demo.docx"),
   },
   {
     name: "crazy-chart-zoo.xlsx",
@@ -97,7 +73,6 @@ async function fetchFile(file: DemoFile) {
 export function getFileKindLabel(file: ThumbnailFile) {
   if (file.type.startsWith("image/")) return "Image"
   if (file.type === "application/pdf") return "PDF"
-  if (file.name.endsWith(".docx")) return "DOCX"
   if (file.name.endsWith(".xlsx")) return "XLSX"
 
   return "File"
@@ -171,133 +146,6 @@ function PdfThumbnailPreview({
       isLoading={!imageUrl && !hasError}
       hasError={hasError}
     />
-  )
-}
-
-function DocxThumbnailPreview({
-  file,
-  previewAspectRatio,
-}: {
-  file: DemoFile
-  previewAspectRatio?: number
-}) {
-  const editor = useDocxEditor({
-    initialDocumentTheme: "light",
-    initialFileName: file.name,
-  })
-  const { importDocxFile } = editor
-  const [isLoading, setIsLoading] = React.useState(true)
-  const [hasError, setHasError] = React.useState(false)
-  const thumbnailEditor = React.useMemo<DocxEditorController>(
-    () => ({
-      ...editor,
-      totalPages: Math.max(editor.totalPages, 1),
-    }),
-    [editor]
-  )
-  const { thumbnails } = useDocxViewerThumbnails(
-    thumbnailEditor,
-    React.useMemo(
-      () => ({
-        pixelRatio: 2,
-        resolution: {
-          maxHeight: DOCX_THUMBNAIL_WIDTH * 1.35,
-          maxWidth: DOCX_THUMBNAIL_WIDTH,
-        },
-      }),
-      []
-    )
-  )
-  const firstThumbnail = thumbnails[0]
-  const thumbnailRenderState = firstThumbnail
-  const attachDocxThumbnailCanvas = firstThumbnail?.canvasRef
-
-  const [previousInputs, setPreviousInputs] = React.useState({
-    file,
-    importDocxFile,
-  })
-  if (
-    previousInputs.file !== file ||
-    previousInputs.importDocxFile !== importDocxFile
-  ) {
-    setPreviousInputs({ file, importDocxFile })
-    setIsLoading(true)
-    setHasError(false)
-  }
-
-  React.useEffect(() => {
-    let isCurrent = true
-
-    void fetchFile(file)
-      .then((docxFile) => importDocxFile(docxFile))
-      .then(() => {
-        if (isCurrent) {
-          setIsLoading(false)
-        }
-      })
-      .catch(() => {
-        if (isCurrent) {
-          setIsLoading(false)
-          setHasError(true)
-        }
-      })
-
-    return () => {
-      isCurrent = false
-    }
-  }, [file, importDocxFile])
-
-  const thumbnailIsLoading =
-    isLoading ||
-    (!thumbnailRenderState && !hasError) ||
-    Boolean(
-      thumbnailRenderState &&
-        !thumbnailRenderState.isMounted &&
-        thumbnailRenderState.status !== "ready" &&
-        thumbnailRenderState.status !== "error"
-    )
-  const thumbnailHasError = hasError || thumbnailRenderState?.status === "error"
-
-  return (
-    <>
-      <FileThumbnail
-        file={file}
-        previewAspectRatio={
-          previewAspectRatio ?? thumbnailRenderState?.aspectRatio ?? 0.77
-        }
-        previewClassName="bg-white"
-        previewContent={
-          thumbnailRenderState ? (
-            <canvas
-              ref={attachDocxThumbnailCanvas}
-              width={thumbnailRenderState.pixelWidthPx}
-              height={thumbnailRenderState.pixelHeightPx}
-              className="!size-full bg-white object-cover object-top"
-            />
-          ) : null
-        }
-        isLoading={thumbnailIsLoading}
-        hasError={thumbnailHasError}
-      />
-      {!thumbnailHasError ? (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none fixed top-0 left-0 -z-10 h-[1056px] w-[816px] overflow-hidden bg-white opacity-0 [contain:layout_paint]"
-        >
-          <div className="w-[816px]">
-            <DocxEditorViewer
-              editor={editor}
-              mode="read-only"
-              pageBackgroundColor="#ffffff"
-              pageGapBackgroundColor="transparent"
-              visiblePageRange={{ endPageIndex: 0, startPageIndex: 0 }}
-              pageVirtualization={{ enabled: false }}
-              deferInitialPaginationPaint={false}
-            />
-          </div>
-        </div>
-      ) : null}
-    </>
   )
 }
 
@@ -463,12 +311,6 @@ function FileThumbnailExample({
           previewAspectRatio={previewAspectRatio}
         />
       ) : null}
-      {file.kind === "docx" ? (
-        <DocxThumbnailPreview
-          file={file}
-          previewAspectRatio={previewAspectRatio}
-        />
-      ) : null}
       {file.kind === "xlsx" ? (
         <XlsxThumbnailPreview
           file={file}
@@ -501,7 +343,7 @@ export function FileThumbnailDemo() {
       data-slot="component-preview"
       className="group relative mt-4 mb-12 flex flex-col overflow-hidden rounded-xl border"
     >
-      <div className="grid gap-6 bg-background p-6 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-6 bg-background p-6 sm:grid-cols-2 lg:grid-cols-3">
         {SAMPLE_FILES.map((file) => (
           <div key={file.name} className="space-y-2">
             <div className="text-sm font-medium">{file.description}</div>
@@ -517,11 +359,6 @@ export function FileThumbnailDemo() {
 const fileThumbnailDemoCode = `"use client"
 
 import * as React from "react"
-import {
-  DocxEditorViewer,
-  useDocxEditor,
-  useDocxViewerThumbnails,
-} from "@extend-ai/react-docx"
 import {
   useXlsxViewerController,
   useXlsxViewerThumbnails,
@@ -558,43 +395,6 @@ export function PdfAttachmentThumbnail({ fileUrl }) {
       previewImageUrl={imageUrl}
       isLoading={!imageUrl}
     />
-  )
-}
-
-export function DocxAttachmentThumbnail({ file }) {
-  const editor = useDocxEditor({ initialFileName: file.name })
-  const { thumbnails } = useDocxViewerThumbnails(editor, {
-    pixelRatio: 2,
-    resolution: { maxHeight: 324, maxWidth: 240 },
-  })
-  const firstThumbnail = thumbnails[0]
-
-  React.useEffect(() => {
-    void editor.importDocxFile(file)
-  }, [editor, file])
-
-  return (
-    <>
-      <FileThumbnail
-        file={file}
-        previewAspectRatio={firstThumbnail?.aspectRatio ?? 0.77}
-        previewClassName="bg-white"
-        previewContent={
-          firstThumbnail ? (
-            <canvas
-              ref={firstThumbnail.canvasRef}
-              width={firstThumbnail.pixelWidthPx}
-              height={firstThumbnail.pixelHeightPx}
-              className="!size-full bg-white object-cover object-top"
-            />
-          ) : null
-        }
-        isLoading={!firstThumbnail}
-      />
-      <div className="pointer-events-none fixed -z-10 opacity-0">
-        <DocxEditorViewer editor={editor} mode="read-only" />
-      </div>
-    </>
   )
 }
 

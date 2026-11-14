@@ -6,7 +6,7 @@ import { test } from "node:test"
 import { validateManifest } from "../../../components/extend/slides/validate.js"
 import { startHarness } from "./autosave-harness.mjs"
 
-async function setup(t, kind = "docx") {
+async function setup(t, kind = "xlsx") {
   const root = path.resolve("apps/v4/experiments/artifact-template/dev/results")
   await mkdir(root, { recursive: true })
   const folder = await mkdtemp(`${root}/contract-`)
@@ -53,7 +53,7 @@ async function setup(t, kind = "docx") {
   return { folder, file, save, post, url }
 }
 
-for (const kind of ["docx", "xlsx", "pptx", "pdf"]) {
+for (const kind of ["xlsx", "pptx", "pdf"]) {
   test(`${kind} accepts only artifact.json.file and rejects invalid destinations`, async (t) => {
     const h = await setup(t, kind)
     for (const name of [

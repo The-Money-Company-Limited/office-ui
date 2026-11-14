@@ -8,11 +8,6 @@ import { Autosave } from "./autosave"
 import { AutosaveContext } from "./autosave-context"
 import { registerDocumentTools, type DocumentKind } from "./webmcp"
 
-const DocxEditor = React.lazy(() =>
-  import("@/components/extend/docx-editor").then((module) => ({
-    default: module.DocxEditorPreview,
-  }))
-)
 const XlsxEditor = React.lazy(() => import("./xlsx-artifact"))
 const PptxViewer = React.lazy(() =>
   import("@/components/extend/pptx-viewer").then((module) => ({
@@ -40,9 +35,7 @@ function parseArtifact(value: unknown): Artifact {
   if (!value || typeof value !== "object")
     throw new Error("Invalid artifact.json")
   const artifact = value as Record<string, unknown>
-  if (
-    !["docx", "xlsx", "pptx", "pdf", "slides"].includes(String(artifact.kind))
-  )
+  if (!["xlsx", "pptx", "pdf", "slides"].includes(String(artifact.kind)))
     throw new Error("Unsupported artifact type")
   if (typeof artifact.title !== "string" || !artifact.title.trim())
     throw new Error("Missing artifact title")
@@ -50,7 +43,7 @@ function parseArtifact(value: unknown): Artifact {
     typeof artifact.file !== "string" ||
     (artifact.kind === "slides"
       ? artifact.file !== "deck/deck.json"
-      : !/^document\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.(docx|xlsx|pptx|pdf)$/.test(
+      : !/^document\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.(xlsx|pptx|pdf)$/.test(
           artifact.file
         ) || !artifact.file.endsWith(`.${artifact.kind}`))
   )
@@ -177,15 +170,7 @@ function App() {
             <React.Suspense
               fallback={<div className="artifact-state">Opening document…</div>}
             >
-              {artifact?.kind === "docx" ? (
-                <DocxEditor
-                  {...documentProps}
-                  anchorIdPrefix=""
-                  defaultMode="editing"
-                  scrollsWindow
-                  showUpload={false}
-                />
-              ) : artifact?.kind === "xlsx" ? (
+              {artifact?.kind === "xlsx" ? (
                 <XlsxEditor
                   {...documentProps}
                   cellAnchorIdPrefix=""

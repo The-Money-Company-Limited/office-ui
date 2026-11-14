@@ -17,7 +17,7 @@ export interface UsePptxPresentationState {
 
 const EMPTY_PARSE_OPTIONS: ParsePresentationOptions = Object.freeze({});
 
-/** Parse a presentation independently from the viewer, mirroring `useDocxModel`. */
+/** Parse a presentation independently from the viewer. */
 export function usePptxPresentation(
   source?: PresentationSource | null,
   options: ParsePresentationOptions = EMPTY_PARSE_OPTIONS,

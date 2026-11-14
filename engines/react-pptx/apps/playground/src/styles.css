@@ -588,7 +588,7 @@ select {
   white-space: nowrap;
 }
 
-/* Align the reusable viewer chrome with the react-docx canvas. */
+/* Align the reusable viewer chrome with the playground theme. */
 .playground-shell .rpv-root {
   --rpv-ink: var(--foreground);
   --rpv-paper: var(--background);

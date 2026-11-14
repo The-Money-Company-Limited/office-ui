@@ -1,6 +1,6 @@
 # Office artifact template: build and edge delivery
 
-This is the implementation reference for the DOCX, XLSX, PPTX, and PDF artifact
+This is the implementation reference for the XLSX, PPTX, and PDF artifact
 experiment. RuntimeVM is a separate repository; this experiment does not
 change it. Its artifact service was last reviewed on 2026-10-16 at
 [`ff898d1`](https://github.com/The-Money-Company-Limited/runtimevm/tree/ff898d124b08dcfb47a0ca06ddebc63fe1ee5d8b);
@@ -15,11 +15,10 @@ The [Vite config](./vite.config.ts) emits relative URLs (`base: "./"`), so the
 same build can be copied into separate releases. The app
 [loads `artifact.json`](./src/main.tsx) at startup, selects the editor by
 `kind`, then loads the document from `./document/<filename>`. Editor modules
-are lazy loaded by file type; the release still includes all four.
+are lazy loaded by file type; the release still includes all three.
 
 | Format | Browser component                                                                     | Current capability                                                                                 |
 | ------ | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| DOCX   | [`docx-editor.tsx`](../../components/extend/docx-editor.tsx), `@extend-ai/react-docx` | Edit and export DOCX                                                                               |
 | XLSX   | [`xlsx-editor.tsx`](../../components/extend/xlsx-editor.tsx), `@extend-ai/react-xlsx` | Edit and export XLSX; files above 5 MiB open read-only                                             |
 | PPTX   | [`pptx-viewer.tsx`](../../components/extend/pptx-viewer.tsx), `@extend-ai/react-pptx` | View and download the original; no slide editing                                                   |
 | PDF    | [`pdf-editor.tsx`](../../components/extend/pdf-editor.tsx), EmbedPDF and PDFium       | Annotate, fill forms, sign, redact, change pages, and download; no arbitrary existing-text editing |
@@ -70,7 +69,7 @@ staged from one build names the same bundle version. `version` is
 checkout, else its npm version. A `-dirty` version is a local build and is not
 meant for publishing.
 
-The supported input extensions are `.docx`, `.xlsx`, `.pptx`, and `.pdf`.
+The supported input extensions are `.xlsx`, `.pptx`, and `.pdf`.
 Staging requires a regular file with an ASCII basename that uses letters,
 digits, dots, underscores, or dashes. It checks a 25 MiB maximum per file,
 20,000 files, and 1 GiB total, RuntimeVM's authenticated release bounds in
@@ -145,7 +144,7 @@ transfer: an untyped response is not compressed.
 ## How a request reaches the editor, with no computer VM
 
 ```text
-Agent's local DOCX/XLSX/PPTX/PDF + this Vite build
+Agent's local XLSX/PPTX/PDF + this Vite build
   -> stage a complete static release
   -> Cool publish API: validate, store content-addressed bytes in R2, write the release index
   -> *.cool.computer gateway: read the slug's edge route, check access
@@ -229,9 +228,8 @@ person in the editor --accept / reject / reply--> exported or saved file
   `<script src="/__cool/comments.js">` into its files, and runs as a top-level
   tab, never in an iframe (RuntimeVM COD-1403, COD-1415).
 - **Suggestions are the file's.** The agent answers by changing the document:
-  DOCX tracked changes (`w:ins`/`w:del`, on text and on paragraph marks) and
-  comments (`comments.xml`), XLSX threaded comments. They round-trip through Word and Excel, and the editor
-  shows them for accept, reject, and reply.
+  XLSX threaded comments. They round-trip through Excel, and the editor shows
+  them for accept, reject, and reply.
 
 ### Page rules that keep Comments and Ink anchored
 
@@ -249,33 +247,25 @@ each rule is an opt-in prop on the editor that the template turns on:
    in the engine), PPTX virtualizes against the window, and PDF feeds
    EmbedPDF's viewport from the window.
 2. **Every unit has a stable, unique `id`**, which ends the layer's selector
-   walk: DOCX pages `page-<n>` and paragraphs `p-<w14:paraId>` (the model
-   carries `paraId` through edits; `p-n<index>` only for a paragraph without
-   one, and the agent stamps a `paraId` on every paragraph it saves); PDF
-   pages `page-<n>`, each holding its text as transparent lines from PDFium
+   walk: PDF pages `page-<n>`, each holding its text as transparent lines from PDFium
    that take pointer hits; PPTX slides `slide-<n>` on the slide's list row, present
    while the slide is virtualized away; XLSX cells `c-<ref>` on a transparent
    DOM layer over the canvas (`cellAnchorIdPrefix`) that carries each visible
    cell's text and passes pointer events to the grid.
-3. **DOCX opens in Viewing.** The layer records no text for an element that
-   is or contains `contenteditable` (even `="false"`), so read-only rendering
-   writes no `contenteditable` attribute. Suggesting and Editing are explicit
-   modes, as in Google Docs.
-4. **Typing goes through a text field.** The XLSX grid reads keys from a
+3. **Typing goes through a text field.** The XLSX grid reads keys from a
    hidden `textarea`, so the layer's plain `C` shortcut does not take keys
    from the grid.
-5. **The page's identity is its path plus query.** A sheet is `?sheet=<name>`,
+4. **The page's identity is its path plus query.** A sheet is `?sheet=<name>`,
    so each sheet has its own comments.
-6. **Pages keep a fixed width.** Ink is shown only to viewers whose window is
+5. **Pages keep a fixed width.** Ink is shown only to viewers whose window is
    within 15% of the author's width.
 
 Verified on 2026-10-16, locally with [`dev/comments-harness.mjs`](./dev/comments-harness.mjs)
-and on cool.computer: a DOCX click comment anchors at `#p-n1` with the
-paragraph's text; Ink under a title records `line: "under"` and the title's
+and on cool.computer: Ink under a title records `line: "under"` and the title's
 text; Ink on a sheet records `#c-D10` and `#c-E10` with their values; PPTX Ink
 records `#slide-1 > …` and the title text; a PDF click comment anchors inside
 `#page-1` with the clicked line's text, and text selection still works. Ink
-stays on its content as the window scrolls in all four formats.
+stays on its content as the window scrolls in every format.
 
 ### Agent tools run without a browser or a VM
 
@@ -285,39 +275,27 @@ document operations are DOM-free libraries that the RuntimeVM operator (Node)
 can load as tools later. Each takes and returns document bytes, so a result
 is written back with the files API as one new release.
 
-- `@extend-ai/react-docx/agent`: `openDocx`, `paragraphs`, `find`, `locate`
-  (a Comments or Ink anchor to a paragraph and offsets), `suggest` (a tracked
-  change; each `\n` in the replacement is a suggested paragraph break), `comment`, `reply`, `resolve`, `comments`, `revisions`, `accept`,
-  `reject`, `save`. CLI: `react-docx-agent in.docx out.docx '<ops>'`.
 - `@extend-ai/react-xlsx/agent`: `openXlsx`, `sheets`, `cells`, `locate`
   (`?sheet=` plus a `#c-<ref>` id to a cell), `comment`, `reply`, `resolve`,
   `suggest`, `accept`, `reject`, `save`. A suggestion is an Excel threaded
   comment whose root ends with `[suggestion] {"previous":…,"value":…}`, so
   Excel shows it as a comment. CLI: `react-xlsx-agent`.
 
-The loop was run on cool.computer: a person's comment on a published DOCX
-was located by the agent, answered with a tracked change and a reply comment,
-and published as the next release, where Suggesting mode shows it for
-accept or reject.
-
 ### WebMCP tools in the browser
 
 Where the browser has `document.modelContext` (WebMCP, a Chrome origin
 trial), the page registers read-only tools over the open document as it is
-now, unsaved edits included (`src/webmcp.ts`, COD-1456, COD-1716): on Word,
-`doc_read` and `doc_find` (body paragraphs, tables, headers and footers),
-`doc_comments` (the file's Word comments) and `doc_revisions` (tracked
-changes); on Excel, `sheet_read`, `sheet_comments` and `sheet_suggestions`.
-They wrap the agent libraries above, carry `readOnlyHint` and
+now, unsaved edits included (`src/webmcp.ts`, COD-1456, COD-1716): on Excel,
+`sheet_read`, `sheet_comments` and `sheet_suggestions`. They wrap the agent
+library above, carry `readOnlyHint` and
 `untrustedContentHint` (document text can carry instructions), and wait until
-the document has loaded. A read serializes with `commit: false`: it sees a
-Word table cell's in-progress text but leaves it with the editor, so nothing
-on the page changes. On Excel a read leaves out a cell still being typed. A private page is served only to people with access, so its
+the document has loaded. A read changes nothing on the page: it leaves out a
+cell still being typed. A private page is served only to people with access, so its
 tools are too. Slides, PowerPoint and PDF register none yet.
 
 ### Saving edits made in the browser
 
-The four editors share the `cool: "doc"` page bridge. Access enables editing;
+The editors share the `cool: "doc"` page bridge. Access enables editing;
 changes debounce for two seconds and save the existing export bytes. Slides
 save changed HTML files and the manifest together. The bridge owns permissions
 and release versions; conflicts offer reload or a local download. See
@@ -325,38 +303,26 @@ and release versions; conflicts offer reload or a local download. See
 
 ## Engines
 
-The editors use three MIT engine forks under `engines/`, imported with full
+The editors use two MIT engine forks under `engines/`, imported with full
 history using Git subtrees. One root pnpm workspace installs them and Turbo
 builds them before v4. See the [development guide](../../../../README.md#development)
 for upstream subtree updates and pushing fixes back to the forks:
 
 | Engine | Fork                                                                    | Parse and export                                                               |
 | ------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| DOCX   | [`react-docx`](https://github.com/The-Money-Company-Limited/react-docx) | Rust/WASM (`crates/docx-core`); edits in `packages/editor-ops`                 |
 | XLSX   | [`react-xlsx`](https://github.com/The-Money-Company-Limited/react-xlsx) | `@dukelib/sheets-wasm` (binary dependency); JS post-processes the exported zip |
 | PPTX   | [`react-pptx`](https://github.com/The-Money-Company-Limited/react-pptx) | Rust/WASM; viewer only                                                         |
 
 ## Plan
 
-1. **Anchorable pages.** Done for all four formats.
-2. **DOCX keeps its markup when edited.** Done: edits rewrite the paragraph's
-   source XML around revisions and comment markers instead of dropping them.
-3. **Agent tools** for DOCX and XLSX. Done.
-4. **Review in the editor.** Done: DOCX Viewing, Suggesting, and Editing
-   modes, accept and reject, comment replies; XLSX comment cards and
-   suggestion accept and reject. Enter and Backspace across paragraphs
-   while suggesting are tracked paragraph breaks, as in Word. Changes and
-   Word comments show in the text with no review column, so the page keeps
-   its place in every mode; clicking one opens its card under it.
-5. **PPTX editing.** Not started; the PPTX engine is a viewer.
+1. **Anchorable pages.** Done for every format.
+2. **Agent tools** for XLSX. Done.
+3. **Review in the editor.** Done: XLSX comment cards and suggestion accept
+   and reject.
+4. **PPTX editing.** Not started; the PPTX engine is a viewer.
 
 ## Open questions
 
-- **Comment pins after a re-render.** RuntimeVM's layer re-finds a selector
-  only on resize, route change, or a notes message. Switching a DOCX between
-  Viewing and Suggesting re-renders paragraphs, and a pin can stay on the
-  detached element (it was seen at the top of the window) until the next
-  resize. A layer that re-resolves detached targets would fix it.
 - **Bundle storage per computer.** R2 content is addressed per computer, so
   every new document artifact uploads the bundle once. A platform-side
   template could share bundle bytes across computers.
