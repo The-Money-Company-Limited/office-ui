@@ -39532,6 +39532,27 @@ export function DocxEditorViewer({
     pageCount: 0,
     totalHeightPx: 0,
   });
+  // The reservation as last set, ahead of the render that shows it. A load's
+  // reset and the reservation effect run in the same commit, so the effect
+  // must compare against this, not its render's value; and it must not hand
+  // React an updater on every key, which queues a render each time.
+  const initialPaginationReservedLayoutRef = React.useRef(
+    initialPaginationReservedLayoutState
+  );
+  const setInitialPaginationReservedLayout = React.useCallback(
+    (next: { pageCount: number; totalHeightPx: number }): void => {
+      const current = initialPaginationReservedLayoutRef.current;
+      if (
+        current.pageCount === next.pageCount &&
+        current.totalHeightPx === next.totalHeightPx
+      ) {
+        return;
+      }
+      initialPaginationReservedLayoutRef.current = next;
+      setInitialPaginationReservedLayoutState(next);
+    },
+    []
+  );
   const [disableMeasuredImportPagination, setDisableMeasuredImportPagination] =
     React.useState(false);
   const initialPaginationPageCountOscillationRef = React.useRef<{
@@ -39609,7 +39630,7 @@ export function DocxEditorViewer({
     pendingSectionParagraphFocusRef.current = undefined;
     setActiveEditableParagraphSegment(undefined);
     setPostImportPaginationUnlocked(false);
-    setInitialPaginationReservedLayoutState({
+    setInitialPaginationReservedLayout({
       pageCount: 0,
       totalHeightPx: 0,
     });
@@ -41482,40 +41503,32 @@ export function DocxEditorViewer({
     },
     [documentLayout, pageSectionInfoByIndex]
   );
-  // Each typed key re-runs the effect below. The updaters compare against the
-  // state at update time, so a document load's reset is never overwritten
-  // with the previous document's reservation, and they return the current
-  // state when nothing changed.
+  // Each typed key re-runs the effect below; it sets state only on a change.
   React.useEffect(() => {
     if (!hideDocumentUntilPaginationSettled) {
-      setInitialPaginationReservedLayoutState((current) =>
-        current.pageCount === 0 && current.totalHeightPx === 0
-          ? current
-          : { pageCount: 0, totalHeightPx: 0 }
-      );
+      setInitialPaginationReservedLayout({ pageCount: 0, totalHeightPx: 0 });
       return;
     }
 
-    const baselinePageCount = Math.max(
+    const current = initialPaginationReservedLayoutRef.current;
+    const nextPageCount = Math.max(
+      current.pageCount,
       1,
       pageCount,
       storedDocumentPageCount ?? 0
     );
-    setInitialPaginationReservedLayoutState((current) => {
-      const nextPageCount = Math.max(current.pageCount, baselinePageCount);
-      const nextTotalHeightPx = Math.max(
+    setInitialPaginationReservedLayout({
+      pageCount: nextPageCount,
+      totalHeightPx: Math.max(
         current.totalHeightPx,
         estimateDocumentStackHeightPx(nextPageCount)
-      );
-      return current.pageCount === nextPageCount &&
-        current.totalHeightPx === nextTotalHeightPx
-        ? current
-        : { pageCount: nextPageCount, totalHeightPx: nextTotalHeightPx };
+      ),
     });
   }, [
     estimateDocumentStackHeightPx,
     hideDocumentUntilPaginationSettled,
     pageCount,
+    setInitialPaginationReservedLayout,
     storedDocumentPageCount,
   ]);
   const preRevealStablePageCount =
