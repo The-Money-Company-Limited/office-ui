@@ -166,6 +166,11 @@ html:has(.artifact-editor) {
   scroll-padding-top: 112px;
 }
 
+/* Slides has one 48px toolbar row, with 12px above the first slide. */
+html:has(.artifact-slides) {
+  scroll-padding-top: 64px;
+}
+
 .artifact-state {
   display: flex;
   flex-direction: column;

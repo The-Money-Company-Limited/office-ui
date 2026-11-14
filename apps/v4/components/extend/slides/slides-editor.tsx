@@ -172,14 +172,14 @@ export function SlidesEditor({
               height: Math.max(
                 0,
                 Math.min(box.bottom, window.innerHeight) -
-                  Math.max(box.top, 112)
+                  Math.max(box.top, 64)
               ),
             }
           })
           .sort((a, b) => b.height - a.height)[0]
         if (visible && visible.height > 0) setActive(visible.index)
       },
-      { rootMargin: "-110px 0px 0px", threshold: [0, 0.25, 0.5, 0.75, 1] }
+      { rootMargin: "-62px 0px 0px", threshold: [0, 0.25, 0.5, 0.75, 1] }
     )
     surface.current
       ?.querySelectorAll("[data-slide-index]")
