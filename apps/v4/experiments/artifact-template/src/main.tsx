@@ -88,8 +88,8 @@ class EditorErrorBoundary extends React.Component<
 > {
   state: { error: Error | null } = { error: null }
 
-  static getDerivedStateFromError(error: Error) {
-    return { error }
+  static getDerivedStateFromError(error: unknown) {
+    return { error: error instanceof Error ? error : new Error(String(error)) }
   }
 
   render() {
@@ -173,7 +173,7 @@ function App() {
         {error ? (
           <OpenError message={error} />
         ) : documentProps ? (
-          <EditorErrorBoundary>
+          <EditorErrorBoundary key={documentProps.src}>
             <React.Suspense
               fallback={<div className="artifact-state">Opening document…</div>}
             >
