@@ -41473,17 +41473,17 @@ export function DocxEditorViewer({
     },
     [documentLayout, pageSectionInfoByIndex]
   );
-  // Each typed key re-runs the effect below; it sets state only on a change,
-  // so the key costs no second render.
+  // Each typed key re-runs the effect below. The updaters compare against the
+  // state at update time, so a document load's reset is never overwritten
+  // with the previous document's reservation, and they return the current
+  // state when nothing changed.
   React.useEffect(() => {
-    const current = initialPaginationReservedLayoutState;
     if (!hideDocumentUntilPaginationSettled) {
-      if (current.pageCount !== 0 || current.totalHeightPx !== 0) {
-        setInitialPaginationReservedLayoutState({
-          pageCount: 0,
-          totalHeightPx: 0,
-        });
-      }
+      setInitialPaginationReservedLayoutState((current) =>
+        current.pageCount === 0 && current.totalHeightPx === 0
+          ? current
+          : { pageCount: 0, totalHeightPx: 0 }
+      );
       return;
     }
 
@@ -41492,24 +41492,20 @@ export function DocxEditorViewer({
       pageCount,
       storedDocumentPageCount ?? 0
     );
-    const nextPageCount = Math.max(current.pageCount, baselinePageCount);
-    const nextTotalHeightPx = Math.max(
-      current.totalHeightPx,
-      estimateDocumentStackHeightPx(nextPageCount)
-    );
-    if (
-      current.pageCount !== nextPageCount ||
-      current.totalHeightPx !== nextTotalHeightPx
-    ) {
-      setInitialPaginationReservedLayoutState({
-        pageCount: nextPageCount,
-        totalHeightPx: nextTotalHeightPx,
-      });
-    }
+    setInitialPaginationReservedLayoutState((current) => {
+      const nextPageCount = Math.max(current.pageCount, baselinePageCount);
+      const nextTotalHeightPx = Math.max(
+        current.totalHeightPx,
+        estimateDocumentStackHeightPx(nextPageCount)
+      );
+      return current.pageCount === nextPageCount &&
+        current.totalHeightPx === nextTotalHeightPx
+        ? current
+        : { pageCount: nextPageCount, totalHeightPx: nextTotalHeightPx };
+    });
   }, [
     estimateDocumentStackHeightPx,
     hideDocumentUntilPaginationSettled,
-    initialPaginationReservedLayoutState,
     pageCount,
     storedDocumentPageCount,
   ]);
