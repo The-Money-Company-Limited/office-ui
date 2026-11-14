@@ -500,11 +500,17 @@ export const ReactPptxViewer = forwardRef<PptxViewerController, ReactPptxViewerP
           latestPropsRef.current.onPerformanceMeasurement?.(measurement),
         onDownloadProgress: (loadedBytes, totalBytes) => {
           if (abort.signal.aborted) return;
-          setProgress({
-            phase: 'downloading',
-            loadedBytes,
-            ...(totalBytes === undefined ? {} : { totalBytes }),
-          });
+          latestPropsRef.current.parseOptions?.onDownloadProgress?.(loadedBytes, totalBytes);
+          // Once every byte has arrived the wait is parsing and drawing, not the download.
+          setProgress(
+            totalBytes !== undefined && loadedBytes >= totalBytes
+              ? { phase: 'preparing' }
+              : {
+                  phase: 'downloading',
+                  loadedBytes,
+                  ...(totalBytes === undefined ? {} : { totalBytes }),
+                },
+          );
         },
       })
         .then((next) => {
