@@ -207,10 +207,7 @@ function ViewerLoadingSurface({
     progress.phase === "downloading" ? progress.loadedBytes : 0
 
   return (
-    <div
-      role="status"
-      className="flex w-64 flex-col items-center gap-3 text-sm text-muted-foreground"
-    >
+    <div className="flex w-64 flex-col items-center gap-3 text-sm text-muted-foreground">
       <span className="flex items-center gap-2">
         <Spinner className="size-4" />
         {progress.phase === "downloading"
