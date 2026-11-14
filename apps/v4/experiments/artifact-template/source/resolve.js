@@ -51,7 +51,12 @@ export function resolve(spec, from, config, exists) {
   // not yet (the loader then looks for it). A name with a slash
   // (tailwindcss/theme.css) is relative only when that file exists; anything
   // else (tailwindcss) is a package.
-  if (base === null && from.endsWith(".css") && bare.endsWith(".css")) {
+  if (
+    base === null &&
+    from.endsWith(".css") &&
+    bare.endsWith(".css") &&
+    !bare.startsWith("/")
+  ) {
     const local = join(dirname(from), bare)
     if (!bare.includes("/") || exists(local))
       return exists(local) ? { path: local, query } : { missing: local }
