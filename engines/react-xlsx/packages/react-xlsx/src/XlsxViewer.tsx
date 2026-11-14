@@ -15260,14 +15260,12 @@ function XlsxGrid({
     if (drawingPane !== pane) {
       return null;
     }
-    const hasMeasuredViewport = drawingViewport.width > 0 && drawingViewport.height > 0;
-    if (pane === "scroll" && hasMeasuredViewport && !rectIntersectsViewport(rect, drawingViewport)) {
-      return null;
-    }
 
     const isFrozenDrawing = pane !== "scroll";
     const canEditChart = !readOnly && chart.editable !== false;
     const drawingSelectionSurface = paletteIsDark(palette) ? palette.canvas : DRAWING_SELECTION_HANDLE_FILL;
+    // Charts stay mounted while scrolled out of view, so coming back does not rebuild their SVG;
+    // content-visibility skips laying out and painting one that is off screen.
     const style: React.CSSProperties = {
       contain: "layout paint",
       height: rect.height,
@@ -15323,6 +15321,7 @@ function XlsxGrid({
             onPointerDownCapture={(event) => startChartMove(event, chart, rect)}
             style={{
               ...style,
+              contentVisibility: "auto",
               cursor: canEditChart && selectedChartId === chart.id ? "move" : "cell",
               pointerEvents: "auto"
             }}
