@@ -571,7 +571,8 @@ function AlphaScrubField({
 }: {
   alphaPercent: number
   disabled?: boolean
-  onCommit: (percent: number) => void
+  /** `final` is false while a scrub moves and true when it ends or for a typed or stepped value. */
+  onCommit: (percent: number, final: boolean) => void
   scrubbable?: boolean
   className?: string
   inputClassName?: string
@@ -581,6 +582,7 @@ function AlphaScrubField({
   const scrubRef = React.useRef<{
     startX: number
     startPercent: number
+    percent: number
     scrubbed: boolean
   } | null>(null)
   const rounded = Math.round(alphaPercent)
@@ -595,6 +597,7 @@ function AlphaScrubField({
           scrubRef.current = {
             startX: event.clientX,
             startPercent: alphaPercent,
+            percent: alphaPercent,
             scrubbed: false,
           }
         },
@@ -604,15 +607,20 @@ function AlphaScrubField({
           const dx = event.clientX - scrub.startX
           if (!scrub.scrubbed && Math.abs(dx) < 3) return
           scrub.scrubbed = true
-          onCommit(clamp(scrub.startPercent + dx / 2, 0, 100))
+          scrub.percent = clamp(scrub.startPercent + dx / 2, 0, 100)
+          onCommit(scrub.percent, false)
         },
+        // A scrub commits once, where it ends, whether released or cancelled.
         onPointerUp: () => {
           const scrub = scrubRef.current
           scrubRef.current = null
-          if (scrub && !scrub.scrubbed) inputRef.current?.focus()
+          if (scrub?.scrubbed) onCommit(scrub.percent, true)
+          else if (scrub) inputRef.current?.focus()
         },
         onPointerCancel: () => {
+          const scrub = scrubRef.current
           scrubRef.current = null
+          if (scrub?.scrubbed) onCommit(scrub.percent, true)
         },
       }
     : {}
@@ -638,10 +646,13 @@ function AlphaScrubField({
         value={String(rounded)}
         onCommitText={(text) => {
           const numeric = parseChannelText(text)
-          if (numeric !== null) onCommit(clamp(numeric, 0, 100))
+          if (numeric !== null) onCommit(clamp(numeric, 0, 100), true)
         }}
         onStep={(direction, big) =>
-          onCommit(clamp(alphaPercent + direction * (big ? 10 : 1), 0, 100))
+          onCommit(
+            clamp(alphaPercent + direction * (big ? 10 : 1), 0, 100),
+            true
+          )
         }
       />
       <span
@@ -1060,8 +1071,8 @@ export function ColorPicker({
                 className="gap-0.5 pr-2 pl-0.5"
                 inputClassName="w-8 text-sm"
                 suffixClassName="text-sm"
-                onCommit={(percent) =>
-                  commitHsva({ ...hsva, a: percent / 100 })
+                onCommit={(percent, final) =>
+                  commitHsva({ ...hsva, a: percent / 100 }, final)
                 }
               />
             )}
@@ -1202,7 +1213,9 @@ export function ColorPicker({
               alphaPercent={hsva.a * 100}
               disabled={disabled}
               className="pr-[calc(--spacing(3)-1px)] pl-1"
-              onCommit={(percent) => commitHsva({ ...hsva, a: percent / 100 })}
+              onCommit={(percent, final) =>
+                commitHsva({ ...hsva, a: percent / 100 }, final)
+              }
             />
           )}
         </div>
