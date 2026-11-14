@@ -18,6 +18,7 @@ import { performanceMeasurement, performanceNow } from './performance';
 import { isWindowScroller } from './scroll-target';
 import type {
   ParsedPresentation,
+  PptxLoadProgress,
   PptxViewerController,
   ReactPptxViewerProps,
   SearchHighlightOptions,
@@ -316,7 +317,9 @@ export const ReactPptxViewer = forwardRef<PptxViewerController, ReactPptxViewerP
     const [adapterState, setAdapterState] = useState<AdapterState | null>(null);
     const [parsed, setParsed] = useState<ParsedPresentation | null>(null);
     const [error, setError] = useState<PptxViewerError | null>(null);
+    // Loading lasts until the first slides have rendered, not only until parsing ends.
     const [loading, setLoading] = useState(true);
+    const [progress, setProgress] = useState<PptxLoadProgress>({ phase: 'preparing' });
     const [internalSlide, setInternalSlide] = useState(initialSlide);
     const [internalZoom, setInternalZoom] = useState<ViewerZoomLevel>(() =>
       normalizeViewerZoomLevel(defaultZoom ?? (fitMode === 'contain' ? 'automatic' : 100)),
@@ -480,6 +483,11 @@ export const ReactPptxViewer = forwardRef<PptxViewerController, ReactPptxViewerP
       previousAdapter?.destroy();
       setAdapterState(null);
       setLoading(true);
+      setProgress(
+        typeof source === 'string' || source instanceof URL
+          ? { phase: 'downloading', loadedBytes: 0 }
+          : { phase: 'preparing' },
+      );
       setError(null);
       setParsed(null);
       setRuntimeWarnings([]);
@@ -490,9 +498,24 @@ export const ReactPptxViewer = forwardRef<PptxViewerController, ReactPptxViewerP
         ...(parseFetchInit ? { fetchInit: parseFetchInit } : {}),
         onPerformanceMeasurement: (measurement) =>
           latestPropsRef.current.onPerformanceMeasurement?.(measurement),
+        onDownloadProgress: (loadedBytes, totalBytes) => {
+          if (abort.signal.aborted) return;
+          latestPropsRef.current.parseOptions?.onDownloadProgress?.(loadedBytes, totalBytes);
+          // Once every byte has arrived the wait is parsing and drawing, not the download.
+          setProgress(
+            totalBytes !== undefined && loadedBytes >= totalBytes
+              ? { phase: 'preparing' }
+              : {
+                  phase: 'downloading',
+                  loadedBytes,
+                  ...(totalBytes === undefined ? {} : { totalBytes }),
+                },
+          );
+        },
       })
         .then((next) => {
           if (abort.signal.aborted) return;
+          setProgress({ phase: 'preparing' });
           setParsed(next);
           latestPropsRef.current.onLoad?.(next);
           for (const warning of next.warnings) latestPropsRef.current.onWarning?.(warning);
@@ -505,10 +528,8 @@ export const ReactPptxViewer = forwardRef<PptxViewerController, ReactPptxViewerP
             'Could not open the presentation.',
           );
           setError(nextError);
+          setLoading(false);
           latestPropsRef.current.onError?.(nextError);
-        })
-        .finally(() => {
-          if (!abort.signal.aborted) setLoading(false);
         });
       return () => abort.abort();
     }, [source, parseFormatHint, parseMaxInputBytes, parseFetchInitKey]);
@@ -581,6 +602,7 @@ export const ReactPptxViewer = forwardRef<PptxViewerController, ReactPptxViewerP
           }
           adapterRef.current = adapter;
           setAdapterState({ adapter, generation });
+          setLoading(false);
           if (!isCurrent()) return;
           latestPropsRef.current.onReady?.(controller);
         } catch (reason: unknown) {
@@ -591,6 +613,7 @@ export const ReactPptxViewer = forwardRef<PptxViewerController, ReactPptxViewerP
             'Could not render the presentation.',
           );
           setError(nextError);
+          setLoading(false);
           latestPropsRef.current.onError?.(nextError);
         }
       })();
@@ -759,10 +782,14 @@ export const ReactPptxViewer = forwardRef<PptxViewerController, ReactPptxViewerP
           <main className="rpv-stage">
             {loading ? (
               <div className="rpv-status">
-                {renderLoading?.() ?? (
+                {renderLoading?.(progress) ?? (
                   <>
                     <span className="rpv-spinner" />
-                    Opening presentation…
+                    {progress.phase === 'downloading' && progress.totalBytes
+                      ? `Downloading presentation… ${Math.round(
+                          (progress.loadedBytes / progress.totalBytes) * 100,
+                        )}%`
+                      : 'Opening presentation…'}
                   </>
                 )}
               </div>

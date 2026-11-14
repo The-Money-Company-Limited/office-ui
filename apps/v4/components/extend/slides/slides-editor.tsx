@@ -172,14 +172,14 @@ export function SlidesEditor({
               height: Math.max(
                 0,
                 Math.min(box.bottom, window.innerHeight) -
-                  Math.max(box.top, 112)
+                  Math.max(box.top, 64)
               ),
             }
           })
           .sort((a, b) => b.height - a.height)[0]
         if (visible && visible.height > 0) setActive(visible.index)
       },
-      { rootMargin: "-110px 0px 0px", threshold: [0, 0.25, 0.5, 0.75, 1] }
+      { rootMargin: "-62px 0px 0px", threshold: [0, 0.25, 0.5, 0.75, 1] }
     )
     surface.current
       ?.querySelectorAll("[data-slide-index]")
@@ -303,7 +303,7 @@ export function SlidesEditor({
     0.05,
     Math.min(
       (size.width - (presenting ? 32 : 208)) / SLIDE_WIDTH,
-      (size.height - (presenting ? 32 : 160)) / SLIDE_HEIGHT,
+      (size.height - (presenting ? 32 : 112)) / SLIDE_HEIGHT,
       1
     )
   )
@@ -378,6 +378,48 @@ export function SlidesEditor({
               <SaveStatus />
               <SaveAccess />
             </div>
+            {canSave && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Undo"
+                  title="Undo"
+                  disabled={!history?.past.length}
+                  onClick={undo}
+                >
+                  <IconPlaceholder
+                    lucide="Undo2"
+                    tabler="IconArrowBackUp"
+                    hugeicons="Undo02Icon"
+                    phosphor="ArrowUUpLeftIcon"
+                    remixicon="RiArrowGoBackLine"
+                    className="size-4"
+                  />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Redo"
+                  title="Redo"
+                  disabled={!history?.future.length}
+                  onClick={redo}
+                >
+                  <IconPlaceholder
+                    lucide="Redo2"
+                    tabler="IconArrowForwardUp"
+                    hugeicons="Redo02Icon"
+                    phosphor="ArrowUUpRightIcon"
+                    remixicon="RiArrowGoForwardLine"
+                    className="size-4"
+                  />
+                </Button>
+                <Separator
+                  orientation="vertical"
+                  className="mx-1 h-4 self-center"
+                />
+              </>
+            )}
             <AppearanceToggle isDark={isDark} onIsDarkChange={onIsDarkChange} />
             <Separator
               orientation="vertical"
@@ -422,44 +464,6 @@ export function SlidesEditor({
               Present
             </Button>
           </div>
-          {canSave && (
-            <div className="slides-ribbon">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Undo"
-                title="Undo"
-                disabled={!history?.past.length}
-                onClick={undo}
-              >
-                <IconPlaceholder
-                  lucide="Undo2"
-                  tabler="IconArrowBackUp"
-                  hugeicons="Undo02Icon"
-                  phosphor="ArrowUUpLeftIcon"
-                  remixicon="RiArrowGoBackLine"
-                  className="size-4"
-                />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Redo"
-                title="Redo"
-                disabled={!history?.future.length}
-                onClick={redo}
-              >
-                <IconPlaceholder
-                  lucide="Redo2"
-                  tabler="IconArrowForwardUp"
-                  hugeicons="Redo02Icon"
-                  phosphor="ArrowUUpRightIcon"
-                  remixicon="RiArrowGoForwardLine"
-                  className="size-4"
-                />
-              </Button>
-            </div>
-          )}
         </header>
       )}
       {error && (

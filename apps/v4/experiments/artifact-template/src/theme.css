@@ -166,6 +166,11 @@ html:has(.artifact-editor) {
   scroll-padding-top: 112px;
 }
 
+/* Slides has one 48px toolbar row, with 12px above the first slide. */
+html:has(.artifact-slides) {
+  scroll-padding-top: 64px;
+}
+
 .artifact-state {
   display: flex;
   flex-direction: column;
@@ -256,6 +261,33 @@ html:has(.artifact-editor) {
 .artifact-pdf [data-slot="pdf-editor-toolbar"] [data-slot="button"]:active {
   background: var(--raised-fill-pressed);
   box-shadow: var(--raised-shadow-pressed);
+}
+
+/* A PDF form field that can be filled shows a blue tint, like Acrobat's field
+   highlight, and a ring while it has focus. EmbedPDF draws each field in an
+   annotation box with no hook of its own: a fillable one holds an enabled
+   control (text, choice) or a focusable box (check box, radio, list). The page
+   is white in both themes, so the colours are fixed. A focused field keeps a
+   little room around it; the page's scroll padding clears the toolbar. */
+.artifact-pdf
+  [data-no-interaction]
+  > div:has(:is(input, textarea, select):not(:disabled), [tabindex="0"]) {
+  background: oklch(0.54 0.25 263 / 0.12);
+}
+
+.artifact-pdf
+  [data-no-interaction]
+  > div:has(
+    :is(input, textarea, select):not(:disabled),
+    [tabindex="0"]
+  ):focus-within {
+  outline: 2px solid oklch(0.54 0.25 263);
+}
+
+.artifact-pdf
+  [data-no-interaction]
+  :is(input, textarea, select, [tabindex="0"]) {
+  scroll-margin: 24px;
 }
 
 .artifact-xlsx .xlsx-editor-ribbon {

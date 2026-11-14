@@ -1,6 +1,6 @@
 .artifact-slides {
   min-height: 100dvh;
-  padding-top: 108px;
+  padding-top: 60px;
 }
 .slides-toolbar {
   position: fixed;
@@ -9,8 +9,7 @@
   right: 0;
   z-index: 30;
 }
-.slides-header,
-.slides-ribbon {
+.slides-header {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -23,8 +22,6 @@
     var(--surface-shadow);
   backdrop-filter: var(--surface-blur);
   -webkit-backdrop-filter: var(--surface-blur);
-}
-.slides-header {
   min-height: 48px;
   overflow-x: auto;
 }
@@ -43,13 +40,9 @@
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
-.slides-ribbon {
-  min-height: 48px;
-  gap: 4px;
-}
 .slides-strip {
   position: fixed;
-  top: 108px;
+  top: 60px;
   bottom: 0;
   left: 0;
   width: 152px;
