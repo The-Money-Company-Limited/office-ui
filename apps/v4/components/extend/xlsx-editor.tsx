@@ -1272,7 +1272,8 @@ function BorderMenu({
   )
 }
 
-function AlignmentMoreMenu({
+/** Wrapping and shrinking in one menu, as Sheets' text wrapping button. */
+function TextWrappingMenu({
   disabled,
   onApplyStyle,
 }: {
@@ -1287,14 +1288,15 @@ function AlignmentMoreMenu({
           variant="ghost"
           size="icon-sm"
           disabled={disabled}
-          aria-label="More alignment"
+          aria-label="Text wrapping"
+          title="Text wrapping"
         >
           <IconPlaceholder
-            lucide="Ellipsis"
-            tabler="IconDots"
-            hugeicons="MoreHorizontalIcon"
-            phosphor="DotsThreeIcon"
-            remixicon="RiMoreLine"
+            lucide="WrapText"
+            tabler="IconTextWrap"
+            hugeicons="TextWrapIcon"
+            phosphor="ArrowElbowDownLeftIcon"
+            remixicon="RiTextWrap"
             className="size-4"
           />
         </Button>
@@ -1303,6 +1305,12 @@ function AlignmentMoreMenu({
         align="start"
         className={cn("w-48", XLSX_DROPDOWN_Z_INDEX_CLASS)}
       >
+        <StyleDropdownItem
+          icon={TextWrapGlyph}
+          onClick={() => onApplyStyle({ alignment: { wrapText: true } })}
+        >
+          Wrap text
+        </StyleDropdownItem>
         <StyleDropdownItem
           icon={TextWrapGlyph}
           onClick={() => onApplyStyle({ alignment: { wrapText: false } })}
@@ -2399,21 +2407,7 @@ function EditorToolbar({
                 </ToggleGroupItem>
               </ToolbarTooltip>
             </ToggleGroup>
-            <ToolbarIconButton
-              label="Wrap text"
-              disabled={!canStyleSelection}
-              onClick={() => applyStyle({ alignment: { wrapText: true } })}
-            >
-              <IconPlaceholder
-                lucide="WrapText"
-                tabler="IconTextWrap"
-                hugeicons="TextWrapIcon"
-                phosphor="ArrowElbowDownLeftIcon"
-                remixicon="RiTextWrap"
-                className="size-4"
-              />
-            </ToolbarIconButton>
-            <AlignmentMoreMenu
+            <TextWrappingMenu
               disabled={!canStyleSelection}
               onApplyStyle={applyStyle}
             />
