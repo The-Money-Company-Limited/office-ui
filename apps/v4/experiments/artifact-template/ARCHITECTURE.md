@@ -34,6 +34,10 @@ yet guaranteed.
 
 ## Make a release
 
+A spreadsheet release is source, not this bundle: see
+[Spreadsheet releases are source](#spreadsheet-releases-are-source). The
+steps below are the same for it, and its files are listed there.
+
 From the repository root, with Node and pnpm installed:
 
 ```sh
@@ -80,6 +84,60 @@ the four document types are in RuntimeVM's pinned content-type table
 ([`siteasset.go`](https://github.com/The-Money-Company-Limited/runtimevm/blob/ff898d124b08dcfb47a0ca06ddebc63fe1ee5d8b/infra/runtime-image/frontdoor/siteasset/siteasset.go)),
 and no bundle path is hidden from serving (no leading `.`, no `node_modules`).
 The bundle is about 19 MiB in 30 files, mostly the XLSX and PDF engines.
+
+## Spreadsheet releases are source
+
+A spreadsheet release holds the template's real TSX/TS files, so an agent
+that copies the site (`cool copy`) changes the editor by editing a file, with
+no build anywhere. `pnpm --filter v4 artifact-template:build` also runs
+[`source/build.mjs`](./source/build.mjs), which writes `dist-xlsx/`;
+`stage.mjs` copies it and adds the document as for the other kinds:
+
+```text
+index.html               # the template's index.html, running loader.js
+loader.js, resolve.js    # fetch, compile, cache, link and run src/**
+loader-manifest.json     # entry, worker, aliases, files, vendor and CSS names
+src/apps/v4/...          # the page and editor source, at repository paths
+src/engines/react-xlsx/packages/react-xlsx/...   # the grid, and its calc wasm
+vendor/vendor-*.js       # npm packages, prebuilt; vendor-worker-*.js for the worker
+vendor/compiler-*.js     # sucrase and compile.js, for the loader's workers
+vendor/tailwind-*.js     # Tailwind and postcss-nested, for a CSS rebuild
+vendor/app-*.css         # the CSS for first paint; vendor/css/ Tailwind's own
+template.md              # for an agent: where the data and each UI part are
+template.json, artifact.json, cool.json, document/<file>
+```
+
+[`loader.js`](./source/loader.js) revalidates every source file with
+If-None-Match and compiles the changed ones with sucrase in up to four
+workers ([`compile.js`](./source/compile.js), a pure function of the source).
+Then it links the imports afresh against the files the site has now
+([`resolve.js`](./source/resolve.js), the same `link` the build uses) and
+runs one script per entry: the page and the calc worker. A local import that
+names no listed file is looked for on the site on every load, so a new file
+needs no manifest entry, and uploading a missing file fixes the next load.
+
+The cache holds only immutable entries: a file's compiled code and import
+specifiers under its path and ETag, the built CSS under a hash of its inputs,
+and the content-named `vendor/` files. Two tabs cannot corrupt each other,
+and a reverted file finds its old entry. Each path's last ETag is kept as an
+If-None-Match hint; a stale hint costs a download, never wrong code. Cache
+Storage works under `no-store`, so a warm load of a private site transfers
+only 304s. Every npm package's whole namespace is in `vendor/`, except the
+icon pack, which holds the icons the source imports; a package runs the
+first time a module requires it.
+
+The CSS is built by [`tailwind.js`](./source/tailwind.js) from the
+stylesheets the modules import (Tailwind resolves their `@import`s) and the
+classes in the compiled modules. Its key hashes every module's and
+stylesheet's content; the build ships the CSS for its own key, and when the
+key differs the page shows the shipped CSS while it rebuilds in a worker,
+then keeps the result under that key. Both flatten Tailwind's nested
+variants with postcss-nested; Chrome lays out the editor several times
+slower with nested rules.
+
+RuntimeVM's content-type table has no `.ts` or `.tsx`, so those files are
+served without a type. The loader reads them as text, so this costs only
+transfer: an untyped response is not compressed.
 
 ## How a request reaches the editor, with no computer VM
 

@@ -68,6 +68,39 @@ function storedTheme(): "dark" | "light" {
   }
 }
 
+function OpenError({ message }: { message: string }) {
+  return (
+    <div className="artifact-state" role="alert">
+      <strong>Could not open this document</strong>
+      <span>{message}</span>
+      <button type="button" onClick={() => window.location.reload()}>
+        Reload
+      </button>
+    </div>
+  )
+}
+
+// An editor that throws while it loads or renders (an edit to its source on
+// the site, say) shows why instead of an empty page.
+class EditorErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null }
+
+  static getDerivedStateFromError(error: unknown) {
+    return { error: error instanceof Error ? error : new Error(String(error)) }
+  }
+
+  render() {
+    return this.state.error ? (
+      <OpenError message={this.state.error.message} />
+    ) : (
+      this.props.children
+    )
+  }
+}
+
 function App() {
   const [reloadVersion, setReloadVersion] = React.useState("")
   const [save] = React.useState(() => new Autosave(window, setReloadVersion))
@@ -115,7 +148,9 @@ function App() {
   const kind = artifact?.kind
   React.useEffect(
     () =>
-      kind ? registerDocumentTools(kind, () => save.documentBytes()) : undefined,
+      kind
+        ? registerDocumentTools(kind, () => save.documentBytes())
+        : undefined,
     [kind, save]
   )
 
@@ -136,58 +171,54 @@ function App() {
     <AutosaveContext.Provider value={save}>
       <main className="artifact-editor">
         {error ? (
-          <div className="artifact-state" role="alert">
-            <strong>Could not open this document</strong>
-            <span>{error}</span>
-            <button type="button" onClick={() => window.location.reload()}>
-              Reload
-            </button>
-          </div>
+          <OpenError message={error} />
         ) : documentProps ? (
-          <React.Suspense
-            fallback={<div className="artifact-state">Opening document…</div>}
-          >
-            {artifact?.kind === "docx" ? (
-              <DocxEditor
-                {...documentProps}
-                anchorIdPrefix=""
-                defaultMode="editing"
-                scrollsWindow
-                showUpload={false}
-              />
-            ) : artifact?.kind === "xlsx" ? (
-              <XlsxEditor
-                {...documentProps}
-                cellAnchorIdPrefix=""
-                scrollsWindow
-                syncSheetToUrl
-              />
-            ) : artifact?.kind === "slides" ? (
-              <SlidesEditor
-                key={documentProps.src}
-                src={documentProps.src}
-                title={artifact.title}
-                {...appearance}
-              />
-            ) : artifact?.kind === "pptx" ? (
-              <PptxViewer
-                {...documentProps}
-                defaultThumbnailSidebarOpen
-                scrollsWindow
-                showUpload={false}
-                slideIdPrefix=""
-              />
-            ) : (
-              <PdfEditor
-                key={documentProps.src}
-                {...documentProps}
-                anchorIdPrefix=""
-                defaultZoom="automatic"
-                scrollsWindow
-                showUpload={false}
-              />
-            )}
-          </React.Suspense>
+          <EditorErrorBoundary key={documentProps.src}>
+            <React.Suspense
+              fallback={<div className="artifact-state">Opening document…</div>}
+            >
+              {artifact?.kind === "docx" ? (
+                <DocxEditor
+                  {...documentProps}
+                  anchorIdPrefix=""
+                  defaultMode="editing"
+                  scrollsWindow
+                  showUpload={false}
+                />
+              ) : artifact?.kind === "xlsx" ? (
+                <XlsxEditor
+                  {...documentProps}
+                  cellAnchorIdPrefix=""
+                  scrollsWindow
+                  syncSheetToUrl
+                />
+              ) : artifact?.kind === "slides" ? (
+                <SlidesEditor
+                  key={documentProps.src}
+                  src={documentProps.src}
+                  title={artifact.title}
+                  {...appearance}
+                />
+              ) : artifact?.kind === "pptx" ? (
+                <PptxViewer
+                  {...documentProps}
+                  defaultThumbnailSidebarOpen
+                  scrollsWindow
+                  showUpload={false}
+                  slideIdPrefix=""
+                />
+              ) : (
+                <PdfEditor
+                  key={documentProps.src}
+                  {...documentProps}
+                  anchorIdPrefix=""
+                  defaultZoom="automatic"
+                  scrollsWindow
+                  showUpload={false}
+                />
+              )}
+            </React.Suspense>
+          </EditorErrorBoundary>
         ) : (
           <div className="artifact-state">Opening artifact…</div>
         )}

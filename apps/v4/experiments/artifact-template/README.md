@@ -1,8 +1,9 @@
 # Office artifact template experiment
 
 This fork builds a static release for a Cool Computer artifact. Each release
-contains the viewer/editor bundle (with `template.json`, its version), one
-document, `artifact.json`, and `cool.json`. It runs in the browser without a computer VM or a RuntimeVM
+contains the viewer/editor (the Vite bundle, or for a spreadsheet the
+template's TSX source with `loader.js`), `template.json` naming its version,
+one document, `artifact.json`, and `cool.json`. It runs in the browser without a computer VM or a RuntimeVM
 code change.
 
 For the build pipeline, Cloudflare request path, and later integration contract,
@@ -14,11 +15,11 @@ glass surfaces on the XLSX, DOCX, and PDF toolbars. The workbook's own
 appearance button persists the choice under RuntimeVM's
 `cool-computers-theme` key. There is no artifact header, logo, or wallpaper.
 
-| File | UI in this fork                                                               | Save path              |
-| ---- | ----------------------------------------------------------------------------- | ---------------------- |
+| File | UI in this fork                                                               | Save path                 |
+| ---- | ----------------------------------------------------------------------------- | ------------------------- |
 | XLSX | Experimental spreadsheet editor, including chart selection and movement       | Automatic via page bridge |
 | DOCX | Experimental word processor                                                   | Automatic via page bridge |
-| PPTX | Presentation viewer only; this fork has no PPTX editor                        | Download original PPTX |
+| PPTX | Presentation viewer only; this fork has no PPTX editor                        | Download original PPTX    |
 | PDF  | PDF editor for annotations, forms, signatures, redaction, and page operations | Automatic via page bridge |
 
 The PDF editor does not rewrite arbitrary existing page text. DOCX, XLSX, PDF,
@@ -64,10 +65,12 @@ pnpm --filter v4 artifact-template:build
 pnpm --filter v4 artifact-template:stage /absolute/path/to/report.xlsx /absolute/path/to/new-release-directory
 ```
 
-The stage command accepts `.xlsx`, `.docx`, `.pptx`, and `.pdf`. An omitted
-output directory stages directly into
-`apps/v4/experiments/artifact-template/dist`; a specified output directory
-must not already exist. Rebuild after changing source. The release is a complete
+The stage command accepts `.xlsx`, `.docx`, `.pptx`, and `.pdf`. A
+spreadsheet release is the template's TypeScript source, run in the browser
+with no build (see [Spreadsheet releases are source](./ARCHITECTURE.md#spreadsheet-releases-are-source));
+the other kinds are the Vite bundle. An omitted output directory stages
+directly into `apps/v4/experiments/artifact-template/dist` (`dist-xlsx` for a
+spreadsheet); a specified output directory must not already exist. Rebuild after changing source. The release is a complete
 static directory; Vite emits relative asset URLs so it works at an artifact
 root or a local preview subpath. The stage command checks the 25 MiB per-asset,
 20,000-file, and 1 GiB total limits. A failed stage removes a newly created
