@@ -90,6 +90,7 @@ describe('parsePresentation', () => {
       maxInputBytes: true,
       fetchInit: true,
       onPerformanceMeasurement: true,
+      onDownloadProgress: true,
     };
 
     expect(Object.keys(supportedOptions)).toEqual([
@@ -98,6 +99,7 @@ describe('parsePresentation', () => {
       'maxInputBytes',
       'fetchInit',
       'onPerformanceMeasurement',
+      'onDownloadProgress',
     ]);
   });
 });

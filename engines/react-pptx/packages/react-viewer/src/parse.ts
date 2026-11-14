@@ -32,6 +32,37 @@ function isPresentationDocument(source: PresentationSource): source is Presentat
   );
 }
 
+/** Reads a response chunk by chunk, so progress can be reported as it arrives. */
+async function readBody(
+  response: Response,
+  totalBytes: number | undefined,
+  onProgress: ParsePresentationOptions['onDownloadProgress'],
+): Promise<ArrayBuffer> {
+  const chunks: Uint8Array[] = [];
+  let loadedBytes = 0;
+  const reader = response.body?.getReader();
+  if (reader) {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      loadedBytes += value.byteLength;
+      // A compressed response declares its encoded size, which the decoded bytes outgrow.
+      onProgress?.(
+        loadedBytes,
+        totalBytes !== undefined && totalBytes >= loadedBytes ? totalBytes : undefined,
+      );
+    }
+  }
+  const bytes = new Uint8Array(loadedBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes.buffer;
+}
+
 async function readSource(
   source: BinaryPresentationSource,
   options: ParsePresentationOptions,
@@ -73,7 +104,11 @@ async function readSource(
         { details: { byteLength: declaredLength, maximum } },
       );
     }
-    buffer = await response.arrayBuffer();
+    buffer = await readBody(
+      response,
+      Number.isFinite(declaredLength) && declaredLength > 0 ? declaredLength : undefined,
+      options.onDownloadProgress,
+    );
   } else {
     throw new PptxViewerError('invalid-source', 'Unsupported presentation source.');
   }

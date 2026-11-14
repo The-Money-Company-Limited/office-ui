@@ -5,6 +5,7 @@ import {
   ReactPptxViewer,
   usePptxViewerThumbnails,
   type ParsedPresentation,
+  type PptxLoadProgress,
   type PptxSlideThumbnailItem,
   type PptxSlideThumbnailRenderWindow,
   type PptxViewerController,
@@ -185,14 +186,50 @@ function useDelayedLoadingIndicator(isLoading: boolean, delayMs: number) {
   return isLoading && showSpinner
 }
 
+function formatMegabytes(bytes: number) {
+  return (bytes / 1024 / 1024).toFixed(1)
+}
+
+// The deck opens only once the whole file has arrived (a .pptx is a zip, read
+// from its end), so the download is shown as it progresses, then the parse
+// and first render as one step.
 function ViewerLoadingSurface({
-  showSpinner = true,
+  progress,
+  showSpinner,
 }: {
-  showSpinner?: boolean
+  progress: PptxLoadProgress
+  showSpinner: boolean
 }) {
+  if (!showSpinner) return null
+  const totalBytes =
+    progress.phase === "downloading" ? progress.totalBytes : undefined
+  const loadedBytes =
+    progress.phase === "downloading" ? progress.loadedBytes : 0
+
   return (
-    <div className="grid h-full min-h-96 w-full place-items-center bg-background">
-      {showSpinner ? <Spinner className="size-4" /> : null}
+    <div
+      role="status"
+      className="flex w-64 flex-col items-center gap-3 text-sm text-muted-foreground"
+    >
+      <span className="flex items-center gap-2">
+        <Spinner className="size-4" />
+        {progress.phase === "downloading"
+          ? "Downloading presentation…"
+          : "Preparing slides…"}
+      </span>
+      {totalBytes ? (
+        <>
+          <span className="h-1 w-full overflow-hidden rounded-full bg-muted">
+            <span
+              className="block h-full rounded-full bg-primary"
+              style={{ width: `${(loadedBytes / totalBytes) * 100}%` }}
+            />
+          </span>
+          <span className="text-xs tabular-nums">
+            {formatMegabytes(loadedBytes)} of {formatMegabytes(totalBytes)} MB
+          </span>
+        </>
+      ) : null}
     </div>
   )
 }
@@ -1661,10 +1698,20 @@ export function PptxViewerPreview({
       showThumbnails={false}
       virtualization={virtualization}
       slideIdPrefix={slideIdPrefix}
-      className="min-h-full !border-0 !bg-transparent [&_.rpv-stage]:min-h-full [&_.rpv-stage]:!bg-transparent [&_.rpv-status]:!bg-transparent [&_.rpv-workspace]:min-h-full [&_[data-rpv-list-item]]:[contain:layout_paint_style]"
+      className={cn(
+        "min-h-full !border-0 !bg-transparent [&_.rpv-stage]:min-h-full [&_.rpv-stage]:!bg-transparent [&_.rpv-status]:!bg-transparent [&_.rpv-workspace]:min-h-full [&_[data-rpv-list-item]]:[contain:layout_paint_style]",
+        // With the window as scroller nothing gives the stage a height while
+        // it is still empty; keep it as tall as the visible area so the
+        // loading state sits in its middle.
+        scrollsWindow &&
+          "[&_.rpv-stage]:min-h-[calc(100dvh-var(--pptx-toolbar-height))]"
+      )}
       viewportClassName="!min-h-full !px-4 !py-6"
-      renderLoading={() => (
-        <ViewerLoadingSurface showSpinner={shouldShowLoadingSpinner} />
+      renderLoading={(progress) => (
+        <ViewerLoadingSurface
+          progress={progress}
+          showSpinner={shouldShowLoadingSpinner}
+        />
       )}
       renderError={(error) => (
         <div className="grid h-full min-h-96 place-items-center p-6 text-center">

@@ -53,7 +53,20 @@ export interface ParsePresentationOptions {
   fetchInit?: Omit<RequestInit, 'signal'>;
   /** Receives cold-start download and native parsing timings. */
   onPerformanceMeasurement?: (measurement: PptxPerformanceMeasurement) => void;
+  /**
+   * Receives the bytes of a URL source received so far, and the file's size when
+   * the server declares it, as the download arrives.
+   */
+  onDownloadProgress?: (loadedBytes: number, totalBytes: number | undefined) => void;
 }
+
+/**
+ * Where an opening presentation is: its download, then parsing and the first
+ * slides' render. A source that is already in memory starts at `preparing`.
+ */
+export type PptxLoadProgress =
+  | { phase: 'downloading'; loadedBytes: number; totalBytes?: number }
+  | { phase: 'preparing' };
 
 export interface VirtualizationOptions {
   /**
@@ -346,7 +359,8 @@ export interface ReactPptxViewerProps extends Omit<
   activeSearchResult?: number | PresentationSearchResult | null;
   searchHighlightOptions?: SearchHighlightOptions;
   renderThumbnail?: (context: ThumbnailRenderContext) => ReactNode;
-  renderLoading?: () => ReactNode;
+  /** Shown until the first slides have rendered. */
+  renderLoading?: (progress: PptxLoadProgress) => ReactNode;
   renderError?: (error: import('./errors').PptxViewerError) => ReactNode;
   emptyState?: ReactNode;
   toolbarClassName?: string;
