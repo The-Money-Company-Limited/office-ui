@@ -4,6 +4,9 @@ A page that plays like a video. You write an ordinary page and a list of what to
 a clock people can pause and scrub, and people comment on a moment the way they comment on any page. Nothing is
 recorded and there is no build step: edit the files and publish.
 
+A video is silent. The story is told by the page itself (text and pictures that appear in turn) and by a few handwritten
+words beside what you point at: put the sentences on the page, and keep handwritten words to a short label.
+
 ## The files
 
 | File | What it is | Change it? |
@@ -38,6 +41,10 @@ recorded and there is no build step: edit the files and publish.
 - `clear` wipes every drawing made so far, so later drawings are not drawn over old ones.
 - `at` (seconds) starts a step at that moment instead. `wait` (seconds) holds before the next step.
 - `duration` (seconds, at the top level) sets the length; without it the video ends shortly after its last step.
+
+How long it runs: a camera move takes 1.2 s; a drawing about 1.9 s for the pen to come and go, plus about 0.9 s a shape
+and 0.4 s plus 0.16 s a letter for written words; steps are 0.7 s apart, and the video ends 1.5 s after its last step.
+A zoom of 2 shows a quarter of the stage around its element, stopping at the stage's edges.
 
 ## Motion in the page
 

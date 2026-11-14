@@ -337,8 +337,17 @@ async function start() {
   window.postMessage({ cool: 'video', type: 'ink', drawings: planned.drawings }, location.origin)
   // A link may start at a moment: #t=22.5. In the hash, not the query, so it never makes the page a different page for
   // its comments.
-  const from = Number(new URLSearchParams(location.hash.slice(1)).get('t'))
+  const linked = () => Number(new URLSearchParams(location.hash.slice(1)).get('t'))
+  const from = linked()
   show(Number.isFinite(from) && from > 0 ? from * 1000 : 0)
+  // A link to another moment of the same video, followed on the page, goes there.
+  window.addEventListener('hashchange', () => {
+    const at = linked()
+    if (Number.isFinite(at) && at >= 0) {
+      pause()
+      show(at * 1000)
+    }
+  })
   // For filming: the export seeks frame by frame and waits for this.
   window.__video = { duration, seek: show }
 }
