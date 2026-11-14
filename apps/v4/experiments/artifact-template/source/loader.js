@@ -1,45 +1,34 @@
-// The loader runs the site's TSX source with no build: it fetches src/**,
-// transpiles what changed (sucrase, in workers), keeps the result in Cache
-// Storage and runs it. Cache Storage works even when a private site answers
-// no-store, so a warm load downloads nothing but 304s.
+// The loader runs the site's TSX source with no build. Every load it
+// revalidates each source file, looks up or compiles it, links the imports
+// afresh against the files the site has now, and runs the result.
 //
-// Each source file (module or stylesheet) has one cache record: its ETag, its
-// compiled code and the files it imports, written in one put. Every load
-// revalidates each record with If-None-Match, so a saved edit shows on the
-// next reload. A local import that names no known file is looked for on the
-// site, so a new file needs no manifest entry; a module whose import is still
-// unresolved is not cached, so it is looked for again on the next load.
-// Content-named files (vendor/, the compilers, the shipped CSS) are cached
-// once and never revalidated.
+// The only cache is immutable: a file's compiled code and import specifiers,
+// keyed by its path and ETag (compiling is a pure function of the source),
+// the built CSS keyed by a hash of its inputs, and the content-named files in
+// vendor/. Tabs cannot corrupt each other, and a reverted file finds its old
+// entry. Each path's last ETag is kept only as an If-None-Match hint: a stale
+// hint costs a download, never wrong code. Cache Storage works even when a
+// private site answers no-store, so a warm load transfers only 304s.
+import { candidates, codeFile, link } from "./resolve.js"
+
 performance.mark("loader")
 const NativeWorker = window.Worker
 const root = new URL("./", location.href)
 const at = (path) => new URL(path, root)
-const codeFile = /\.(tsx?|jsx?)$/
 const sourceFile = (path) => codeFile.test(path) || path.endsWith(".css")
-const stats = { compiled: 0, changed: [], css: "shipped" }
+const stats = { compiled: 0, css: "shipped" }
 window.__loader = stats
 
 async function run() {
   const manifest = await (
     await fetch(at("loader-manifest.json"), { cache: "no-store" })
   ).json()
-  // One cache per template build: compiled code from an older compiler or
-  // vendor never runs with a newer one.
+  // One cache per template build: code from an older compiler or vendor
+  // never runs with a newer one.
   const cacheName = `template-${manifest.version}`
   for (const name of await caches.keys())
     if (name.startsWith("template-") && name !== cacheName) caches.delete(name)
   const store = await caches.open(cacheName)
-  const stateKey = at("__loader/state")
-  const recordKey = (path) => at("__loader/file/" + path)
-  const bundleKey = (entry) => at("__loader/bundle/" + entry)
-  // found: files discovered on the site; css: "shipped", the cache key of the
-  // CSS rebuilt after the last change, or null while it is being rebuilt.
-  const state = (await (await store.match(stateKey))?.json()) ?? {
-    found: [],
-    css: null,
-  }
-
   async function immutable(path) {
     let response = await store.match(at(path))
     if (!response) {
@@ -53,193 +42,138 @@ async function run() {
   const vendor = immutable(manifest.vendor)
   const shippedCss = immutable(manifest.css.shipped)
 
-  // 1. Revalidate every source file against its record.
-  const known = new Set([...manifest.files, ...state.found])
-  const absent = new Set(manifest.absent)
-  const records = new Map()
-  await Promise.all(
-    [...known].filter(sourceFile).map(async (path) => {
-      const response = await store.match(recordKey(path))
-      if (response)
-        records.set(path, {
-          etag: response.headers.get("x-etag"),
-          files: JSON.parse(response.headers.get("x-files")),
-        })
-    })
-  )
-  const cold = records.size === 0
-  const sources = new Map()
-  const gone = new Set()
-  const get = async (path) => {
-    const etag = records.get(path)?.etag
-    const response = await fetch(at(path), {
+  // 1. Revalidate each source file and look up its entry; what has none is
+  // compiled below.
+  const entryKey = (path, etag) =>
+    at(`__loader/entry/${path}?etag=${encodeURIComponent(etag)}`)
+  const hintKey = (path) => at("__loader/etag/" + path)
+  const files = new Set(manifest.files)
+  const entries = new Map() // path -> {code, specs, hash}
+  const jobs = []
+  async function load(path) {
+    const hint = await (await store.match(hintKey(path)))?.text()
+    let response = await fetch(at(path), {
       cache: "no-store",
-      headers: etag ? { "if-none-match": etag } : {},
+      headers: hint ? { "if-none-match": hint } : {},
     })
-    if (response.status === 304) return
-    if (response.status === 404) return gone.add(path)
+    if (response.status === 304) {
+      const cached = await store.match(entryKey(path, hint))
+      if (cached) {
+        entries.set(path, await cached.json())
+        return true
+      }
+      response = await fetch(at(path), { cache: "no-store" })
+    }
+    if (response.status === 404) {
+      files.delete(path)
+      return false
+    }
     if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`)
-    sources.set(path, {
-      path,
-      etag: response.headers.get("etag") ?? "",
-      source: await response.text(),
-    })
+    const source = await response.text()
+    const hash = await sha1(source)
+    const etag = response.headers.get("etag") || hash
+    const cached = await store.match(entryKey(path, etag))
+    if (cached) entries.set(path, await cached.json())
+    else jobs.push({ path, etag, source, hash })
+    return true
   }
-  await Promise.all([...known].filter(sourceFile).map(get))
-  for (const path of gone) {
-    known.delete(path)
-    records.delete(path)
-    await store.delete(recordKey(path))
-  }
-  // A cached module that imports a file the site no longer serves compiles
-  // again, so the import resolves to what is there now (a renamed file).
-  const stale = [...records].filter(
-    ([path, record]) =>
-      !sources.has(path) && record.files.some((file) => !known.has(file))
-  )
-  for (const [path] of stale) records.delete(path)
-  await Promise.all(stale.map(([path]) => get(path)))
-  state.found = state.found.filter((path) => known.has(path))
+  await Promise.all(manifest.files.filter(sourceFile).map(load))
   performance.mark("revalidated")
 
-  // 2. Compile what changed. An import of an unknown local file is looked for
-  // on the site; when it is there, its importer is compiled again.
-  const compiled = new Map()
+  // 2. Compile what has no entry and link. A local import that names no file
+  // is looked for on the site, on every load; nothing about a failed lookup
+  // is kept.
+  const absent = new Set(manifest.absent)
   const notFound = new Set()
-  let jobs = [...sources.values()].filter((file) => codeFile.test(file.path))
-  while (jobs.length) {
-    const results = await compile(manifest, jobs, [...known])
-    const retry = new Set()
-    const looks = []
-    for (const [path, result] of results) {
-      compiled.set(path, result)
-      for (const { base, candidates } of result.missing) {
-        if (absent.has(base) || notFound.has(base)) continue
-        looks.push(
-          find(candidates).then((file) => {
-            if (!file) return notFound.add(base)
-            retry.add(path)
-            if (known.has(file.path)) return
-            known.add(file.path)
-            state.found.push(file.path)
-            if (!sourceFile(file.path)) return
-            sources.set(file.path, file)
-            if (codeFile.test(file.path)) retry.add(file.path)
-          })
-        )
-      }
-    }
-    await Promise.all(looks)
-    jobs = [...retry].map((path) => sources.get(path))
-  }
-  for (const [path, file] of sources) {
-    const result = compiled.get(path)
-    if (result?.missing.some((base) => !absent.has(base))) continue
-    const files = result?.files ?? []
-    await store.put(
-      recordKey(path),
-      new Response(result?.code ?? "", {
-        headers: { "x-etag": file.etag, "x-files": JSON.stringify(files) },
+  const workerEntries = Object.keys(manifest.workers)
+  let graphs
+  for (;;) {
+    if (jobs.length) await compile(jobs.splice(0))
+    graphs = [manifest.entry, ...workerEntries].map((entry) =>
+      link(
+        entry,
+        (path) => entries.get(path)?.specs,
+        manifest.config,
+        (path) => files.has(path)
+      )
+    )
+    const missing = [
+      ...new Set(
+        graphs
+          .flatMap((graph) => graph.missing)
+          .filter((base) => !absent.has(base) && !notFound.has(base))
+      ),
+    ]
+    if (!missing.length && !jobs.length) break
+    await Promise.all(
+      missing.map(async (base) => {
+        for (const path of candidates(base).filter(sourceFile))
+          if (await load(path)) return files.add(path)
+        notFound.add(base)
       })
     )
-    records.set(path, { etag: file.etag, files })
   }
-  stats.compiled = compiled.size
-  stats.changed = [...sources.keys()]
-  const filesOf = (path) =>
-    compiled.get(path)?.files ?? records.get(path)?.files ?? []
-  const codeOf = async (path) =>
-    compiled.get(path)?.code ??
-    (await (await store.match(recordKey(path))).text())
-
-  // 3. One script per entry (the page, each worker): the runtime, then every
-  // module the entry reaches. A cached script is used only when it was built
-  // from exactly the records there are now.
-  const entries = [manifest.entry, ...Object.keys(manifest.workers)]
-  const bundles = {}
-  for (const entry of entries) {
-    const list = reach(entry, filesOf, known)
-    const built = JSON.stringify(
-      list.map((path) => [path, records.get(path)?.etag ?? ""])
-    )
-    const cached = await store.match(bundleKey(entry))
-    if (
-      cached?.headers.get("x-built") === built &&
-      !list.some((path) => compiled.has(path))
-    ) {
-      bundles[entry] = await cached.blob()
-      continue
-    }
-    bundles[entry] = new Blob(
-      [runtime, ...(await Promise.all(list.map(codeOf)))],
+  const [page, ...workerGraphs] = graphs
+  const script = (graph) =>
+    new Blob(
+      [
+        runtime,
+        ...graph.modules.map(
+          (path) =>
+            `__define(${JSON.stringify(path)}, ${JSON.stringify(graph.maps[path])}, ${entries.get(path).code});\n`
+        ),
+      ],
       { type: "text/javascript" }
     )
-    await store.put(
-      bundleKey(entry),
-      new Response(bundles[entry], { headers: { "x-built": built } })
-    )
-  }
-  // The shipped CSS was built from the shipped source. A first load can tell
-  // from the source it just fetched; any later change rebuilds it.
-  if (sources.size || gone.size) {
-    if (state.css && state.css !== "shipped") await store.delete(at(state.css))
-    state.css =
-      cold && (await sourceHash(manifest, sources)) === manifest.css.sourceHash
-        ? "shipped"
-        : null
-  }
-  await store.put(stateKey, Response.json(state))
-  performance.mark("bundled")
+  performance.mark("linked")
 
-  // 4. CSS: the shipped file, or the one rebuilt after the last change.
+  // 3. CSS, keyed by the content of every module (its classes) and
+  // stylesheet: the shipped file, a rebuilt one from the cache, or the shipped
+  // one while Tailwind rebuilds it in a worker.
+  const modules = [...new Set(graphs.flatMap((graph) => graph.modules))]
+  const cssKey = await sha1(
+    JSON.stringify(
+      [...modules, ...page.css]
+        .sort()
+        .map((path) => [path, entries.get(path).hash])
+    )
+  )
   const style = document.createElement("style")
   document.head.append(style)
-  if (state.css === "shipped")
-    style.textContent = await (await shippedCss).text()
-  else if (state.css) {
-    style.textContent = await (await store.match(at(state.css))).text()
+  const rebuilt =
+    cssKey === manifest.css.key
+      ? null
+      : await store.match(at("__loader/css/" + cssKey))
+  if (rebuilt) {
+    style.textContent = await rebuilt.text()
     stats.css = "cached"
   } else {
-    // Until Tailwind has run, the shipped CSS styles everything that has not
-    // changed.
     style.textContent = await (await shippedCss).text()
-    stats.css = "rebuilding"
-    const modules = [
-      ...new Set(entries.flatMap((entry) => reach(entry, filesOf, known))),
-    ]
-    // Stylesheets the modules import, after the ones the template ships with.
-    const imported = modules
-      .flatMap(filesOf)
-      .filter((file) => file.endsWith(".css") && file !== manifest.css.entry)
-    const css = {
-      ...manifest.css,
-      plain: [...new Set([...manifest.css.plain, ...imported])],
+    if (cssKey !== manifest.css.key) {
+      stats.css = "rebuilding"
+      const codes = modules.map((path) => entries.get(path).code)
+      setTimeout(async () => {
+        const css = await rebuildCss(
+          manifest.css,
+          page.sheets,
+          codes,
+          immutable
+        )
+        await store.put(at("__loader/css/" + cssKey), new Response(css))
+        style.textContent = css
+        stats.css = "rebuilt"
+      }, 0)
     }
-    setTimeout(async () => {
-      const read = await rebuildCss(
-        manifest.css.compiler,
-        css,
-        await Promise.all(modules.map(codeOf)),
-        immutable,
-        style,
-        store,
-        state
-      )
-      // Stylesheets the CSS imports are revalidated from now on.
-      for (const path of read)
-        if (path.startsWith("src/") && !known.has(path)) state.found.push(path)
-      await store.put(stateKey, Response.json(state))
-    }, 0)
   }
 
-  // 5. Run: vendor, then the page's modules. A worker made from a source file
-  // boots from its own vendor and bundle.
+  // 4. Run: vendor, then the page's modules. A worker made from a source file
+  // boots from its own vendor and script.
   self.__loaderBase = root.href
   const workers = {}
-  for (const [entry, vendorPath] of Object.entries(manifest.workers))
+  for (const [i, entry] of workerEntries.entries())
     workers[entry] = {
-      vendor: URL.createObjectURL(await immutable(vendorPath)),
-      bundle: URL.createObjectURL(bundles[entry]),
+      vendor: URL.createObjectURL(await immutable(manifest.workers[entry])),
+      script: URL.createObjectURL(script(workerGraphs[i])),
     }
   window.Worker = class extends NativeWorker {
     constructor(url, options) {
@@ -254,30 +188,25 @@ async function run() {
         super(url, options)
         return
       }
-      const boot = `self.__loaderBase = ${JSON.stringify(root.href)}; importScripts(${JSON.stringify(workers[entry].vendor)}, ${JSON.stringify(workers[entry].bundle)}); __require(${JSON.stringify(entry)})`
+      const boot = `self.__loaderBase = ${JSON.stringify(root.href)}; importScripts(${JSON.stringify(workers[entry].vendor)}, ${JSON.stringify(workers[entry].script)}); __require(${JSON.stringify(entry)})`
       super(
         URL.createObjectURL(new Blob([boot], { type: "text/javascript" })),
         { name: options?.name }
       )
     }
   }
-  for (const blob of [await vendor, bundles[manifest.entry]])
-    await script(URL.createObjectURL(blob))
+  for (const blob of [await vendor, script(page)])
+    await runScript(URL.createObjectURL(blob))
   performance.mark("scripts-ready")
   __require(manifest.entry)
   performance.mark("main-evaluated")
 
-  // Transpiles jobs in up to four workers, largest files first.
-  async function compile(manifest, jobs, known) {
+  // Compiles jobs in up to four workers, largest files first, and keeps each
+  // result under its path and ETag.
+  async function compile(jobs) {
     const compilerUrl = URL.createObjectURL(await immutable(manifest.compiler))
     const boot = `importScripts(${JSON.stringify(compilerUrl)});
-onmessage = ({ data: { jobs, config, known } }) => {
-  const files = new Set(known)
-  postMessage(jobs.map(({ path, source }) => {
-    const result = self.compiler.compileModule(path, source, config, (p) => files.has(p))
-    return { ...result, missing: result.missing.map((base) => ({ base, candidates: self.compiler.candidates(base) })) }
-  }))
-}`
+onmessage = ({ data }) => postMessage(data.map(({ path, source }) => self.compiler.compileFile(path, source)))`
     const bootUrl = URL.createObjectURL(
       new Blob([boot], { type: "text/javascript" })
     )
@@ -301,56 +230,39 @@ onmessage = ({ data: { jobs, config, known } }) => {
             const worker = new NativeWorker(bootUrl)
             worker.onmessage = ({ data }) => {
               worker.terminate()
-              done(lane.jobs.map((job, i) => [job.path, data[i]]))
+              done(lane.jobs.map((job, i) => [job, data[i]]))
             }
             worker.onerror = (event) => {
               worker.terminate()
               fail(new Error(event.message))
             }
-            worker.postMessage({
-              jobs: lane.jobs.map(({ path, source }) => ({ path, source })),
-              config: manifest.config,
-              known,
-            })
+            worker.postMessage(
+              lane.jobs.map(({ path, source }) => ({ path, source }))
+            )
           })
       )
     )
-    return results.flat()
+    for (const [job, result] of results.flat()) {
+      const entry = { ...result, hash: job.hash }
+      entries.set(job.path, entry)
+      await store.put(entryKey(job.path, job.etag), Response.json(entry))
+      await store.put(hintKey(job.path), new Response(job.etag))
+    }
+    stats.compiled += jobs.length
+  }
+
+  function runScript(src) {
+    return new Promise((done, fail) => {
+      const element = document.createElement("script")
+      element.src = src
+      element.onload = done
+      element.onerror = () => fail(new Error(`Could not run ${src}`))
+      document.head.append(element)
+    })
   }
 }
 
-// The first candidate path the site serves, with its source.
-async function find(candidates) {
-  for (const path of candidates) {
-    const response = await fetch(at(path), { cache: "no-store" })
-    if (response.ok)
-      return {
-        path,
-        etag: response.headers.get("etag") ?? "",
-        source: await response.text(),
-      }
-  }
-  return null
-}
-
-// The modules an entry reaches through its imports.
-function reach(entry, filesOf, known) {
-  const seen = new Set()
-  const stack = [entry]
-  while (stack.length) {
-    const path = stack.pop()
-    if (seen.has(path) || !known.has(path)) continue
-    seen.add(path)
-    stack.push(...filesOf(path).filter((file) => codeFile.test(file)))
-  }
-  return [...seen]
-}
-
-async function sourceHash(manifest, sources) {
-  const text = manifest.files
-    .filter(sourceFile)
-    .map((path) => path + "\0" + (sources.get(path)?.source ?? ""))
-    .join("\0")
+async function sha1(text) {
   const digest = await crypto.subtle.digest(
     "SHA-1",
     new TextEncoder().encode(text)
@@ -360,66 +272,48 @@ async function sourceHash(manifest, sources) {
     .join("")
 }
 
-// Runs Tailwind in a worker, so the page starts while it works, then swaps the
-// rebuilt CSS in and keeps it for later loads. Returns the files it read.
-async function rebuildCss(
-  compilerPath,
-  css,
-  codes,
-  immutable,
-  style,
-  store,
-  state
-) {
-  const started = performance.now()
-  const compiler = URL.createObjectURL(await immutable(compilerPath))
+// Runs Tailwind in a worker, so the page starts while it works.
+async function rebuildCss(css, sheets, codes, immutable) {
+  const compiler = URL.createObjectURL(await immutable(css.compiler))
   const boot = `import { buildCss } from ${JSON.stringify(compiler)}
-onmessage = async ({ data: { css, codes, root } }) => {
-  const read = []
+onmessage = async ({ data: { sheets, packages, codes, root } }) => {
   const text = async (path) => {
     const response = await fetch(new URL(path, root), { cache: "no-store" })
     if (!response.ok) throw new Error(path + ": HTTP " + response.status)
-    read.push(path)
     return response.text()
   }
-  postMessage({ css: await buildCss(css, codes, text), read })
+  postMessage(await buildCss(sheets, packages, codes, text))
 }`
   const worker = new NativeWorker(
     URL.createObjectURL(new Blob([boot], { type: "text/javascript" })),
-    { type: "module" }
+    {
+      type: "module",
+    }
   )
-  const { css: built, read } = await new Promise((done, fail) => {
-    worker.onmessage = ({ data }) => done(data)
-    worker.onerror = (event) => fail(new Error(event.message))
-    worker.postMessage({ css, codes, root: root.href })
-  })
-  worker.terminate()
-  const key = "__loader/css/" + Date.now()
-  await store.put(at(key), new Response(built))
-  state.css = key
-  style.textContent = built
-  stats.css = "rebuilt"
-  stats.cssMs = Math.round(performance.now() - started)
-  return read
+  try {
+    return await new Promise((done, fail) => {
+      worker.onmessage = ({ data }) => done(data)
+      worker.onerror = (event) => fail(new Error(event.message))
+      worker.postMessage({
+        sheets,
+        packages: css.packages,
+        codes,
+        root: root.href,
+      })
+    })
+  } finally {
+    worker.terminate()
+  }
 }
 
-function script(src) {
-  return new Promise((done, fail) => {
-    const element = document.createElement("script")
-    element.src = src
-    element.onload = done
-    element.onerror = () => fail(new Error(`Could not run ${src}`))
-    document.head.append(element)
-  })
-}
-
-// The module runtime, at the top of every bundle. An id is a served path,
-// with "?url" for a file's URL and "?css" for a stylesheet (already applied),
-// or "~" and an npm package name from the vendor script.
+// The module runtime, at the top of every script. Each module carries its
+// specifier-to-id map; an id is a served path, "path?url" for a file's URL,
+// "path?css" for a stylesheet (applied by the loader), or "~" and an npm
+// package from the vendor script.
 const runtime = `(() => {
   const defs = Object.create(null), cache = Object.create(null)
-  self.__define = (id, factory) => { defs[id] = factory }
-  self.__require = function require(id) {
+  self.__define = (path, map, factory) => { defs[path] = { map, factory } }
+  const load = (self.__require = (id) => {
     if (id in cache) return cache[id].exports
     if (id[0] === "~") {
       const namespace = self.__vendor[id.slice(1)]
@@ -429,12 +323,16 @@ const runtime = `(() => {
     const q = id.indexOf("?"), path = q < 0 ? id : id.slice(0, q), query = q < 0 ? "" : id.slice(q + 1)
     if (query === "url") return { __esModule: true, default: new URL(path, self.__loaderBase).href }
     if (query === "css") return {}
-    const factory = defs[path]
-    if (!factory) throw new Error("Module not found: " + id)
+    const def = defs[path]
+    if (!def) throw new Error("Module not found: " + id)
     const module = (cache[id] = { exports: {} })
-    factory(require, module, module.exports, new URL(path, self.__loaderBase).href)
+    const require = (spec) => {
+      if (!(spec in def.map)) throw new Error("Module not found: " + spec + " (imported by " + path + ")")
+      return load(def.map[spec])
+    }
+    def.factory(require, module, module.exports, new URL(path, self.__loaderBase).href)
     return module.exports
-  }
+  })
 })();
 `
 

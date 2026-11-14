@@ -95,7 +95,7 @@ no build anywhere. `pnpm --filter v4 artifact-template:build` also runs
 
 ```text
 index.html               # the template's index.html, running loader.js
-loader.js                # fetches, transpiles, caches and runs src/**
+loader.js, resolve.js    # fetch, compile, cache, link and run src/**
 loader-manifest.json     # entry, worker, aliases, files, vendor and CSS names
 src/apps/v4/...          # the page and editor source, at repository paths
 src/engines/react-xlsx/packages/react-xlsx/...   # the grid, and its calc wasm
@@ -107,24 +107,33 @@ template.md              # for an agent: where the data and each UI part are
 template.json, artifact.json, cool.json, document/<file>
 ```
 
-[`loader.js`](./source/loader.js) revalidates every module with
-If-None-Match, transpiles the changed ones with sucrase in up to four
-workers ([`compile.js`](./source/compile.js), the same step the build walks
-the graph with), and joins them into one script per entry, the page and the
-calc worker. Compiled modules, the joined scripts and the content-named
-`vendor/` files live in Cache Storage, so a warm load of a private site
-(served `no-store`) transfers only 304s. A local import that names no
-listed file is looked for on the site, so a new file needs no manifest
-entry. Every npm package's whole namespace is in `vendor/`, except the icon
-pack, which holds the icons the source imports; a package runs the first time
-a module requires it.
+[`loader.js`](./source/loader.js) revalidates every source file with
+If-None-Match and compiles the changed ones with sucrase in up to four
+workers ([`compile.js`](./source/compile.js), a pure function of the source).
+Then it links the imports afresh against the files the site has now
+([`resolve.js`](./source/resolve.js), the same `link` the build uses) and
+runs one script per entry: the page and the calc worker. A local import that
+names no listed file is looked for on the site on every load, so a new file
+needs no manifest entry, and uploading a missing file fixes the next load.
 
-The shipped CSS is built by [`tailwind.js`](./source/tailwind.js) from the
-compiled modules, and the page runs the same code when a module changed:
-the first load after an edit uses the shipped CSS, then swaps in the rebuilt
-CSS, and later loads read it from the cache. Both flatten Tailwind's nested
-variants with postcss-nested in `buildCss`; Chrome lays out the editor
-several times slower with nested rules.
+The cache holds only immutable entries: a file's compiled code and import
+specifiers under its path and ETag, the built CSS under a hash of its inputs,
+and the content-named `vendor/` files. Two tabs cannot corrupt each other,
+and a reverted file finds its old entry. Each path's last ETag is kept as an
+If-None-Match hint; a stale hint costs a download, never wrong code. Cache
+Storage works under `no-store`, so a warm load of a private site transfers
+only 304s. Every npm package's whole namespace is in `vendor/`, except the
+icon pack, which holds the icons the source imports; a package runs the
+first time a module requires it.
+
+The CSS is built by [`tailwind.js`](./source/tailwind.js) from the
+stylesheets the modules import (Tailwind resolves their `@import`s) and the
+classes in the compiled modules. Its key hashes every module's and
+stylesheet's content; the build ships the CSS for its own key, and when the
+key differs the page shows the shipped CSS while it rebuilds in a worker,
+then keeps the result under that key. Both flatten Tailwind's nested
+variants with postcss-nested; Chrome lays out the editor several times
+slower with nested rules.
 
 RuntimeVM's content-type table has no `.ts` or `.tsx`, so those files are
 served without a type. The loader reads them as text, so this costs only

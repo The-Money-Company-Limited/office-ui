@@ -36,8 +36,8 @@ All paths are under `src/`.
 - npm packages come prebuilt in `vendor/`; only the packages already imported
   are there. From `@hugeicons/core-free-icons`, use an icon the source already
   imports.
-- Never edit `vendor/`, the `.wasm` file, `loader.js` or
+- Never edit `vendor/`, the `.wasm` file, `loader.js`, `resolve.js` or
   `loader-manifest.json`. They are built with the template.
-- After a change that adds Tailwind classes, the first reload rebuilds the CSS
-  in the background, and new classes show a moment later.
+- After a change to a `.tsx` or `.css` file, the first reload rebuilds the CSS
+  in the background, and new classes or rules show a moment later.
 - If a file does not compile, the page shows the error with its file and line.

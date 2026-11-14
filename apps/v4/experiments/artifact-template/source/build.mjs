@@ -4,7 +4,7 @@
 // core's wasm, and the CSS for first paint. stage.mjs adds the document.
 // Run by `pnpm --filter v4 artifact-template:build`.
 import { createHash } from "node:crypto"
-import { existsSync, realpathSync, statSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs"
 import {
   copyFile,
   mkdir,
@@ -18,7 +18,8 @@ import { fileURLToPath } from "node:url"
 import * as esbuild from "esbuild"
 
 import { templateJson } from "../template-version.mjs"
-import { candidates, compileModule, resolve } from "./compile.js"
+import { compileFile } from "./compile.js"
+import { candidates, link, resolve } from "./resolve.js"
 import { buildCss } from "./tailwind.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -71,42 +72,43 @@ const iconImport =
 const icons = new Set()
 const typeImport = /(?:import|export)\s+type\b[^;]*?\bfrom\s*["']([^"']+)["']/g
 
-// 1. Walk the graphs with the browser's compile step: the whole site's from
-// the page and the worker it starts, and the worker's own.
-const codeFile = /\.(tsx?|jsx?)$/
-async function walk(start) {
-  const files = new Set()
-  const codes = new Map()
-  const packages = new Map() // name -> a file that imports it
-  const queue = [...start]
-  while (queue.length) {
-    const file = queue.pop()
-    if (files.has(file)) continue
-    files.add(file)
-    if (!codeFile.test(file)) continue
-    const source = await readFile(onDisk(file), "utf8")
-    const result = compileModule(file, source, config, exists)
-    for (const [, names] of source.matchAll(iconImport))
-      for (const name of names.split(","))
-        if (name.trim()) icons.add(name.trim().split(/\s+as\s+/)[0])
-    for (const base of result.missing)
-      if (!absent.includes(base))
-        throw new Error(`${file} imports ${base}, which is not a file`)
-    for (const name of result.packages)
-      if (!skippedPackages.has(name) && !packages.has(name))
-        packages.set(name, file)
-    codes.set(file, result.code)
-    queue.push(...result.files)
-    // sucrase drops type-only imports; ship those files too, for an agent to read.
-    for (const [, spec] of source.matchAll(typeImport)) {
-      const resolved = resolve(spec, file, config, exists)
-      if (resolved.path) queue.push(resolved.path)
-    }
+// 1. Link the page's and the worker's graphs with the page's own compile and
+// link steps.
+const entries = new Map() // path -> {code, specs, source}
+const specsOf = (file) => {
+  if (!entries.has(file)) {
+    const source = readFileSync(onDisk(file), "utf8")
+    entries.set(file, { ...compileFile(file, source), source })
   }
-  return { files, codes, packages }
+  return entries.get(file).specs
 }
-const page = await walk([entry, worker])
-const workerGraph = await walk([worker])
+function graph(start) {
+  const linked = link(start, specsOf, config, exists)
+  for (const base of linked.missing)
+    if (!absent.includes(base))
+      throw new Error(`${base} is imported but is not a file`)
+  return linked
+}
+const page = graph(entry)
+const workerGraph = graph(worker)
+const modules = [...new Set([...page.modules, ...workerGraph.modules])]
+// name -> a module that imports it
+function packagesOf(linked) {
+  const packages = new Map()
+  for (const file of linked.modules)
+    for (const id of Object.values(linked.maps[file]))
+      if (
+        id[0] === "~" &&
+        !skippedPackages.has(id.slice(1)) &&
+        !packages.has(id.slice(1))
+      )
+        packages.set(id.slice(1), file)
+  return packages
+}
+for (const file of modules)
+  for (const [, names] of entries.get(file).source.matchAll(iconImport))
+    for (const name of names.split(","))
+      if (name.trim()) icons.add(name.trim().split(/\s+as\s+/)[0])
 
 await rm(out, { recursive: true, force: true })
 await mkdir(path.join(out, "vendor"), { recursive: true })
@@ -121,35 +123,36 @@ const named = async (name, extension, body) => {
   return file
 }
 
-// 2. Source files and assets at their served paths; stylesheets with the
-// relative stylesheets they import, packages' (tailwindcss) from vendor/css.
-const css = { entry: null, plain: [], packages: {} }
-const sourceFiles = new Set(page.files)
-const stylesheets = [...page.files].filter((file) => file.endsWith(".css"))
-for (const sheet of stylesheets) {
-  const text = await readFile(onDisk(sheet), "utf8")
-  if (/@import\s+["']tailwindcss["']/.test(text)) {
-    if (css.entry)
-      throw new Error(`Two Tailwind entries: ${css.entry} and ${sheet}`)
-    css.entry = sheet
-  } else if (page.files.has(sheet)) css.plain.push(sheet)
-  for (const [, spec] of text.matchAll(/@import\s+["']([^"']+)["']/g)) {
-    if (spec.startsWith(".")) {
-      const file = served(path.join(onDisk(sheet), "..", spec))
-      if (!sourceFiles.has(file)) {
-        sourceFiles.add(file)
-        stylesheets.push(file)
-      }
-    } else if (!css.packages[spec])
-      css.packages[spec] = await copyStylePackage(spec)
+// 2. Source files and assets at their served paths, and the files that
+// type-only imports name (sucrase drops those), for an agent to read. CSS
+// packages (tailwindcss) are served from vendor/css.
+const sourceFiles = new Set([...modules, ...page.css])
+for (const linked of [page, workerGraph])
+  for (const file of linked.modules)
+    for (const id of Object.values(linked.maps[file]))
+      if (id.endsWith("?url")) sourceFiles.add(id.slice(0, -"?url".length))
+const typeQueue = [...modules]
+while (typeQueue.length) {
+  const file = typeQueue.pop()
+  for (const [, spec] of readFileSync(onDisk(file), "utf8").matchAll(
+    typeImport
+  )) {
+    const target = resolve(spec, file, config, exists)
+    if (target.path && !sourceFiles.has(target.path)) {
+      sourceFiles.add(target.path)
+      typeQueue.push(target.path)
+    }
   }
 }
-if (!css.entry)
-  throw new Error("No Tailwind entry stylesheet in the page's graph")
 for (const file of sourceFiles) {
   await mkdir(path.dirname(path.join(out, file)), { recursive: true })
   await copyFile(onDisk(file), path.join(out, file))
 }
+const cssPackages = {}
+for (const sheet of page.css)
+  for (const spec of entries.get(sheet).specs)
+    if (resolve(spec, sheet, config, exists).vendor && !cssPackages[spec])
+      cssPackages[spec] = await copyStylePackage(spec)
 
 // A CSS package's stylesheets, copied whole so its own relative imports work.
 async function copyStylePackage(name) {
@@ -239,49 +242,56 @@ async function bundle(contents, name, format) {
   return named(name, ".js", result.outputFiles[0].contents)
 }
 
-// 5. The CSS for first paint, built the way the page rebuilds it.
+// 5. The CSS for first paint, built the way the page rebuilds it, and the
+// key the page computes for it: every module's and stylesheet's content hash.
 const text = (file) => readFile(path.join(out, file), "utf8")
-const shippedCss = await buildCss(css, [...page.codes.values()], text)
-const modules = [...page.files].filter((file) => codeFile.test(file))
-// The loader hashes the same files (modules and stylesheets) to tell whether
-// the shipped CSS still matches the site's source.
-const sources = await Promise.all(
-  [...sourceFiles]
-    .sort()
-    .filter((file) => codeFile.test(file) || file.endsWith(".css"))
-    .map(async (file) => file + "\0" + (await readFile(onDisk(file), "utf8")))
+const shippedCss = await buildCss(
+  page.sheets,
+  cssPackages,
+  modules.map((file) => entries.get(file).code),
+  text
+)
+const sha1 = (text) => createHash("sha1").update(text).digest("hex")
+const cssKey = sha1(
+  JSON.stringify(
+    [...modules, ...page.css]
+      .sort()
+      .map((file) => [file, sha1(entries.get(file).source)])
+  )
 )
 
 const manifest = {
   entry,
-  workers: { [worker]: await vendor(workerGraph.packages, "vendor-worker") },
+  workers: { [worker]: await vendor(packagesOf(workerGraph), "vendor-worker") },
   config,
   files: [...sourceFiles].sort(),
   absent,
-  vendor: await vendor(page.packages, "vendor"),
+  vendor: await vendor(
+    packagesOf({ modules, maps: { ...workerGraph.maps, ...page.maps } }),
+    "vendor"
+  ),
   compiler: await bundle(
-    `import { candidates, compileModule } from "./compile.js"\nself.compiler = { candidates, compileModule }\n`,
+    `import { compileFile } from "./compile.js"\nself.compiler = { compileFile }\n`,
     "compiler",
     "iife"
   ),
   css: {
-    ...css,
+    packages: cssPackages,
+    key: cssKey,
     shipped: await named("app", ".css", shippedCss),
     compiler: await bundle(
       `export { buildCss } from "./tailwind.js"\n`,
       "tailwind",
       "esm"
     ),
-    sourceHash: createHash("sha1").update(sources.join("\0")).digest("hex"),
   },
 }
 // The loader's cache is per version, so a new loader never reads an older
-// loader's records.
+// loader's entries.
 manifest.version = createHash("sha256")
-  .update(
-    JSON.stringify({ ...manifest, css: { ...manifest.css, sourceHash: "" } })
-  )
+  .update(JSON.stringify({ ...manifest, css: { ...manifest.css, key: "" } }))
   .update(await readFile(path.join(here, "loader.js")))
+  .update(await readFile(path.join(here, "resolve.js")))
   .digest("hex")
   .slice(0, 12)
 await write("loader-manifest.json", JSON.stringify(manifest, null, 1) + "\n")
@@ -296,8 +306,7 @@ await write(
   html.replace(script, '<script type="module" src="./loader.js"></script>')
 )
 await copyFile(path.join(here, "loader.js"), path.join(out, "loader.js"))
+await copyFile(path.join(here, "resolve.js"), path.join(out, "resolve.js"))
 await copyFile(path.join(here, "template.md"), path.join(out, "template.md"))
 await write("template.json", templateJson(["@extend-ai/react-xlsx"]))
-console.log(
-  `dist-xlsx: ${modules.length} modules, ${page.packages.size} packages, version ${manifest.version}`
-)
+console.log(`dist-xlsx: ${modules.length} modules, version ${manifest.version}`)
