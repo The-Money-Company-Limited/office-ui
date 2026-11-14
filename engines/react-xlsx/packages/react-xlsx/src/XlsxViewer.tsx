@@ -7243,7 +7243,6 @@ function XlsxGrid({
   allowResizeInReadOnly = false,
   controller,
   emptyState,
-  enableCanvasSelectionAnimation = true,
   errorState,
   fileTooLargeState,
   getCellStyle,
@@ -7277,7 +7276,7 @@ function XlsxGrid({
   stickyTop = 0
 }: Pick<
   XlsxViewerProps,
-  "allowResizeInReadOnly" | "emptyState" | "enableCanvasSelectionAnimation" | "enableGestureZoom" | "errorState" | "experimentalCanvas" | "fileTooLargeState" | "getCellStyle" | "highlightClassName" | "loadingComponent" | "loadingState" | "onFormControlAction" | "onFormControlChange" | "renderChartLoading" | "renderFormControl" | "renderImage" | "renderImageSelection" | "renderScroller" | "renderTableHeaderMenu" | "renderActiveCellOverlay" | "renderCommentIndicator" | "onCommentClick" | "onCellContextMenu" | "onHeaderContextMenu" | "onFind" | "scrollToCell" | "cellAnchorIdPrefix" | "scrollTarget" | "selectionColor" | "selectionFillColor" | "selectionHeaderColor" | "showImages" | "stickyTop"
+  "allowResizeInReadOnly" | "emptyState" | "enableGestureZoom" | "errorState" | "experimentalCanvas" | "fileTooLargeState" | "getCellStyle" | "highlightClassName" | "loadingComponent" | "loadingState" | "onFormControlAction" | "onFormControlChange" | "renderChartLoading" | "renderFormControl" | "renderImage" | "renderImageSelection" | "renderScroller" | "renderTableHeaderMenu" | "renderActiveCellOverlay" | "renderCommentIndicator" | "onCommentClick" | "onCellContextMenu" | "onHeaderContextMenu" | "onFind" | "scrollToCell" | "cellAnchorIdPrefix" | "scrollTarget" | "selectionColor" | "selectionFillColor" | "selectionHeaderColor" | "showImages" | "stickyTop"
 > & {
   controller: XlsxViewerController;
   palette: ViewerPalette;
@@ -8007,8 +8006,7 @@ function XlsxGrid({
         applyCanvasViewportCompensation();
       });
     }
-    // Canvas zoom is compositor-driven; React only needs gesture activity changes
-    // so selection geometry transitions stay disabled through the commit frame.
+    // Canvas zoom is compositor-driven; React only needs to know when a gesture starts or ends.
     const shouldSyncReactState = !experimentalCanvas || (previousState === null) !== (resolvedState === null);
     if (!shouldSyncReactState) {
       return;
@@ -14357,11 +14355,6 @@ function XlsxGrid({
     : 0;
   const headerLabelLiveScale = isLiveZooming ? liveZoomScale : 1;
   const selectionBorderWidth = Math.max(1, zoomFactor);
-  const shouldAnimateCanvasSelection = experimentalCanvas && enableCanvasSelectionAnimation;
-  const shouldAnimateCanvasSelectionGeometry = shouldAnimateCanvasSelection && liveGestureZoom === null;
-  const canvasSelectionTransition = shouldAnimateCanvasSelectionGeometry
-    ? "left 120ms cubic-bezier(0.22, 1, 0.36, 1), top 120ms cubic-bezier(0.22, 1, 0.36, 1), width 120ms cubic-bezier(0.22, 1, 0.36, 1), height 120ms cubic-bezier(0.22, 1, 0.36, 1), opacity 100ms linear"
-    : "none";
   const rowColSpan = renderedCols.length + 1 + (leadingColumnSpacerWidth > 0 ? 1 : 0) + (trailingColumnSpacerWidth > 0 ? 1 : 0);
   const gutterSeparatorShadow = `inset -1px 0 0 ${palette.border}, inset 0 -1px 0 ${palette.border}`;
   const maxDrawingOverlayZIndex = Math.max(
@@ -16969,9 +16962,7 @@ function XlsxGrid({
                   pointerEvents: "none",
                   position: "absolute",
                   top: resolvedSelectionOverlay?.top ?? 0,
-                  transition: canvasSelectionTransition,
                   visibility: resolvedSelectionOverlay ? "visible" : "hidden",
-                  willChange: shouldAnimateCanvasSelectionGeometry ? "left, top, width, height" : undefined,
                   width: resolvedSelectionOverlay?.width ?? 0,
                   zIndex: 24
                 }}
@@ -17036,10 +17027,6 @@ function XlsxGrid({
                   pointerEvents: "auto",
                   position: "absolute",
                   top: resolvedSelectionOverlay ? resolvedSelectionOverlay.top + resolvedSelectionOverlay.height - (4 * zoomFactor) : 0,
-                  transition: shouldAnimateCanvasSelectionGeometry
-                    ? "left 120ms cubic-bezier(0.22, 1, 0.36, 1), top 120ms cubic-bezier(0.22, 1, 0.36, 1)"
-                    : "none",
-                  willChange: shouldAnimateCanvasSelectionGeometry ? "left, top" : undefined,
                   width: 8 * zoomFactor,
                   zIndex: 25
                 }}
@@ -17120,7 +17107,6 @@ function XlsxViewerInner({
   className,
   controller,
   emptyState,
-  enableCanvasSelectionAnimation = true,
   enableGestureZoom = true,
   errorState,
   experimentalCanvas = true,
@@ -17240,7 +17226,6 @@ function XlsxViewerInner({
                   allowResizeInReadOnly={allowResizeInReadOnly}
                   controller={controller}
                   emptyState={emptyState}
-                  enableCanvasSelectionAnimation={enableCanvasSelectionAnimation}
                   enableGestureZoom={enableGestureZoom}
                   errorState={errorState}
                   experimentalCanvas={experimentalCanvas}
