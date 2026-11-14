@@ -7155,6 +7155,65 @@ const CELL_ANCHOR_STYLE: React.CSSProperties = {
   whiteSpace: "pre"
 };
 
+type CellAnchorRowProps = {
+  actualRow: number;
+  cols: ReadonlyArray<{ actualCol: number; size: number; start: number }>;
+  /** The cell being edited; its anchor is left out. */
+  editingCell: XlsxCellAddress | null;
+  getCellData: (row: number, col: number) => CellRenderData;
+  idPrefix: string;
+  /** The first row of a pane also places the merges that start above it. */
+  includesMergesFromAbove: boolean;
+  mergeAnchorOf: (row: number, col: number) => { col: number; row: number } | null;
+  originLeft: number;
+  originTop: number;
+  resolveCellDisplayRect: (cell: XlsxCellAddress) => { height: number; left: number; top: number; width: number } | null;
+  /** Not read: a new row batch re-renders the row, because the labels come from its data. */
+  rowBatch: ViewportRowBatch | null;
+  size: number;
+  start: number;
+};
+
+/**
+ * One row of cell anchors. A row re-renders only when its own props change, so scrolling renders
+ * just the rows that come into view. A non-empty cell carries its text as its accessible name.
+ */
+const CellAnchorRow = React.memo(function CellAnchorRow({
+  actualRow,
+  cols,
+  editingCell,
+  getCellData,
+  idPrefix,
+  includesMergesFromAbove,
+  mergeAnchorOf,
+  originLeft,
+  originTop,
+  resolveCellDisplayRect,
+  size,
+  start
+}: CellAnchorRowProps) {
+  const placements = listCellAnchors(idPrefix, [{ actualRow, size, start }], cols, mergeAnchorOf);
+  return placements.map((placement) => {
+    if (placement.rect === null && placement.row !== actualRow && !(includesMergesFromAbove && placement.row < actualRow)) {
+      return null;
+    }
+    const cell = { col: placement.col, row: placement.row };
+    if (editingCell && isSameCell(editingCell, cell)) {
+      return null;
+    }
+    const rect = placement.rect
+      ? { ...placement.rect, left: originLeft + placement.rect.left, top: originTop + placement.rect.top }
+      : resolveCellDisplayRect(cell);
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+    const label = getCellData(cell.row, cell.col).value;
+    return (
+      <div key={placement.id} id={placement.id} role="gridcell" aria-label={label || undefined} style={{ ...CELL_ANCHOR_STYLE, ...rect }} />
+    );
+  });
+});
+
 function DefaultCommentIndicator({ suggestion, thread, zoomFactor }: XlsxCommentIndicatorRenderProps & { zoomFactor: number }) {
   const size = Math.max(5, Math.round(7 * zoomFactor));
   const color = thread.resolved ? "#a19f9d" : thread.legacy ? "#d13438" : "#8764b8";
@@ -7251,7 +7310,6 @@ function XlsxGrid({
     getChartById,
     getRowsBatchAsync,
     getClipboardData,
-    getCellDisplayValue: getControllerCellDisplayValue,
     getFormControlItems,
     commentThreads,
     highlightedRanges,
@@ -14078,41 +14136,65 @@ function XlsxGrid({
     selectChartElement(selection);
   }, [selectChartElement]);
 
-  // Opt-in anchors for page comment layers: one transparent element per cell the canvas draws, per pane.
+  // Opt-in anchors for page comment layers: one transparent element per cell in view, per pane.
   // Pointer events on them go to the same coordinate-based handlers as the canvas.
+  const mergeAnchorOf = React.useMemo(() => {
+    const mergeAnchorKeys = new Set(mergedRegions.map((region) => `${region.start.row}:${region.start.col}`));
+    return (row: number, col: number) => (
+      mergedSecondaryAnchorMap.get(`${row}:${col}`) ?? (mergeAnchorKeys.has(`${row}:${col}`) ? { col, row } : null)
+    );
+  }, [mergedRegions, mergedSecondaryAnchorMap]);
+  // Each pane's columns keep their identity while the same columns are in view, so a vertical
+  // scroll leaves the rows already rendered alone.
+  const cellAnchorColsRef = React.useRef<Partial<Record<FrozenDrawingPane, { cols: CellAnchorRowProps["cols"]; key: string }>>>({});
   const cellAnchorPaneNodes = React.useMemo(() => {
     if (cellAnchorIdPrefix === undefined || !experimentalCanvas) {
       return null;
     }
-    const mergeAnchorKeys = new Set(mergedRegions.map((region) => `${region.start.row}:${region.start.col}`));
-    const mergeAnchorOf = (row: number, col: number) => (
-      mergedSecondaryAnchorMap.get(`${row}:${col}`) ?? (mergeAnchorKeys.has(`${row}:${col}`) ? { col, row } : null)
+    // The viewport state trails the live scroll position by up to the deferred sync threshold, so
+    // anchors reach that far past it; every cell on screen then has one.
+    const margin = CANVAS_DEFERRED_VIEWPORT_SYNC_THRESHOLD_PX;
+    const isInView = (offset: number, size: number, viewportStart: number, viewportSize: number) => (
+      offset + size > viewportStart - margin && offset < viewportStart + viewportSize + margin
     );
     const nodes = {} as Record<FrozenDrawingPane, React.ReactNode>;
     for (const pane of ["scroll", "top", "left", "corner"] as const) {
-      const { cols, rows } = canvasPaneAxisItems[pane];
-      const cells = listCellAnchors(cellAnchorIdPrefix, rows, cols, mergeAnchorOf).flatMap((placement) => {
-        const cell = { col: placement.col, row: placement.row };
-        if (editingCell && isSameCell(editingCell, cell)) {
-          return [];
-        }
-        const rect = placement.rect
-          ? { ...placement.rect, left: displayRowHeaderWidth + placement.rect.left, top: displayHeaderHeight + placement.rect.top }
-          : resolveCellDisplayRect(cell);
-        return rect && rect.width > 0 && rect.height > 0 ? [
-          <div key={placement.id} id={placement.id} role="gridcell" style={{ ...CELL_ANCHOR_STYLE, ...rect }}>
-            {getControllerCellDisplayValue(cell)}
-          </div>
-        ] : [];
-      });
-      nodes[pane] = cells.length > 0 ? (
+      const { cols: paneCols, rows: paneRows } = canvasPaneAxisItems[pane];
+      const rows = pane === "scroll" || pane === "left"
+        ? paneRows.filter((item) => isInView(displayHeaderHeight + item.start, item.size, drawingViewport.top, drawingViewport.height))
+        : paneRows;
+      const visibleCols = pane === "scroll" || pane === "top"
+        ? paneCols.filter((item) => isInView(displayRowHeaderWidth + item.start, item.size, drawingViewport.left, drawingViewport.width))
+        : paneCols;
+      const colsKey = visibleCols.map((item) => `${item.actualCol}:${item.start}:${item.size}`).join(",");
+      const previousCols = cellAnchorColsRef.current[pane];
+      const cols = previousCols?.key === colsKey ? previousCols.cols : visibleCols;
+      cellAnchorColsRef.current[pane] = { cols, key: colsKey };
+      nodes[pane] = rows.length > 0 && cols.length > 0 ? (
         <div
           onClick={handleCanvasBodyClick}
           onDoubleClick={handleCanvasBodyDoubleClick}
           onPointerDown={handleCanvasBodyPointerDown}
           style={CELL_ANCHOR_LAYER_STYLE}
         >
-          {cells}
+          {rows.map((item, index) => (
+            <CellAnchorRow
+              key={item.actualRow}
+              actualRow={item.actualRow}
+              cols={cols}
+              editingCell={editingCell}
+              getCellData={getCellData}
+              idPrefix={cellAnchorIdPrefix}
+              includesMergesFromAbove={index === 0}
+              mergeAnchorOf={mergeAnchorOf}
+              originLeft={displayRowHeaderWidth}
+              originTop={displayHeaderHeight}
+              resolveCellDisplayRect={resolveCellDisplayRect}
+              rowBatch={viewportRowBatch}
+              size={item.size}
+              start={item.start}
+            />
+          ))}
         </div>
       ) : null;
     }
@@ -14122,16 +14204,16 @@ function XlsxGrid({
     cellAnchorIdPrefix,
     displayHeaderHeight,
     displayRowHeaderWidth,
+    drawingViewport,
     editingCell,
     experimentalCanvas,
-    getControllerCellDisplayValue,
+    getCellData,
     handleCanvasBodyClick,
     handleCanvasBodyDoubleClick,
     handleCanvasBodyPointerDown,
-    mergedRegions,
-    mergedSecondaryAnchorMap,
+    mergeAnchorOf,
     resolveCellDisplayRect,
-    revision
+    viewportRowBatch
   ]);
   const scrolledCellRef = React.useRef<XlsxCellAddress | null>(null);
   React.useEffect(() => {
