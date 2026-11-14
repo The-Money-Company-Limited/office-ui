@@ -7863,20 +7863,24 @@ function XlsxGrid({
       "0 0"
     );
 
+    // The canvases scroll natively with the content, so only a live zoom moves them here. The
+    // zoom's origin is where each canvas is on screen: its painted place, moved by the scroll since.
+    const liveScrollBodyCanvasScreenLeft = liveScrollBodyCanvasLeft + scrollDeltaX;
+    const liveScrollBodyCanvasScreenTop = liveScrollBodyCanvasTop + scrollDeltaY;
     applyCanvasTransform(
       scrollBodyCanvasRef.current,
-      scrollDeltaX,
-      scrollDeltaY,
-      liveScrollBodyCanvasLeft,
-      liveScrollBodyCanvasTop,
+      0,
+      0,
+      liveScrollBodyCanvasScreenLeft,
+      liveScrollBodyCanvasScreenTop,
       liveZoomAnchorX,
       liveZoomAnchorY
     );
     applyCanvasTransform(
       topBodyCanvasRef.current,
-      scrollDeltaX,
       0,
-      liveScrollBodyCanvasLeft,
+      0,
+      liveScrollBodyCanvasScreenLeft,
       liveDisplayHeaderHeight,
       liveZoomAnchorX,
       0
@@ -7884,9 +7888,9 @@ function XlsxGrid({
     applyCanvasTransform(
       leftBodyCanvasRef.current,
       0,
-      scrollDeltaY,
+      0,
       liveDisplayRowHeaderWidth,
-      liveScrollBodyCanvasTop,
+      liveScrollBodyCanvasScreenTop,
       0,
       liveZoomAnchorY
     );
@@ -7902,9 +7906,9 @@ function XlsxGrid({
 
     applyCanvasTransform(
       topScrollHeaderCanvasRef.current,
-      scrollDeltaX,
       0,
-      liveScrollBodyCanvasLeft,
+      0,
+      liveScrollBodyCanvasScreenLeft,
       0,
       liveZoomAnchorX,
       0
@@ -7921,9 +7925,9 @@ function XlsxGrid({
     applyCanvasTransform(
       leftScrollHeaderCanvasRef.current,
       0,
-      scrollDeltaY,
       0,
-      liveScrollBodyCanvasTop,
+      0,
+      liveScrollBodyCanvasScreenTop,
       0,
       liveZoomAnchorY
     );
@@ -7945,20 +7949,21 @@ function XlsxGrid({
       0,
       0
     );
+    // Overlays sit in content coordinates; the content's origin is on screen at minus the scroll.
     applyOverlayTransform(
       canvasScrollOverlayContentRef.current,
-      -nextLiveViewport.left - liveFrozenPaneRight,
-      -nextLiveViewport.top - liveFrozenPaneBottom,
-      liveFrozenPaneRight,
-      liveFrozenPaneBottom,
+      0,
+      0,
+      -nextLiveViewport.left,
+      -nextLiveViewport.top,
       liveZoomAnchorX,
       liveZoomAnchorY
     );
     applyOverlayTransform(
       canvasTopOverlayContentRef.current,
-      -nextLiveViewport.left - liveFrozenPaneRight,
+      0,
       -liveDisplayHeaderHeight,
-      liveFrozenPaneRight,
+      -nextLiveViewport.left,
       liveDisplayHeaderHeight,
       liveZoomAnchorX,
       0
@@ -7966,9 +7971,9 @@ function XlsxGrid({
     applyOverlayTransform(
       canvasLeftOverlayContentRef.current,
       -liveDisplayRowHeaderWidth,
-      -nextLiveViewport.top - liveFrozenPaneBottom,
+      0,
       liveDisplayRowHeaderWidth,
-      liveFrozenPaneBottom,
+      -nextLiveViewport.top,
       0,
       liveZoomAnchorY
     );
@@ -14400,25 +14405,20 @@ function XlsxGrid({
     height: "100%",
     zIndex: 5
   }, zoomFactor);
-  const canvasBodyViewportLayerStyle: React.CSSProperties = {
+  // The grid's layers scroll natively with the content, so every one moves in the frame the
+  // browser scrolls; JS only repaints a canvas when the scroll uses up its buffer. Frozen panes
+  // and headers stick to the viewport in their frozen axis only: a layer stuck to the top still
+  // scrolls sideways with the content, one stuck to the left still scrolls down with it.
+  const canvasStickyLayerBaseStyle: React.CSSProperties = {
     height: 0,
-    left: 0,
     overflow: "visible",
     pointerEvents: "none",
     position: "sticky",
-    top: stickyTopOffset,
     width: 0
   };
-  const canvasHeaderViewportLayerStyle: React.CSSProperties = {
-    height: 0,
-    left: 0,
-    overflow: "visible",
-    pointerEvents: "none",
-    position: "sticky",
-    top: stickyTopOffset,
-    width: 0,
-    zIndex: canvasHeaderOverlayZIndex
-  };
+  const canvasStickyTopLayerStyle: React.CSSProperties = { ...canvasStickyLayerBaseStyle, top: stickyTopOffset };
+  const canvasStickyLeftLayerStyle: React.CSSProperties = { ...canvasStickyLayerBaseStyle, left: 0 };
+  const canvasStickyCornerLayerStyle: React.CSSProperties = { ...canvasStickyLayerBaseStyle, left: 0, top: stickyTopOffset };
   const canvasBodyBaseStyle: React.CSSProperties = {
     cursor: "cell",
     pointerEvents: "auto",
@@ -14427,32 +14427,32 @@ function XlsxGrid({
     transition: "none",
     zIndex: 10
   };
+  // A canvas covers the viewport it was painted at, plus its buffer, in content coordinates.
+  const paintedCanvasLeft = drawingViewport.left + scrollBodyCanvasLeft;
+  const paintedCanvasTop = drawingViewport.top + scrollBodyCanvasTop;
   const canvasScrollBodyStyle: React.CSSProperties = {
     ...canvasBodyBaseStyle,
     display: scrollBodyCanvasWidth > 0 && scrollBodyCanvasHeight > 0 ? "block" : "none",
-    left: scrollBodyCanvasLeft,
-    top: scrollBodyCanvasTop
+    left: paintedCanvasLeft,
+    top: paintedCanvasTop
   };
   const canvasTopBodyStyle: React.CSSProperties = {
     ...canvasBodyBaseStyle,
     display: topBodyCanvasWidth > 0 && topBodyCanvasHeight > 0 ? "block" : "none",
-    left: scrollBodyCanvasLeft,
-    top: displayHeaderHeight,
-    zIndex: 30
+    left: paintedCanvasLeft,
+    top: displayHeaderHeight
   };
   const canvasLeftBodyStyle: React.CSSProperties = {
     ...canvasBodyBaseStyle,
     display: leftBodyCanvasWidth > 0 && leftBodyCanvasHeight > 0 ? "block" : "none",
     left: displayRowHeaderWidth,
-    top: scrollBodyCanvasTop,
-    zIndex: 30
+    top: paintedCanvasTop
   };
   const canvasCornerBodyStyle: React.CSSProperties = {
     ...canvasBodyBaseStyle,
     display: cornerBodyCanvasWidth > 0 && cornerBodyCanvasHeight > 0 ? "block" : "none",
     left: displayRowHeaderWidth,
-    top: displayHeaderHeight,
-    zIndex: 31
+    top: displayHeaderHeight
   };
   const canvasHeaderBaseStyle: React.CSSProperties = {
     cursor: "default",
@@ -14470,7 +14470,7 @@ function XlsxGrid({
   const canvasTopScrollHeaderStyle: React.CSSProperties = {
     ...canvasHeaderBaseStyle,
     display: topScrollHeaderCanvasWidth > 0 && drawingViewport.height > 0 ? "block" : "none",
-    left: scrollBodyCanvasLeft,
+    left: paintedCanvasLeft,
     top: 0,
     zIndex: canvasHeaderOverlayZIndex
   };
@@ -14485,7 +14485,7 @@ function XlsxGrid({
     ...canvasHeaderBaseStyle,
     display: leftScrollHeaderCanvasHeight > 0 && drawingViewport.width > 0 ? "block" : "none",
     left: 0,
-    top: scrollBodyCanvasTop,
+    top: paintedCanvasTop,
     zIndex: canvasHeaderOverlayZIndex
   };
   const canvasCornerHeaderStyle: React.CSSProperties = {
@@ -15371,46 +15371,40 @@ function XlsxGrid({
     width: 0,
     zIndex: 34
   };
+  // A frozen pane's overlays are cut to the pane in its frozen axis; along the scrolling axis,
+  // and for the scrolling pane, the panes and headers stacked above cover what scrolls under them.
   const canvasOverlayPaneBaseStyle: React.CSSProperties = {
-    overflow: "hidden",
     pointerEvents: "none",
     position: "absolute"
-  };
-  const canvasScrollOverlayPaneStyle: React.CSSProperties = {
-    ...canvasOverlayPaneBaseStyle,
-    display: scrollBodyViewportWidth > 0 && scrollBodyViewportHeight > 0 ? "block" : "none",
-    height: scrollBodyViewportHeight,
-    left: frozenPaneRight,
-    top: frozenPaneBottom,
-    width: scrollBodyViewportWidth,
-    zIndex: 20
   };
   const canvasTopOverlayPaneStyle: React.CSSProperties = {
     ...canvasOverlayPaneBaseStyle,
     display: scrollBodyViewportWidth > 0 && topBodyCanvasHeight > 0 ? "block" : "none",
     height: topBodyCanvasHeight,
-    left: frozenPaneRight,
+    left: 0,
+    overflowX: "visible",
+    overflowY: "clip",
     top: displayHeaderHeight,
-    width: scrollBodyViewportWidth,
-    zIndex: 35
+    width: totalWidth
   };
   const canvasLeftOverlayPaneStyle: React.CSSProperties = {
     ...canvasOverlayPaneBaseStyle,
     display: leftBodyCanvasWidth > 0 && scrollBodyViewportHeight > 0 ? "block" : "none",
-    height: scrollBodyViewportHeight,
+    height: sheetContentHeight,
     left: displayRowHeaderWidth,
-    top: frozenPaneBottom,
-    width: leftBodyCanvasWidth,
-    zIndex: 35
+    overflowX: "clip",
+    overflowY: "visible",
+    top: 0,
+    width: leftBodyCanvasWidth
   };
   const canvasCornerOverlayPaneStyle: React.CSSProperties = {
     ...canvasOverlayPaneBaseStyle,
     display: cornerBodyCanvasWidth > 0 && cornerBodyCanvasHeight > 0 ? "block" : "none",
     height: cornerBodyCanvasHeight,
     left: displayRowHeaderWidth,
+    overflow: "hidden",
     top: displayHeaderHeight,
-    width: cornerBodyCanvasWidth,
-    zIndex: 36
+    width: cornerBodyCanvasWidth
   };
   const drawingViewportCacheSignature = `${Math.floor(drawingViewport.left / CANVAS_VIEWPORT_OVERSCAN_PX)}:${Math.floor(drawingViewport.top / CANVAS_VIEWPORT_OVERSCAN_PX)}:${drawingViewport.width}:${drawingViewport.height}`;
   const previousPaneDrawingNodes = paneDrawingNodesCacheRef.current;
@@ -16525,12 +16519,8 @@ function XlsxGrid({
       </div>
     ];
   }) : [];
-  const overlayPanes = ([
-    { pane: "scroll", style: canvasScrollOverlayPaneStyle, ref: canvasScrollOverlayContentRef, left: -drawingViewport.left - frozenPaneRight, top: -drawingViewport.top - frozenPaneBottom },
-    { pane: "top", style: canvasTopOverlayPaneStyle, ref: canvasTopOverlayContentRef, left: -drawingViewport.left - frozenPaneRight, top: -displayHeaderHeight },
-    { pane: "left", style: canvasLeftOverlayPaneStyle, ref: canvasLeftOverlayContentRef, left: -displayRowHeaderWidth, top: -drawingViewport.top - frozenPaneBottom },
-    { pane: "corner", style: canvasCornerOverlayPaneStyle, ref: canvasCornerOverlayContentRef, left: -displayRowHeaderWidth, top: -displayHeaderHeight }
-  ] as const);
+  // Overlay content is laid out in content coordinates; a frozen pane's content is shifted by
+  // where its clip box starts.
   const overlayPaneContentStyle = (left: number, top: number): React.CSSProperties => ({
     height: sheetContentHeight,
     left: 0,
@@ -16541,28 +16531,39 @@ function XlsxGrid({
     transformOrigin: "0 0",
     width: totalWidth
   });
-  const drawingOverlayPanes = (experimentalCanvas && hasCanvasDomDrawingOverlays) || rangeHighlightNodes.length > 0 || commentIndicatorNodes.length > 0 || cellAnchorPaneNodes ? (
-    <div style={{ ...canvasBodyViewportLayerStyle, zIndex: 34 }}>
-      {overlayPanes.map(({ pane, style, ref, left, top }) => (
-        <div key={pane} style={style}>
-          <div ref={ref} style={overlayPaneContentStyle(left, top)}>
-            {pane === "scroll" ? cellAnchorPaneNodes?.scroll : null}
-            {experimentalCanvas ? paneDrawingNodes[pane] : null}
-            {rangeHighlightNodes}
-            {commentIndicatorNodes}
-          </div>
-        </div>
-      ))}
+  const hasPaneOverlays = (experimentalCanvas && hasCanvasDomDrawingOverlays) || rangeHighlightNodes.length > 0 || commentIndicatorNodes.length > 0 || cellAnchorPaneNodes !== null;
+  const renderPaneOverlayContent = (pane: FrozenDrawingPane) => (
+    <>
+      {cellAnchorPaneNodes?.[pane]}
+      {experimentalCanvas ? paneDrawingNodes[pane] : null}
+      {rangeHighlightNodes}
+      {commentIndicatorNodes}
+    </>
+  );
+  const scrollPaneOverlay = hasPaneOverlays ? (
+    <div ref={canvasScrollOverlayContentRef} style={{ ...overlayPaneContentStyle(0, 0), zIndex: 20 }}>
+      {renderPaneOverlayContent("scroll")}
     </div>
   ) : null;
-  // Frozen panes paint on canvases stacked above the overlay layer, so their cell anchors get a layer above those.
-  const frozenCellAnchorPanes = cellAnchorPaneNodes ? (
-    <div style={{ ...canvasBodyViewportLayerStyle, zIndex: 32 }}>
-      {overlayPanes.filter(({ pane }) => pane !== "scroll").map(({ pane, style, left, top }) => (
-        <div key={pane} style={style}>
-          <div style={overlayPaneContentStyle(left, top)}>{cellAnchorPaneNodes[pane]}</div>
-        </div>
-      ))}
+  const topPaneOverlay = hasPaneOverlays ? (
+    <div style={canvasTopOverlayPaneStyle}>
+      <div ref={canvasTopOverlayContentRef} style={overlayPaneContentStyle(0, -displayHeaderHeight)}>
+        {renderPaneOverlayContent("top")}
+      </div>
+    </div>
+  ) : null;
+  const leftPaneOverlay = hasPaneOverlays ? (
+    <div style={canvasLeftOverlayPaneStyle}>
+      <div ref={canvasLeftOverlayContentRef} style={overlayPaneContentStyle(-displayRowHeaderWidth, 0)}>
+        {renderPaneOverlayContent("left")}
+      </div>
+    </div>
+  ) : null;
+  const cornerPaneOverlay = hasPaneOverlays ? (
+    <div style={canvasCornerOverlayPaneStyle}>
+      <div ref={canvasCornerOverlayContentRef} style={overlayPaneContentStyle(-displayRowHeaderWidth, -displayHeaderHeight)}>
+        {renderPaneOverlayContent("corner")}
+      </div>
     </div>
   ) : null;
 
@@ -16570,8 +16571,12 @@ function XlsxGrid({
     <div
           style={{
             backgroundColor: resolveSheetSurface(activeSheet),
+            // The grid stacks its layers among themselves, below the host's sticky bars, and the
+            // canvases' scroll buffers are cut at the sheet's edge so they never grow the scroll range.
+            isolation: "isolate",
             minHeight: "100%",
             minWidth: "100%",
+            overflow: "clip",
             position: "relative",
             width: totalWidth,
             height: sheetContentHeight
@@ -16602,41 +16607,76 @@ function XlsxGrid({
                 <div style={scrollOverlayStyle}>{paneDrawingNodes.scroll}</div>
               </>
             ) : null}
-            {drawingOverlayPanes}
-            {frozenCellAnchorPanes}
+            {/* Stacking, bottom to top: the scrolling pane's canvas and overlays, the frozen
+                panes (opaque, so they cover what scrolls under them), the selection layer,
+                then the headers. */}
+            {experimentalCanvas ? (
+              <canvas
+                ref={scrollBodyCanvasRef}
+                onClick={handleCanvasBodyClick}
+                onDoubleClick={handleCanvasBodyDoubleClick}
+                onPointerDown={handleCanvasBodyPointerDown}
+                style={canvasScrollBodyStyle}
+              />
+            ) : null}
+            {scrollPaneOverlay}
+            <div style={{ ...canvasStickyTopLayerStyle, zIndex: 22 }}>
+              {experimentalCanvas ? (
+                <canvas
+                  ref={topBodyCanvasRef}
+                  onClick={handleCanvasBodyClick}
+                  onDoubleClick={handleCanvasBodyDoubleClick}
+                  onPointerDown={handleCanvasBodyPointerDown}
+                  style={canvasTopBodyStyle}
+                />
+              ) : null}
+              {topPaneOverlay}
+            </div>
+            <div style={{ ...canvasStickyLeftLayerStyle, zIndex: 22 }}>
+              {experimentalCanvas ? (
+                <canvas
+                  ref={leftBodyCanvasRef}
+                  onClick={handleCanvasBodyClick}
+                  onDoubleClick={handleCanvasBodyDoubleClick}
+                  onPointerDown={handleCanvasBodyPointerDown}
+                  style={canvasLeftBodyStyle}
+                />
+              ) : null}
+              {leftPaneOverlay}
+            </div>
+            <div style={{ ...canvasStickyCornerLayerStyle, zIndex: 23 }}>
+              {experimentalCanvas ? (
+                <canvas
+                  ref={cornerBodyCanvasRef}
+                  onClick={handleCanvasBodyClick}
+                  onDoubleClick={handleCanvasBodyDoubleClick}
+                  onPointerDown={handleCanvasBodyPointerDown}
+                  style={canvasCornerBodyStyle}
+                />
+              ) : null}
+              {cornerPaneOverlay}
+            </div>
             {experimentalCanvas ? (
               <>
-                <div style={canvasBodyViewportLayerStyle}>
+                <div style={{ ...canvasStickyTopLayerStyle, zIndex: canvasHeaderOverlayZIndex }}>
                   <canvas
-                    ref={scrollBodyCanvasRef}
-                    onClick={handleCanvasBodyClick}
-                    onDoubleClick={handleCanvasBodyDoubleClick}
-                    onPointerDown={handleCanvasBodyPointerDown}
-                    style={canvasScrollBodyStyle}
-                  />
-                  <canvas
-                    ref={topBodyCanvasRef}
-                    onClick={handleCanvasBodyClick}
-                    onDoubleClick={handleCanvasBodyDoubleClick}
-                    onPointerDown={handleCanvasBodyPointerDown}
-                    style={canvasTopBodyStyle}
-                  />
-                  <canvas
-                    ref={leftBodyCanvasRef}
-                    onClick={handleCanvasBodyClick}
-                    onDoubleClick={handleCanvasBodyDoubleClick}
-                    onPointerDown={handleCanvasBodyPointerDown}
-                    style={canvasLeftBodyStyle}
-                  />
-                  <canvas
-                    ref={cornerBodyCanvasRef}
-                    onClick={handleCanvasBodyClick}
-                    onDoubleClick={handleCanvasBodyDoubleClick}
-                    onPointerDown={handleCanvasBodyPointerDown}
-                    style={canvasCornerBodyStyle}
+                    ref={topScrollHeaderCanvasRef}
+                    onPointerLeave={handleCanvasHeaderPointerLeave}
+                    onPointerMove={handleCanvasColumnHeaderPointerMove}
+                    onPointerDown={handleCanvasColumnHeaderPointerDown}
+                    style={canvasTopScrollHeaderStyle}
                   />
                 </div>
-                <div style={canvasHeaderViewportLayerStyle}>
+                <div style={{ ...canvasStickyLeftLayerStyle, zIndex: canvasHeaderOverlayZIndex }}>
+                  <canvas
+                    ref={leftScrollHeaderCanvasRef}
+                    onPointerLeave={handleCanvasHeaderPointerLeave}
+                    onPointerMove={handleCanvasRowHeaderPointerMove}
+                    onPointerDown={handleCanvasRowHeaderPointerDown}
+                    style={canvasLeftScrollHeaderStyle}
+                  />
+                </div>
+                <div style={{ ...canvasStickyCornerLayerStyle, zIndex: canvasHeaderOverlayZIndex + 1 }}>
                   <canvas
                     ref={topFrozenHeaderCanvasRef}
                     onPointerLeave={handleCanvasHeaderPointerLeave}
@@ -16645,25 +16685,11 @@ function XlsxGrid({
                     style={canvasTopFrozenHeaderStyle}
                   />
                   <canvas
-                    ref={topScrollHeaderCanvasRef}
-                    onPointerLeave={handleCanvasHeaderPointerLeave}
-                    onPointerMove={handleCanvasColumnHeaderPointerMove}
-                    onPointerDown={handleCanvasColumnHeaderPointerDown}
-                    style={canvasTopScrollHeaderStyle}
-                  />
-                  <canvas
                     ref={leftFrozenHeaderCanvasRef}
                     onPointerLeave={handleCanvasHeaderPointerLeave}
                     onPointerMove={handleCanvasRowHeaderPointerMove}
                     onPointerDown={handleCanvasRowHeaderPointerDown}
                     style={canvasLeftFrozenHeaderStyle}
-                  />
-                  <canvas
-                    ref={leftScrollHeaderCanvasRef}
-                    onPointerLeave={handleCanvasHeaderPointerLeave}
-                    onPointerMove={handleCanvasRowHeaderPointerMove}
-                    onPointerDown={handleCanvasRowHeaderPointerDown}
-                    style={canvasLeftScrollHeaderStyle}
                   />
                   <canvas ref={cornerHeaderCanvasRef} style={canvasCornerHeaderStyle} />
                 </div>
