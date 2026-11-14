@@ -51269,12 +51269,12 @@ export function DocxEditorViewer({
       return changed ? next : current;
     };
     // Setting state when nothing moved would re-render every block before a
-    // typed key paints.
-    if (
-      reconcileMeasuredRowHeights(tableMeasuredRowHeights) !==
+    // typed key paints. The rendered value is current: it is a dependency.
+    const reconciledRowHeights = reconcileMeasuredRowHeights(
       tableMeasuredRowHeights
-    ) {
-      setTableMeasuredRowHeights(reconcileMeasuredRowHeights);
+    );
+    if (reconciledRowHeights !== tableMeasuredRowHeights) {
+      setTableMeasuredRowHeights(reconciledRowHeights);
     }
   }, [
     disableMeasuredImportPagination,
