@@ -1334,8 +1334,10 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
       : (thumbnailUrls[visiblePreviewIndex] ?? null)
 
   return (
+    // One slim bar, as in Sheets and Excel: add and the sheet list on the left, flat tabs on the
+    // same centre line, the selection's summary on the right.
     <div
-      className="flex items-center gap-2 border-t bg-muted/40 px-3 py-2"
+      className="flex h-9 items-center gap-0.5 border-t bg-muted/40 ps-1 pe-2"
       onMouseLeave={handleContainerLeave}
     >
       {onAddSheet ? (
@@ -1358,27 +1360,77 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
           />
         </Button>
       ) : null}
+      {sheets.length > 1 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="All sheets"
+              title="All sheets"
+              className="shrink-0"
+            >
+              <IconPlaceholder
+                lucide="Menu"
+                tabler="IconMenu2"
+                hugeicons="LeftToRightListBulletIcon"
+                phosphor="ListIcon"
+                remixicon="RiMenuLine"
+                className="size-4"
+              />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            side="top"
+            className={cn(
+              "max-h-80 overflow-y-auto",
+              XLSX_DROPDOWN_Z_INDEX_CLASS
+            )}
+          >
+            <DropdownMenuRadioGroup
+              value={String(activeSheetIndex)}
+              onValueChange={(value: string) =>
+                onActiveSheetIndexChange(Number(value))
+              }
+            >
+              {sheets.map((sheet, index) => (
+                <DropdownMenuRadioItem
+                  key={`${sheet.workbookSheetIndex}-${sheet.name}`}
+                  value={String(index)}
+                  closeOnClick
+                >
+                  <span className="truncate">{sheet.name}</span>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
       <Tabs
         value={String(activeSheetIndex)}
         onValueChange={(value) => onActiveSheetIndexChange(Number(value))}
-        className="min-w-0 flex-1 gap-0"
+        className="h-full min-w-0 flex-1 gap-0"
       >
         <ScrollArea
           orientation="horizontal"
-          scrollbarGutter
-          className="h-10 w-full has-[[data-slot=scroll-area-viewport][data-has-overflow-x]]:h-[50px]"
+          className="h-full w-full"
           viewportClassName="overflow-y-hidden"
           viewportRef={scrollRef}
         >
-          <div className="flex h-full items-center">
-            <TabsList className="shrink-0">
+          <div className="flex h-full items-stretch">
+            <TabsList
+              variant="underline"
+              className="h-full shrink-0 data-[orientation=horizontal]:py-0"
+            >
               {sheets.map((sheet, index) => renaming?.index === index ? (
                 <Input
                   key={`rename-${sheet.workbookSheetIndex}`}
                   autoFocus
                   aria-label="Sheet name"
                   aria-invalid={Boolean(tabError)}
-                  className="h-8 w-40"
+                  className="h-7 w-40 self-center"
                   value={renaming.name}
                   onFocus={(event) => event.currentTarget.select()}
                   onChange={(event) => setRenaming({ index, name: event.target.value })}
@@ -1400,7 +1452,7 @@ const WorkbookSheetTabsInner = React.memo(function WorkbookSheetTabsInner({
                   key={`${sheet.workbookSheetIndex}-${sheet.name}`}
                   ref={(node) => { itemRefs.current[index] = node }}
                   value={String(index)}
-                  className="max-w-48 flex-none"
+                  className="h-full max-w-48 flex-none rounded-none px-3 data-active:bg-background sm:h-full"
                   onMouseEnter={() => handleItemEnter(index)}
                   onDoubleClick={canEdit ? () => beginRename(index) : undefined}
                   onContextMenu={canEdit ? (event) => {

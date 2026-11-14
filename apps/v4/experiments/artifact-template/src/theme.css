@@ -431,10 +431,12 @@ html:has(.artifact-editor) {
   outline-offset: 2px;
 }
 
-/* RuntimeVM pins its Comment button to the page's bottom-right corner; keep
-   the sheet tabs' right end (the selection's Sum) out from under it. */
-.artifact-xlsx .xlsx-editor-sheet-tabs {
-  padding-right: 8rem;
+/* RuntimeVM's comment bar floats centred about 12px above the page's bottom
+   edge, about 330px wide: the tabs end short of it on the left, and the
+   selection's summary keeps to the right. 15rem is half the bar plus a gap,
+   and the add and sheet list buttons before the tabs. */
+.artifact-xlsx .xlsx-editor-sheet-tabs [data-slot="tabs"] {
+  max-width: max(8rem, calc(50% - 15rem));
 }
 
 @keyframes autosave-saved {

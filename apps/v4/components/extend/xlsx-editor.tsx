@@ -72,7 +72,7 @@ import {
 } from "@/components/ui/tooltip"
 import { ToolbarOverflow } from "@/components/extend/toolbar-overflow"
 import {
-  EditorRegionalFormat,
+  EditorRegionalFormatMenu,
   RegionalFormatProvider,
   useRegionalFormat,
 } from "@/components/extend/xlsx-regional-format"
@@ -1358,7 +1358,7 @@ function EditorFileActionsMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        className={cn("w-40", XLSX_DROPDOWN_Z_INDEX_CLASS)}
+        className={cn("w-60", XLSX_DROPDOWN_Z_INDEX_CLASS)}
       >
         <DropdownMenuItem disabled={!canExport} onClick={exportXlsx}>
           <IconPlaceholder
@@ -1382,6 +1382,8 @@ function EditorFileActionsMenu({
           />
           Upload
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <EditorRegionalFormatMenu />
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -3280,12 +3282,7 @@ export function XlsxEditorSurface({
   const sheetTabs = (
     <WorkbookSheetTabs
       onAddSheet={readOnly ? undefined : () => addSheet()}
-      status={
-        <div className="flex items-center">
-          <EditorSelectionStatus />
-          <EditorRegionalFormat />
-        </div>
-      }
+      status={<EditorSelectionStatus />}
       workbookIdentity={workbookIdentity}
     />
   )
