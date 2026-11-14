@@ -372,6 +372,11 @@ function SaturationValueArea({
         if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
         update(event, true)
       }}
+      // A cancelled drag keeps where it got to, so the preview and the saved color agree.
+      onPointerCancel={(event) => {
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+        onMove(s, v, true)
+      }}
       onKeyDown={(event) => {
         const delta = event.shiftKey ? 10 : 1
         let next: [number, number] | null = null
@@ -470,6 +475,10 @@ function VerticalSlider({
       onPointerUp={(event) => {
         if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
         update(event, true)
+      }}
+      onPointerCancel={(event) => {
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+        onFraction(fraction, true)
       }}
       onKeyDown={(event) => {
         let direction: 1 | -1 | null = null
