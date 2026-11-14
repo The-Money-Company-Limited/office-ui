@@ -16677,6 +16677,23 @@ function XlsxGrid({
                   />
                 </div>
                 <div style={{ ...canvasStickyCornerLayerStyle, zIndex: canvasHeaderOverlayZIndex + 1 }}>
+                  {stickyTopOffset > 0 ? (
+                    // In window mode the host's bars stick above the headers; this opaque band
+                    // behind them keeps what scrolls under the bars from showing through any gap
+                    // or translucent part of them.
+                    <div
+                      aria-hidden="true"
+                      style={{
+                        backgroundColor: resolveSheetSurface(activeSheet),
+                        height: stickyTopOffset,
+                        left: 0,
+                        pointerEvents: "none",
+                        position: "absolute",
+                        top: -stickyTopOffset,
+                        width: totalWidth
+                      }}
+                    />
+                  ) : null}
                   <canvas
                     ref={topFrozenHeaderCanvasRef}
                     onPointerLeave={handleCanvasHeaderPointerLeave}
