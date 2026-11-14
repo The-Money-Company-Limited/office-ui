@@ -229,6 +229,10 @@ function ViewerLoadingSurface({
             {formatMegabytes(loadedBytes)} of {formatMegabytes(totalBytes)} MB
           </span>
         </>
+      ) : loadedBytes ? (
+        <span className="text-xs tabular-nums">
+          {formatMegabytes(loadedBytes)} MB downloaded
+        </span>
       ) : null}
     </div>
   )
