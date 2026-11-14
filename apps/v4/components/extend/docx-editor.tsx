@@ -1564,7 +1564,17 @@ function DocxEditorToolbar({
                 className="w-[94px] min-w-[94px]"
                 aria-label="Line spacing"
               >
-                <SelectValue placeholder="Spacing" />
+                <IconPlaceholder
+                  lucide="ListChevronsUpDown"
+                  tabler="IconLineHeight"
+                  hugeicons="ParagraphSpacingIcon"
+                  phosphor="TextAaIcon"
+                  remixicon="RiLineHeight"
+                  className="size-4 shrink-0 text-muted-foreground"
+                />
+                <SelectValue>
+                  {selectedLineSpacingValue}x
+                </SelectValue>
               </SelectTrigger>
               <SelectContent
                 align="start"
@@ -1687,7 +1697,7 @@ function DocxEditorToolbar({
                 disabled={!canEdit}
                 onTriggerMouseDown={preserveTextSelection}
                 onTriggerPointerDown={preserveTextSelection}
-                onChange={(color) =>
+                onValueCommit={(color) =>
                   editor.setTextColor(normalizeHexColor(color))
                 }
               />
