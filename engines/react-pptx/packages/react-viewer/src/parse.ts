@@ -107,9 +107,13 @@ async function readSource(
         { details: { byteLength: declaredLength, maximum } },
       );
     }
+    // A compressed response declares its encoded length, not the bytes it decodes to.
+    const encoding = response.headers.get('content-encoding')?.trim().toLowerCase();
     buffer = await readBody(
       response,
-      Number.isFinite(declaredLength) && declaredLength > 0 ? declaredLength : undefined,
+      (!encoding || encoding === 'identity') && Number.isFinite(declaredLength) && declaredLength > 0
+        ? declaredLength
+        : undefined,
       options.onDownloadProgress,
     );
   } else {
