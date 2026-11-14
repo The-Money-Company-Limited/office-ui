@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PptxViewerError } from './errors';
 import { parsePresentation, presentationParsingDefaults } from './parse';
 import type { PresentationDocument } from '@extend-ai/react-pptx-model';
@@ -101,5 +103,95 @@ describe('parsePresentation', () => {
       'onPerformanceMeasurement',
       'onDownloadProgress',
     ]);
+  });
+});
+
+const fixturePath = [
+  resolve(process.cwd(), 'tests/fixtures/pretext-layout-cases.pptx'),
+  resolve(process.cwd(), '../../tests/fixtures/pretext-layout-cases.pptx'),
+].find(existsSync);
+
+if (!fixturePath) throw new Error('PPTX fixture was not found from the workspace root.');
+
+const fixture = new Uint8Array(readFileSync(fixturePath));
+
+/** Serves the fixture in 4 KiB chunks, as a network response would arrive. */
+function respondWithFixture(headers: Record<string, string>): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => {
+      let offset = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (offset >= fixture.byteLength) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(fixture.slice(offset, offset + 4096));
+          offset += 4096;
+        },
+      });
+      return new Response(body, { status: 200, headers });
+    }),
+  );
+}
+
+async function downloadWithProgress(options: ParsePresentationOptions = {}) {
+  const progress: Array<[number, number | undefined]> = [];
+  const result = await parsePresentation('https://example.test/deck.pptx', {
+    ...options,
+    onDownloadProgress: (loadedBytes, totalBytes) => progress.push([loadedBytes, totalBytes]),
+  });
+  return { progress, result };
+}
+
+describe('parsePresentation download progress', () => {
+  beforeEach(() => {
+    vi.mocked(parseWithWasm).mockReset();
+    vi.mocked(parseWithWasm).mockResolvedValue(nativeDocument);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('reports the bytes received against the declared length and parses the whole file', async () => {
+    respondWithFixture({ 'content-length': String(fixture.byteLength) });
+
+    const { progress } = await downloadWithProgress();
+
+    expect(progress.length).toBe(Math.ceil(fixture.byteLength / 4096));
+    expect(progress.every(([, total]) => total === fixture.byteLength)).toBe(true);
+    expect(progress.at(-1)).toEqual([fixture.byteLength, fixture.byteLength]);
+    expect(vi.mocked(parseWithWasm).mock.calls[0]?.[0]).toEqual(fixture);
+  });
+
+  it('reports no total when the server declares no length', async () => {
+    respondWithFixture({});
+
+    const { progress } = await downloadWithProgress();
+
+    expect(progress.at(-1)).toEqual([fixture.byteLength, undefined]);
+    expect(progress.every(([, total]) => total === undefined)).toBe(true);
+    expect(vi.mocked(parseWithWasm).mock.calls[0]?.[0]).toEqual(fixture);
+  });
+
+  it('reports no total for a compressed response, whose length counts encoded bytes', async () => {
+    respondWithFixture({
+      'content-encoding': 'gzip',
+      'content-length': String(fixture.byteLength - 1000),
+    });
+
+    const { progress } = await downloadWithProgress();
+
+    expect(progress.every(([, total]) => total === undefined)).toBe(true);
+    expect(progress.at(-1)?.[0]).toBe(fixture.byteLength);
+  });
+
+  it('stops a download of undeclared length once it passes the input limit', async () => {
+    respondWithFixture({});
+    const maxInputBytes = 10_000;
+
+    await expect(downloadWithProgress({ maxInputBytes })).rejects.toMatchObject({
+      code: 'resource-limit',
+    } satisfies Partial<PptxViewerError>);
+    expect(parseWithWasm).not.toHaveBeenCalled();
   });
 });
