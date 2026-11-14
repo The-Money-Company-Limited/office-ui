@@ -8007,7 +8007,10 @@ function XlsxGrid({
       commitLiveGestureZoom();
     }, LIVE_ZOOM_COMMIT_IDLE_MS);
   }, [clearLiveZoomCommitTimer, commitLiveGestureZoom]);
-  const syncDrawingViewport = React.useCallback((scroller: ScrollViewport | null, options?: { immediate?: boolean }) => {
+  const syncDrawingViewport = React.useCallback((
+    scroller: Pick<ScrollViewport, "clientHeight" | "clientWidth" | "scrollLeft" | "scrollTop"> | null,
+    options?: { immediate?: boolean }
+  ) => {
     if (!scroller) {
       return;
     }
@@ -8989,51 +8992,72 @@ function XlsxGrid({
   const handleViewportScroll = React.useCallback((currentScroller: ScrollViewport) => {
     cachedScrollerRectRef.current = null;
     gestureScrollerRectRef.current = null;
+    // Every metric is read before syncDrawingViewport writes the canvas transforms, so a scroll
+    // lays the page out once.
+    const metrics = {
+      clientHeight: currentScroller.clientHeight,
+      clientWidth: currentScroller.clientWidth,
+      scrollHeight: currentScroller.scrollHeight,
+      scrollLeft: currentScroller.scrollLeft,
+      scrollTop: currentScroller.scrollTop,
+      scrollWidth: currentScroller.scrollWidth
+    };
     const paintedViewport = paintedDrawingViewportRef.current;
     const shouldSyncDrawingViewportImmediately =
-      Math.abs(currentScroller.scrollLeft - paintedViewport.left) > CANVAS_IMMEDIATE_VIEWPORT_SYNC_THRESHOLD_PX
-      || Math.abs(currentScroller.scrollTop - paintedViewport.top) > CANVAS_IMMEDIATE_VIEWPORT_SYNC_THRESHOLD_PX;
-    syncDrawingViewport(currentScroller, { immediate: shouldSyncDrawingViewportImmediately });
-    if (
-      currentScroller.scrollHeight - (currentScroller.scrollTop + currentScroller.clientHeight) <
-      OPEN_GRID_VERTICAL_EDGE_PX
-    ) {
+      Math.abs(metrics.scrollLeft - paintedViewport.left) > CANVAS_IMMEDIATE_VIEWPORT_SYNC_THRESHOLD_PX
+      || Math.abs(metrics.scrollTop - paintedViewport.top) > CANVAS_IMMEDIATE_VIEWPORT_SYNC_THRESHOLD_PX;
+    syncDrawingViewport(metrics, { immediate: shouldSyncDrawingViewportImmediately });
+    if (metrics.scrollHeight - (metrics.scrollTop + metrics.clientHeight) < OPEN_GRID_VERTICAL_EDGE_PX) {
       setDisplayRowLimit((current) =>
         growScrollDisplayLimit(current, OPEN_GRID_ROW_GROWTH, maxRowDisplayLimit, readOnly)
       );
     }
 
-    if (
-      currentScroller.scrollWidth - (currentScroller.scrollLeft + currentScroller.clientWidth) <
-      OPEN_GRID_HORIZONTAL_EDGE_PX
-    ) {
+    if (metrics.scrollWidth - (metrics.scrollLeft + metrics.clientWidth) < OPEN_GRID_HORIZONTAL_EDGE_PX) {
       setDisplayColLimit((current) =>
         growScrollDisplayLimit(current, OPEN_GRID_COL_GROWTH, maxColDisplayLimit, readOnly)
       );
     }
   }, [maxColDisplayLimit, maxRowDisplayLimit, readOnly, syncDrawingViewport]);
-  const handleScrollerScroll = React.useCallback((event: React.UIEvent<HTMLDivElement>) => {
-    handleViewportScroll(event.currentTarget);
-  }, [handleViewportScroll]);
+  // Scroll events are handled once per frame, in the frame they arrive in. The cached rects are
+  // dropped at once, since pointer handlers can run before that frame.
+  const viewportScrollFrameRef = React.useRef<number | null>(null);
+  const scheduleViewportScroll = React.useCallback(() => {
+    cachedScrollerRectRef.current = null;
+    gestureScrollerRectRef.current = null;
+    if (viewportScrollFrameRef.current !== null) {
+      return;
+    }
+    viewportScrollFrameRef.current = window.requestAnimationFrame(() => {
+      viewportScrollFrameRef.current = null;
+      const viewport = getScrollViewport();
+      if (viewport) {
+        handleViewportScroll(viewport);
+      }
+    });
+  }, [getScrollViewport, handleViewportScroll]);
+  React.useEffect(() => () => {
+    if (viewportScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(viewportScrollFrameRef.current);
+      viewportScrollFrameRef.current = null;
+    }
+  }, []);
 
   React.useEffect(() => {
     if (!isWindowScroll) {
       return;
     }
-    const handleWindowScroll = () => {
-      const viewport = getScrollViewport();
-      if (viewport) {
-        handleViewportScroll(viewport);
-      }
-    };
-    window.addEventListener("scroll", handleWindowScroll, { passive: true });
-    window.addEventListener("resize", handleWindowScroll);
-    handleWindowScroll();
+    window.addEventListener("scroll", scheduleViewportScroll, { passive: true });
+    window.addEventListener("resize", scheduleViewportScroll);
+    const viewport = getScrollViewport();
+    if (viewport) {
+      handleViewportScroll(viewport);
+    }
     return () => {
-      window.removeEventListener("scroll", handleWindowScroll);
-      window.removeEventListener("resize", handleWindowScroll);
+      window.removeEventListener("scroll", scheduleViewportScroll);
+      window.removeEventListener("resize", scheduleViewportScroll);
     };
-  }, [getScrollViewport, handleViewportScroll, isWindowScroll]);
+  }, [getScrollViewport, handleViewportScroll, isWindowScroll, scheduleViewportScroll]);
 
   React.useEffect(() => {
     const scroller = scrollRef.current;
@@ -15522,13 +15546,14 @@ function XlsxGrid({
       event: PointerEvent
     ) => {
       const pane = resolveDrawingPane(interaction.baseRect);
-      const viewportRect = viewport?.getBoundingClientRect();
+      const liveViewport = getScrollViewport();
+      const viewportRect = liveViewport?.getBoundingClientRect();
       const deltaX = event.clientX - interaction.startClientX
         + (startViewportRect && viewportRect ? startViewportRect.left - viewportRect.left : 0)
-        + (pane === "scroll" || pane === "top" ? (getScrollViewport()?.scrollLeft ?? 0) - startScroll.left : 0);
+        + (pane === "scroll" || pane === "top" ? (liveViewport?.scrollLeft ?? 0) - startScroll.left : 0);
       const deltaY = event.clientY - interaction.startClientY
         + (startViewportRect && viewportRect ? startViewportRect.top - viewportRect.top : 0)
-        + (pane === "scroll" || pane === "left" ? (getScrollViewport()?.scrollTop ?? 0) - startScroll.top : 0);
+        + (pane === "scroll" || pane === "left" ? (liveViewport?.scrollTop ?? 0) - startScroll.top : 0);
       let rect = interaction.type === "move"
         ? { ...interaction.baseRect, left: interaction.baseRect.left + deltaX, top: interaction.baseRect.top + deltaY }
         : resizeImageRect(interaction.baseRect, interaction.handle, deltaX, deltaY, displayImageMinSize, event.shiftKey || interaction.handle.length === 2);
@@ -15626,13 +15651,14 @@ function XlsxGrid({
       event: PointerEvent
     ) => {
       const pane = resolveDrawingPane(interaction.baseRect);
-      const viewportRect = viewport?.getBoundingClientRect();
+      const liveViewport = getScrollViewport();
+      const viewportRect = liveViewport?.getBoundingClientRect();
       const deltaX = event.clientX - interaction.startClientX
         + (startViewportRect && viewportRect ? startViewportRect.left - viewportRect.left : 0)
-        + (pane === "scroll" || pane === "top" ? (getScrollViewport()?.scrollLeft ?? 0) - startScroll.left : 0);
+        + (pane === "scroll" || pane === "top" ? (liveViewport?.scrollLeft ?? 0) - startScroll.left : 0);
       const deltaY = event.clientY - interaction.startClientY
         + (startViewportRect && viewportRect ? startViewportRect.top - viewportRect.top : 0)
-        + (pane === "scroll" || pane === "left" ? (getScrollViewport()?.scrollTop ?? 0) - startScroll.top : 0);
+        + (pane === "scroll" || pane === "left" ? (liveViewport?.scrollTop ?? 0) - startScroll.top : 0);
       let rect = interaction.type === "move"
         ? { ...interaction.baseRect, left: interaction.baseRect.left + deltaX, top: interaction.baseRect.top + deltaY }
         : resizeImageRect(interaction.baseRect, interaction.handle, deltaX, deltaY, 48 * zoomFactor, event.shiftKey);
@@ -15733,40 +15759,41 @@ function XlsxGrid({
       return;
     }
 
-    let nextScrollTop = scroller.scrollTop;
-    let nextScrollLeft = scroller.scrollLeft;
+    // The scroll metrics are read once, before anything is written.
+    const { clientHeight, clientWidth, scrollHeight, scrollLeft, scrollTop, scrollWidth } = scroller;
+    let nextScrollTop = scrollTop;
+    let nextScrollLeft = scrollLeft;
     const rowStart = displayHeaderHeight + (rowPrefixSums[rowIndex] ?? 0);
     const rowEnd = displayHeaderHeight + (rowPrefixSums[rowIndex + 1] ?? rowStart);
     const colStart = displayRowHeaderWidth + (colPrefixSums[colIndex] ?? 0);
     const colEnd = displayRowHeaderWidth + (colPrefixSums[colIndex + 1] ?? colStart);
 
     if (rowEnd > frozenPaneBottom) {
-      const visibleTop = scroller.scrollTop + frozenPaneBottom;
-      const visibleBottom = scroller.scrollTop + scroller.clientHeight;
+      const visibleTop = scrollTop + frozenPaneBottom;
+      const visibleBottom = scrollTop + clientHeight;
       if (rowStart < visibleTop) {
         nextScrollTop = rowStart - frozenPaneBottom;
       } else if (rowEnd > visibleBottom) {
-        nextScrollTop = rowEnd - scroller.clientHeight;
+        nextScrollTop = rowEnd - clientHeight;
       }
     }
 
     if (colEnd > frozenPaneRight) {
-      const visibleLeft = scroller.scrollLeft + frozenPaneRight;
-      const visibleRight = scroller.scrollLeft + scroller.clientWidth;
+      const visibleLeft = scrollLeft + frozenPaneRight;
+      const visibleRight = scrollLeft + clientWidth;
       if (colStart < visibleLeft) {
         nextScrollLeft = colStart - frozenPaneRight;
       } else if (colEnd > visibleRight) {
-        nextScrollLeft = colEnd - scroller.clientWidth;
+        nextScrollLeft = colEnd - clientWidth;
       }
     }
 
-    nextScrollTop = Math.max(0, Math.min(nextScrollTop, scroller.scrollHeight - scroller.clientHeight));
-    nextScrollLeft = Math.max(0, Math.min(nextScrollLeft, scroller.scrollWidth - scroller.clientWidth));
-
-    if (nextScrollTop !== scroller.scrollTop) {
+    nextScrollTop = Math.max(0, Math.min(nextScrollTop, scrollHeight - clientHeight));
+    nextScrollLeft = Math.max(0, Math.min(nextScrollLeft, scrollWidth - clientWidth));
+    if (nextScrollTop !== scrollTop) {
       scroller.scrollTop = nextScrollTop;
     }
-    if (nextScrollLeft !== scroller.scrollLeft) {
+    if (nextScrollLeft !== scrollLeft) {
       scroller.scrollLeft = nextScrollLeft;
     }
     syncDrawingViewport(scroller, { immediate: true });
@@ -15785,9 +15812,10 @@ function XlsxGrid({
     axisSelectionRef.current = null;
     selectionPreviewRangeRef.current = null;
     displayedSelectionRef.current = nextRange;
+    // Scroll first: it reads layout, and reading after the overlay writes below would lay out twice.
+    ensureCellVisible(clampedRowIndex, clampedColIndex);
     applyPreviewOverlay(nextRange);
     selectCell({ row: nextRow, col: nextCol }, extend ? { extend: true } : undefined);
-    ensureCellVisible(clampedRowIndex, clampedColIndex);
   }
 
   function resolvePageRowIndex(currentRowIndex: number, direction: 1 | -1) {
@@ -16095,7 +16123,7 @@ function XlsxGrid({
     "aria-readonly": readOnly,
     "aria-rowcount": Math.max(activeSheet?.rowCount ?? 0, displayRowLimit),
     role: "grid",
-    onScroll: isWindowScroll ? undefined : handleScrollerScroll,
+    onScroll: isWindowScroll ? undefined : scheduleViewportScroll,
     onContextMenu: (event) => {
       if (isInteractiveFocusTarget(event.target, event.currentTarget)) return;
       const rect = getScrollViewport()?.getBoundingClientRect();
