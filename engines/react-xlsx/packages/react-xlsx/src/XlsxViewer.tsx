@@ -6635,6 +6635,8 @@ type RenderedColumn = {
 };
 
 type GridRowProps = {
+  /** The worker row batch the row's cells were read from; a new batch re-renders the row. */
+  dataBatch: ViewportRowBatch | null;
   actualRow: number;
   editingCell: XlsxCellAddress | null;
   editingValue: string;
@@ -7112,6 +7114,7 @@ const MemoGridRow = React.memo(GridRow, (prev, next) => {
     prev.trailingSpacerWidth !== next.trailingSpacerWidth ||
     prev.zoomFactor !== next.zoomFactor ||
     prev.getCellData !== next.getCellData ||
+    prev.dataBatch !== next.dataBatch ||
     prev.onCellClick !== next.onCellClick ||
     prev.onCellDoubleClick !== next.onCellDoubleClick ||
     prev.onCellPointerDown !== next.onCellPointerDown ||
@@ -16927,6 +16930,7 @@ function XlsxGrid({
                           editingInputRef={editingInputRef}
                           formulaAssist={formulaAssist}
                           frozenRowHeaderZIndex={frozenRowHeaderOverlayZIndex}
+                          dataBatch={viewportRowBatch}
                           getCellData={getCellData}
                           key={virtualRow.key}
                           leadingSpacerWidth={leadingColumnSpacerWidth}
