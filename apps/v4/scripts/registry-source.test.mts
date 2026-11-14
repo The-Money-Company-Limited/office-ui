@@ -46,10 +46,7 @@ for (const family of ["base", "radix"] as const) {
     for (const path of paths) {
       const familyPath = path.startsWith("registry/bases/base/")
         ? path.replace("/base/", `/${family}/`)
-        : family === "radix" &&
-            path === "components/extend/document-preview-card.tsx"
-          ? "registry/bases/radix/document-preview-card.tsx"
-          : path
+        : path
       const filename = new URL(`../${familyPath}`, import.meta.url)
       const raw = readFileSync(filename, "utf8")
       const transformed = /document-(scroll-area|color-popover)\.tsx$/.test(

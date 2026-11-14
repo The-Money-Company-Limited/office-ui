@@ -1057,18 +1057,6 @@
       ]
     },
     {
-      "name": "document-preview-card",
-      "type": "registry:ui",
-      "title": "document-preview-card",
-      "files": [
-        {
-          "path": "components/extend/document-preview-card.tsx",
-          "type": "registry:ui",
-          "target": "@components/extend/document-preview-card.tsx"
-        }
-      ]
-    },
-    {
       "name": "document-color-picker",
       "type": "registry:ui",
       "title": "document-color-picker",
