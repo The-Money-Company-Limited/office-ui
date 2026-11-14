@@ -16,6 +16,7 @@ words beside what you point at: put the sentences on the page, and keep handwrit
 | `player.js` | The clock, the camera and the controls | Only to change how the player works |
 | `player.css` | How the player looks | Only to change how the player looks |
 | `artifact.json` | Declares the site a video | No |
+| `export.mjs` | Films the video into an MP4, on a computer with a VM | No |
 
 ## video.json
 
@@ -66,3 +67,25 @@ don't put `will-change: transform` on the camera. Video and canvas content does 
 
 The drawings are drawn by the Cool Computers comment script. `artifact.json` declares the site a video, so they show
 even when the site's comments are switched off. Keep it, and keep `video.json` at the site's root.
+
+## An MP4 to email or post
+
+`export.mjs` films the video frame by frame into a 1920 by 1080 MP4. It needs Chromium and FFmpeg, so run it on a
+Cool Computers VM (Pro plan), never on the user's machine. Make one computer for it once and keep it for every export:
+
+```
+cool create video-render --visibility private
+cool exec video-render 'sudo apt-get update && sudo apt-get install -y ffmpeg libnss3 libatk-bridge2.0-0t64 libcups2t64 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libasound2t64 libpango-1.0-0 && mkdir -p render && cd render && npm init -y && npm i puppeteer'
+```
+
+Then for each video, from the folder that holds its files:
+
+```
+cool files upload video-render ./<name> /home/runtime/render
+cool exec video-render 'cd render && node <name>/export.mjs <name> <name>.mp4'
+cool files download video-render /home/runtime/render/<name>.mp4 ./<name>.mp4
+```
+
+It takes about three seconds a second of video. A warning that the page looked different twice means something on it
+moves on its own clock (see Motion in the page): the film may flicker there.
+
