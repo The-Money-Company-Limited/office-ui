@@ -25,6 +25,8 @@ const eslintConfig = tseslint.config(
       "next-env.d.ts",
       ".source/**",
       "**/__index__.tsx",
+      "experiments/artifact-template/dist/**",
+      "experiments/artifact-template/dist-xlsx/**",
     ],
   },
   {

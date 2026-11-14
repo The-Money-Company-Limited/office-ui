@@ -15,9 +15,7 @@ import { fileURLToPath } from "node:url"
 import { validateManifest } from "../../components/extend/slides/validate.js"
 
 const root = path.dirname(fileURLToPath(import.meta.url))
-const dist = path.join(root, "dist")
 const source = process.argv[2]
-const output = process.argv[3] ? path.resolve(process.argv[3]) : dist
 
 if (!source || process.argv.length > 4) {
   throw new Error(
@@ -34,6 +32,10 @@ if (!["docx", "xlsx", "pptx", "pdf", "slides"].includes(kind)) {
     "Only deck folders and DOCX, XLSX, PPTX and PDF files are supported"
   )
 }
+// A spreadsheet ships as source (source/build.mjs); the other kinds as the
+// Vite bundle.
+const dist = path.join(root, kind === "xlsx" ? "dist-xlsx" : "dist")
+const output = process.argv[3] ? path.resolve(process.argv[3]) : dist
 
 const name = path.basename(source)
 if (
