@@ -137,10 +137,17 @@ body,
   height: 100%;
 }
 
+/* The page never rubber-bands past its edges, and anything the window does show past the
+   document is the theme's surface, never the browser's white. */
+html,
+body {
+  overscroll-behavior: none;
+  background: var(--background);
+}
+
 body {
   margin: 0;
   font-family: var(--font-ui);
-  background: var(--background);
 }
 
 /* The document scrolls the page: RuntimeVM Comments and Ink follow only the
