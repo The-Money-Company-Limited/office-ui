@@ -1181,6 +1181,24 @@ type WorksheetBatchWindow = {
   startRow: number;
 };
 
+/** The row batch the grid paints from, and the revision it was read at. */
+type ViewportRowBatch = WorksheetBatchWindow & { revision: number };
+
+function rowBatchCovers(batch: WorksheetBatchWindow | null, row: number) {
+  return batch !== null && row >= batch.startRow && row <= batch.endRow;
+}
+
+/**
+ * Whether a row's cell data changes when `next` replaces `previous`: rows that both batches cover
+ * at the same revision keep their data, rows either batch covers otherwise change.
+ */
+function isRowBatchChangedRow(previous: ViewportRowBatch | null, next: ViewportRowBatch | null, row: number) {
+  if (!rowBatchCovers(previous, row) && !rowBatchCovers(next, row)) {
+    return false;
+  }
+  return !(previous && next && previous.revision === next.revision && rowBatchCovers(previous, row) && rowBatchCovers(next, row));
+}
+
 type ThumbnailWorkerRowBatchRequest = {
   endRow: number;
   startRow: number;
@@ -5318,6 +5336,7 @@ type PaintedBodyCanvasSignature = {
   getCellData: (row: number, col: number) => CellRenderData;
   headerHeight: number;
   palette: ViewerPalette;
+  rowBatch: ViewportRowBatch | null;
   rowHeaderWidth: number;
   rowSignature: string;
   viewportLeft: number;
@@ -9809,7 +9828,7 @@ function XlsxGrid({
   }, [commitEditing]);
 
   const [, startBatchTransition] = React.useTransition();
-  const [asyncViewportRowBatch, setAsyncViewportRowBatch] = React.useState<WorksheetBatchWindow | null>(null);
+  const [asyncViewportRowBatch, setAsyncViewportRowBatch] = React.useState<ViewportRowBatch | null>(null);
   const viewportRequest = React.useMemo(() => {
     const rowIndices = experimentalCanvas
       ? (() => {
@@ -9858,18 +9877,21 @@ function XlsxGrid({
     visibleRows
   ]);
 
-  const syncViewportRowBatch = React.useMemo<WorksheetBatchWindow | null>(() => {
+  const syncViewportRowBatch = React.useMemo<ViewportRowBatch | null>(() => {
     if (!shouldVirtualizeRows || !worksheet || getRowsBatchAsync || !viewportRequest) {
       return null;
     }
 
     try {
       const rows = getWorksheetRowsBatch(worksheet, viewportRequest.startRow, viewportRequest.endRow - viewportRequest.startRow + 1);
-      return buildWorksheetBatchWindow(rows, activeSheet ?? null, viewportRequest.startRow, viewportRequest.endRow);
+      return {
+        ...buildWorksheetBatchWindow(rows, activeSheet ?? null, viewportRequest.startRow, viewportRequest.endRow),
+        revision
+      };
     } catch {
       return null;
     }
-  }, [activeSheet, getRowsBatchAsync, shouldVirtualizeRows, viewportRequest, worksheet]);
+  }, [activeSheet, getRowsBatchAsync, revision, shouldVirtualizeRows, viewportRequest, worksheet]);
 
   React.useEffect(() => {
     if (!shouldVirtualizeRows || !getRowsBatchAsync || !activeSheet || !viewportRequest) {
@@ -9877,8 +9899,11 @@ function XlsxGrid({
       return;
     }
 
+    // After an edit the current batch keeps painting until the batch read at the new revision
+    // replaces it, so the grid never shows a blank frame in between.
     if (
       asyncViewportRowBatch
+      && asyncViewportRowBatch.revision === revision
       && viewportRequest.startRow >= asyncViewportRowBatch.startRow
       && viewportRequest.endRow <= asyncViewportRowBatch.endRow
     ) {
@@ -9896,12 +9921,10 @@ function XlsxGrid({
           return;
         }
 
-        const nextBatch = buildWorksheetBatchWindow(
-          rows,
-          activeSheet,
-          viewportRequest.startRow,
-          viewportRequest.endRow
-        );
+        const nextBatch = {
+          ...buildWorksheetBatchWindow(rows, activeSheet, viewportRequest.startRow, viewportRequest.endRow),
+          revision
+        };
         startBatchTransition(() => {
           setAsyncViewportRowBatch(nextBatch);
         });
@@ -9919,13 +9942,29 @@ function XlsxGrid({
     return () => {
       isCurrent = false;
     };
-  }, [activeSheet, asyncViewportRowBatch, getRowsBatchAsync, shouldVirtualizeRows, startBatchTransition, viewportRequest]);
+  }, [activeSheet, asyncViewportRowBatch, getRowsBatchAsync, revision, shouldVirtualizeRows, startBatchTransition, viewportRequest]);
 
   const viewportRowBatch = getRowsBatchAsync ? asyncViewportRowBatch : syncViewportRowBatch;
+  // getCellData reads the batch through this ref, so a new batch keeps its identity and the canvas
+  // repaints only the rows whose data the batch changed; those rows leave the render caches here.
+  const viewportRowBatchRef = React.useRef<ViewportRowBatch | null>(null);
+  if (viewportRowBatchRef.current !== viewportRowBatch) {
+    const previousBatch = viewportRowBatchRef.current;
+    for (const cache of [cellRenderCacheRef.current, cellBaseRawStyleCacheRef.current]) {
+      for (const key of cache.keys()) {
+        if (isRowBatchChangedRow(previousBatch, viewportRowBatch, Number(key.slice(0, key.indexOf(":"))))) {
+          cache.delete(key);
+        }
+      }
+    }
+    // A merge's border overlay reads cells across several rows; recomputing the few merges is cheap.
+    mergedBorderOverlayCacheRef.current.clear();
+    viewportRowBatchRef.current = viewportRowBatch;
+  }
 
   React.useEffect(() => {
     setAsyncViewportRowBatch(null);
-  }, [activeSheetIndex, revision]);
+  }, [activeSheetIndex]);
 
   const sparklinesByCell = React.useMemo(() => {
     const map = new Map<string, XlsxSheetData["sparklines"][number]>();
@@ -9957,7 +9996,6 @@ function XlsxGrid({
         revision,
         selectedChartElement,
         selectedChartId,
-        viewportRowBatch,
         worksheet,
         zoomFactor
       ] as const,
@@ -9971,7 +10009,6 @@ function XlsxGrid({
       revision,
       selectedChartElement,
       selectedChartId,
-      viewportRowBatch,
       worksheet,
       zoomFactor
     ]
@@ -9991,7 +10028,8 @@ function XlsxGrid({
       return cached;
     }
 
-    const batchCoversRow = viewportRowBatch ? row >= viewportRowBatch.startRow && row <= viewportRowBatch.endRow : false;
+    const viewportRowBatch = viewportRowBatchRef.current;
+    const batchCoversRow = rowBatchCovers(viewportRowBatch, row);
     const batchedCell = batchCoversRow ? viewportRowBatch?.cells.get(cacheKey) : undefined;
     const worksheetMergedSecondary = worksheet?.isMergedSecondary(row, col) ?? false;
 
@@ -10035,9 +10073,7 @@ function XlsxGrid({
         return cachedBaseStyle;
       }
 
-      const targetBatchCoversRow = viewportRowBatch
-        ? targetRow >= viewportRowBatch.startRow && targetRow <= viewportRowBatch.endRow
-        : false;
+      const targetBatchCoversRow = rowBatchCovers(viewportRowBatch, targetRow);
       const targetBatchedCell = targetBatchCoversRow
         ? viewportRowBatch?.cells.get(targetCacheKey)
         : undefined;
@@ -10337,7 +10373,6 @@ function XlsxGrid({
     getCellStyle,
     palette,
     sparklinesByCell,
-    viewportRowBatch,
     visibleCols,
     worksheet,
     zoomFactor
@@ -12501,6 +12536,7 @@ function XlsxGrid({
       getCellData,
       headerHeight,
       palette,
+      rowBatch: viewportRowBatch,
       rowHeaderWidth,
       rowSignature: buildRenderedAxisSignature(canvasVisibleRowItems, (item) => item.index),
       viewportLeft: drawingViewport.left,
@@ -12534,6 +12570,7 @@ function XlsxGrid({
       && previousBodyCanvasSignature.getCellData === nextBodyCanvasSignature.getCellData
       && previousBodyCanvasSignature.headerHeight === nextBodyCanvasSignature.headerHeight
       && previousBodyCanvasSignature.palette === nextBodyCanvasSignature.palette
+      && previousBodyCanvasSignature.rowBatch === nextBodyCanvasSignature.rowBatch
       && previousBodyCanvasSignature.rowHeaderWidth === nextBodyCanvasSignature.rowHeaderWidth
       && previousBodyCanvasSignature.rowSignature === nextBodyCanvasSignature.rowSignature
       && previousBodyCanvasSignature.viewportLeft === nextBodyCanvasSignature.viewportLeft
@@ -12961,6 +12998,23 @@ function XlsxGrid({
             );
             if (blittedDirtyRects) {
               dirtyRects = blittedDirtyRects;
+            }
+          }
+          // Rows whose data a new row batch changed are painted again where they are.
+          if (previousBodyCanvasSignature?.rowBatch !== viewportRowBatch) {
+            const previousRowBatch = previousBodyCanvasSignature?.rowBatch ?? null;
+            const useFrozenVerticalPosition = pane === "top" || pane === "corner";
+            for (const rowItem of canvasPaneAxisItems[pane].rows) {
+              if (!isRowBatchChangedRow(previousRowBatch, viewportRowBatch, rowItem.actualRow)) {
+                continue;
+              }
+              const contentTop = displayHeaderHeight + rowItem.start;
+              const top = (
+                useFrozenVerticalPosition
+                  ? (stickyTopByRow.get(rowItem.actualRow) ?? (contentTop - drawingViewport.top))
+                  : (contentTop - drawingViewport.top)
+              ) - bounds.top;
+              dirtyRects.push({ height: rowItem.size, left: 0, top, width: bounds.width });
             }
           }
         } else {
@@ -13845,6 +13899,7 @@ function XlsxGrid({
     shouldBakeCanvasStaticDrawings,
     stickyLeftByCol,
     stickyTopByRow,
+    viewportRowBatch,
     visibleCols,
     visibleRows,
     zoomFactor
