@@ -47,7 +47,11 @@ export function resolve(spec, from, config, exists) {
     : bare.startsWith("./") || bare.startsWith("../")
       ? join(dirname(from), bare)
       : null
-  if (base === null) return { vendor: bare }
+  if (base === null) {
+    // vendor/ holds package modules only; a file URL (?url) needs an alias.
+    if (query) throw new Error(`${spec}: an npm import with a query needs an alias`)
+    return { vendor: bare }
+  }
   const path = candidates(base).find(exists)
   return path ? { path, query } : { missing: base }
 }
@@ -57,7 +61,7 @@ export function resolve(spec, from, config, exists) {
 // each module's specifier-to-id map (an id is a path, "path?url",
 // "path?css" or "~package"), the stylesheets modules import (in order), every
 // stylesheet reached, the files still to compile (`needed`) and the local
-// paths that name no file (`missing`).
+// paths that name no file (`missing`, and `missingFrom`: one importer of each).
 export function link(entry, specsOf, config, exists) {
   const modules = []
   const maps = {}
@@ -65,6 +69,7 @@ export function link(entry, specsOf, config, exists) {
   const css = []
   const needed = new Set()
   const missing = new Set()
+  const missingFrom = {}
   const seen = new Set()
   const visit = (path) => {
     if (seen.has(path)) return
@@ -83,14 +88,22 @@ export function link(entry, specsOf, config, exists) {
         config,
         exists
       )
-      if (target.missing) missing.add(target.missing)
+      if (target.missing) {
+        missing.add(target.missing)
+        missingFrom[target.missing] ??= path
+      }
       else if (target.vendor) map[spec] = "~" + target.vendor
       else {
         const isCss = target.path.endsWith(".css")
         map[spec] =
           target.path +
           (target.query ? "?" + target.query : isCss ? "?css" : "")
-        if (isCss && codeFile.test(path) && !sheets.includes(target.path))
+        if (
+          isCss &&
+          !target.query &&
+          codeFile.test(path) &&
+          !sheets.includes(target.path)
+        )
           sheets.push(target.path)
         if (!target.query && (isCss || codeFile.test(target.path)))
           visit(target.path)
@@ -110,6 +123,7 @@ export function link(entry, specsOf, config, exists) {
     css,
     needed: [...needed],
     missing: [...missing],
+    missingFrom,
   }
 }
 

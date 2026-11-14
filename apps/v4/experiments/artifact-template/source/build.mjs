@@ -86,7 +86,9 @@ function graph(start) {
   const linked = link(start, specsOf, config, exists)
   for (const base of linked.missing)
     if (!absent.includes(base))
-      throw new Error(`${base} is imported but is not a file`)
+      throw new Error(
+        `${base} is imported by ${linked.missingFrom[base]} but is not a file`
+      )
   return linked
 }
 const page = graph(entry)
