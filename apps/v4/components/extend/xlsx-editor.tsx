@@ -1415,7 +1415,6 @@ function EditorToolbar({
     exportXlsx,
     getActiveWorksheet,
     revision,
-    setActiveSheetIndex,
     sheets,
   } = useXlsxViewer()
   const {
@@ -1432,7 +1431,6 @@ function EditorToolbar({
     pasteStructuredClipboardData,
     readOnly,
     redo,
-    removeActiveSheet,
     getCellInputValue,
     setCellStyle,
     setRangeStyle,
@@ -2462,56 +2460,6 @@ function EditorToolbar({
                 />
               </ToolbarIconButton>
             )}
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <ToolbarTooltip label="Remove active sheet">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Remove active sheet"
-                disabled={sheets.length <= 1 || readOnly}
-                onClick={removeActiveSheet}
-              >
-                <IconPlaceholder
-                  lucide="Trash2Icon"
-                  tabler="IconTrash"
-                  hugeicons="Delete02Icon"
-                  phosphor="TrashIcon"
-                  remixicon="RiDeleteBinLine"
-                  className="size-4"
-                />
-              </Button>
-            </ToolbarTooltip>
-            <Select
-              value={String(activeSheetIndex)}
-              onValueChange={(value) => setActiveSheetIndex(Number(value))}
-              disabled={!hasWorkbook}
-            >
-              <SelectTrigger
-                size="sm"
-                className={cn(
-                  "w-[150px] min-w-[150px]",
-                  XLSX_EDITOR_SELECT_CHROME_CLASS
-                )}
-                aria-label="Active sheet"
-              >
-                <SelectValue>{activeSheet?.name ?? "Sheet"}</SelectValue>
-              </SelectTrigger>
-              <SelectContent
-                align="start"
-                className={XLSX_DROPDOWN_Z_INDEX_CLASS}
-              >
-                {sheets.map((sheet, index) => (
-                  <SelectItem
-                    key={`${sheet.name}-${index}`}
-                    value={String(index)}
-                  >
-                    {sheet.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
         </ToolbarOverflow>
         <div className="xlsx-editor-formula relative border-t bg-background px-2 py-1">
