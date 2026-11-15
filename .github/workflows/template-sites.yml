@@ -1,0 +1,85 @@
+# Republishes the official template sites that agents copy (`cool copy sheet|pdf|slides|video`) from main:
+# sheet, pdf and slides are built from apps/v4/experiments/artifact-template and staged with the samples
+# /agents.md and `cool skill` name (document/budget.xlsx, document/loan-application.pdf, the sample deck);
+# video is apps/video as it is. A pull request builds and stages them without publishing.
+name: template-sites
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - apps/v4/**
+      - apps/video/**
+      - engines/**
+      - package.json
+      - pnpm-lock.yaml
+      - .github/workflows/template-sites.yml
+  pull_request:
+    paths:
+      - apps/v4/**
+      - apps/video/**
+      - engines/**
+      - package.json
+      - pnpm-lock.yaml
+      - .github/workflows/template-sites.yml
+
+permissions:
+  contents: read
+
+# Publishes from main run one at a time, in order, so the newest main is what stays live.
+concurrency:
+  group: template-sites-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The template build runs git describe.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The engines v4 imports, then the three source templates (dist-xlsx, dist-pdf, dist-slides).
+      - run: pnpm turbo run build --filter="v4^..."
+      - run: pnpm --filter v4 artifact-template:build
+      - name: Stage the sites
+        run: |
+          samples="$GITHUB_WORKSPACE/apps/v4/experiments/artifact-template/samples"
+          pnpm --filter v4 artifact-template:stage "$samples/budget.xlsx" "$RUNNER_TEMP/sites/sheet"
+          pnpm --filter v4 artifact-template:stage "$GITHUB_WORKSPACE/apps/v4/public/samples/loan-application.pdf" "$RUNNER_TEMP/sites/pdf"
+          pnpm --filter v4 artifact-template:stage "$samples/deck" "$RUNNER_TEMP/sites/slides"
+          cp -R apps/video "$RUNNER_TEMP/sites/video"
+          for site in sheet pdf slides video; do echo "$site: $(find "$RUNNER_TEMP/sites/$site" -type f | wc -l) files"; done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sites
+          path: ${{ runner.temp }}/sites
+          retention-days: 3
+
+  # The key never shares a job with the build's dependencies: this job only gets the staged files.
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sites
+          path: sites
+      - name: Publish the sites
+        env:
+          COOL_API_KEY: ${{ secrets.COOL_API_KEY }}
+        run: |
+          curl -fsSL https://cool.computer/install.sh | sh
+          for site in sheet pdf slides video; do
+            "$HOME/.local/bin/cool" publish "sites/$site" --computer "$site" </dev/null
+          done
